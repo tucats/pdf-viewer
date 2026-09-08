@@ -48,6 +48,9 @@ func TestGeneratedFixturesMatchCheckedInFiles(t *testing.T) {
 		"text-rotated-page.pdf":         buildTextRotatedPage(),
 		"separation-fill.pdf":           buildSeparationFill(),
 		"lab-fill.pdf":                  buildLabFill(),
+		"axial-shading.pdf":             buildAxialShading(),
+		"radial-shading.pdf":            buildRadialShading(),
+		"shading-pattern-fill.pdf":      buildShadingPatternFill(),
 	}
 
 	for name, want := range fixtures {
@@ -96,6 +99,9 @@ func TestFixtureSetIsComplete(t *testing.T) {
 		"text-rotated-page.pdf":         true,
 		"separation-fill.pdf":           true,
 		"lab-fill.pdf":                  true,
+		"axial-shading.pdf":             true,
+		"radial-shading.pdf":            true,
+		"shading-pattern-fill.pdf":      true,
 	}
 
 	entries, err := os.ReadDir(outputDir)

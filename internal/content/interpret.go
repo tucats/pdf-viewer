@@ -46,9 +46,10 @@ import (
 // space or filter) rather than merely not recognizing.
 func Interpret(ops []Operator, initialCTM graphics.Matrix, resources syntax.Dictionary, resolver pdfimage.Resolver) (graphics.DisplayList, error) {
 	in := &interpreter{
-		stack:     graphics.NewStack(graphics.NewState(initialCTM)),
-		resources: resources,
-		resolver:  resolver,
+		stack:      graphics.NewStack(graphics.NewState(initialCTM)),
+		resources:  resources,
+		resolver:   resolver,
+		initialCTM: initialCTM,
 	}
 	for _, op := range ops {
 		if err := in.exec(op); err != nil {
@@ -78,10 +79,23 @@ type interpreter struct {
 	hasPendingClip  bool
 
 	// resources and resolver back "Do" (referenced XObject images), "BI"
-	// (inline images), and (Phase 4) "Tf" (looking up and loading a named
-	// font) - see Interpret's doc comment.
+	// (inline images), (Phase 4) "Tf" (looking up and loading a named
+	// font), and (Phase 5) "sh" and a shading pattern's /Shading
+	// dictionary - see Interpret's doc comment.
 	resources syntax.Dictionary
 	resolver  pdfimage.Resolver
+
+	// initialCTM is the CTM Interpret was originally called with - the
+	// mapping from this content stream's *default* user space to device
+	// space, before any "cm" has run. Unlike graphics.Stack's current
+	// state (which "cm"/"q"/"Q" freely mutate), this never changes for
+	// the lifetime of one Interpret call: it is exactly what a pattern's
+	// own /Matrix is defined relative to (PDF patterns are deliberately
+	// independent of whatever CTM happens to be active when they are
+	// later selected or used to paint - see shading.go's
+	// resolvePatternPaint), which the live, mutable CTM on graphics.State
+	// cannot supply once any "cm" has run.
+	initialCTM graphics.Matrix
 
 	// text holds Phase 4's text-object-local state (the text/line
 	// matrices and the font cache) - see textInterpreterState's doc
@@ -232,36 +246,42 @@ func (in *interpreter) exec(op Operator) error {
 			return err
 		}
 		st.FillColor = grayColor(vals[0])
+		st.FillShading = nil
 	case "G":
 		vals, err := requireFloats(op.Operands, 1)
 		if err != nil {
 			return err
 		}
 		st.StrokeColor = grayColor(vals[0])
+		st.StrokeShading = nil
 	case "rg":
 		vals, err := requireFloats(op.Operands, 3)
 		if err != nil {
 			return err
 		}
 		st.FillColor = graphics.Color{R: vals[0], G: vals[1], B: vals[2]}
+		st.FillShading = nil
 	case "RG":
 		vals, err := requireFloats(op.Operands, 3)
 		if err != nil {
 			return err
 		}
 		st.StrokeColor = graphics.Color{R: vals[0], G: vals[1], B: vals[2]}
+		st.StrokeShading = nil
 	case "k":
 		vals, err := requireFloats(op.Operands, 4)
 		if err != nil {
 			return err
 		}
 		st.FillColor = cmykColor(vals[0], vals[1], vals[2], vals[3])
+		st.FillShading = nil
 	case "K":
 		vals, err := requireFloats(op.Operands, 4)
 		if err != nil {
 			return err
 		}
 		st.StrokeColor = cmykColor(vals[0], vals[1], vals[2], vals[3])
+		st.StrokeShading = nil
 
 	case "cs":
 		if err := in.setColorSpace(st, op.Operands, true); err != nil {
@@ -272,17 +292,18 @@ func (in *interpreter) exec(op Operator) error {
 			return err
 		}
 	case "sc", "scn":
-		col, err := colorForOperandsWithSpace(st.FillColorSpace, op.Operands)
-		if err != nil {
+		if err := in.setPaintColor(st, op.Operands, true); err != nil {
 			return err
 		}
-		st.FillColor = col
 	case "SC", "SCN":
-		col, err := colorForOperandsWithSpace(st.StrokeColorSpace, op.Operands)
-		if err != nil {
+		if err := in.setPaintColor(st, op.Operands, false); err != nil {
 			return err
 		}
-		st.StrokeColor = col
+
+	case "sh":
+		if err := in.doShading(st, op.Operands); err != nil {
+			return err
+		}
 
 	case "Do":
 		return in.doXObject(st, op.Operands)
@@ -460,22 +481,25 @@ func (in *interpreter) appendRect(st *graphics.State, operands []syntax.Object) 
 	return nil
 }
 
-// fillCurrentPath appends a Fill DrawOp for the current path, if it is
-// non-empty, under rule, using st's current fill color and clip stack.
-// It does not reset the current path - painting operators like "B" fill
-// and stroke the very same path, so resetting is endPath's job, called
-// once after every painting operator regardless of which combination of
-// fill/stroke it performed.
+// fillCurrentPath appends a Fill (or, when a shading pattern is the
+// current fill paint - see graphics.State.FillShading's doc comment - a
+// Shading) DrawOp for the current path, if it is non-empty, under rule,
+// using st's current fill color/shading and clip stack. It does not
+// reset the current path - painting operators like "B" fill and stroke
+// the very same path, so resetting is endPath's job, called once after
+// every painting operator regardless of which combination of fill/stroke
+// it performed.
 func (in *interpreter) fillCurrentPath(st *graphics.State, rule graphics.FillRule) {
 	if len(in.path.Subpaths) == 0 {
 		return
 	}
-	in.list = append(in.list, graphics.DrawOp{
-		Path:  clonePath(&in.path),
-		Rule:  rule,
-		Color: st.FillColor,
-		Clips: st.Clips,
-	})
+	op := graphics.DrawOp{Path: clonePath(&in.path), Rule: rule, Clips: st.Clips}
+	if st.FillShading != nil {
+		op.Shading = st.FillShading
+	} else {
+		op.Color = st.FillColor
+	}
+	in.list = append(in.list, op)
 }
 
 // strokeCurrentPath appends a Stroke DrawOp - converted up front to its
@@ -499,12 +523,13 @@ func (in *interpreter) strokeCurrentPath(st *graphics.State) {
 	}
 	deviceWidth := st.LineWidth * ctmScale(st.CTM)
 	outline := graphics.StrokeToFill(&in.path, deviceWidth, st.LineCap, st.LineJoin, st.MiterLimit)
-	in.list = append(in.list, graphics.DrawOp{
-		Path:  outline,
-		Rule:  graphics.NonZero,
-		Color: st.StrokeColor,
-		Clips: st.Clips,
-	})
+	op := graphics.DrawOp{Path: outline, Rule: graphics.NonZero, Clips: st.Clips}
+	if st.StrokeShading != nil {
+		op.Shading = st.StrokeShading
+	} else {
+		op.Color = st.StrokeColor
+	}
+	in.list = append(in.list, op)
 }
 
 // ctmScale returns the approximate device-space scale factor of m's

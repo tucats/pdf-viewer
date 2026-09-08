@@ -32,6 +32,14 @@ func FuzzParseAndInterpret(f *testing.F) {
 		"q q q Q Q Q Q",
 		"5 w 1 J 1 j 4 M [] 0 d 0 i 0 ri",
 		"1 scn 1 0 0 scn 0 0 0 1 scn /Pattern1 scn",
+		// Phase 5: shading and patterns - with resources nil (see this
+		// fuzz target's own doc comment on why), both "sh" and a pattern
+		// name given to "scn"/"SCN" always exercise the "no /Resources"
+		// tolerance/error path rather than reaching internal/graphics's
+		// shading math; that math is instead covered directly by
+		// shading_test.go and internal/graphics/shading_test.go.
+		"/Sh1 sh",
+		"/Pattern cs /P1 scn 0 0 5 5 re f",
 		"(text) Tj BT ET",
 		"/Im1 Do",
 		"[[[[1]]]] op",

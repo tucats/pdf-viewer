@@ -99,6 +99,9 @@ func main() {
 		{"text-rotated-page.pdf", buildTextRotatedPage()},
 		{"separation-fill.pdf", buildSeparationFill()},
 		{"lab-fill.pdf", buildLabFill()},
+		{"axial-shading.pdf", buildAxialShading()},
+		{"radial-shading.pdf", buildRadialShading()},
+		{"shading-pattern-fill.pdf", buildShadingPatternFill()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -657,6 +660,78 @@ func buildLabFill() []byte {
 		"/Resources << /ColorSpace << /CS0 [/Lab << >>] >> >> /Contents 4 0 R >>", nil)
 
 	content := []byte("/CS0 cs\n0 0 0 scn\n0 0 50 100 re\nf\n100 0 0 scn\n50 0 50 100 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
+}
+
+// buildAxialShading returns a single 100x100-point page whose content
+// stream clips to the whole page and then paints a named axial
+// (/ShadingType 2) shading directly via the "sh" operator: a black
+// (x=0) to white (x=100) gradient, via a Type 2 (exponential
+// interpolation) function over DeviceRGB - the baseline Phase 5 fixture
+// for gradient shadings and the "sh" operator, distinct from a shading
+// *pattern* (see buildShadingPatternFill) in that "sh" paints across the
+// entire current clip (here, deliberately, the whole page) rather than a
+// specific filled shape.
+func buildAxialShading() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Shading << /Sh0 << /ShadingType 2 /ColorSpace /DeviceRGB "+
+		"/Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] "+
+		"/C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n0 0 100 100 re\nW\nn\n/Sh0 sh\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
+}
+
+// buildRadialShading returns a single 100x100-point page whose content
+// stream paints a named radial (/ShadingType 3) shading, unclipped, via
+// "sh": two concentric circles centered at the page's own center (50,50)
+// - r0=0 (black) growing to r1=50 (blue) - with /Extend [false true], so
+// beyond the outer circle (the square page's corners, at distance
+// ~70.7 from center, lie outside a radius-50 circle) the shading's t=1
+// edge color (blue) is used rather than leaving the corners as the
+// default white background. Blue (rather than white) is deliberately
+// chosen as the outer color specifically so a rendering test can tell
+// "the /Extend region actually painted" apart from "nothing painted,
+// background showing through" - both would otherwise look identical.
+func buildRadialShading() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Shading << /Sh0 << /ShadingType 3 /ColorSpace /DeviceRGB "+
+		"/Coords [50 50 0 50 50 50] /Extend [false true] "+
+		"/Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [0 0 1] /N 1 >> >> >> >> "+
+		"/Contents 4 0 R >>", nil)
+
+	content := []byte("/Sh0 sh\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
+}
+
+// buildShadingPatternFill returns a single 100x100-point page whose
+// content stream selects a shading pattern (/PatternType 2, wrapping the
+// same black-to-white axial gradient buildAxialShading uses, spanning
+// x=10 to x=90 to line up with the filled square below) via "cs
+// Pattern"/"scn", then fills an 80x80 square with it - the Phase 5
+// counterpart to buildAxialShading/buildSeparationFill demonstrating a
+// shading used as an ordinary fill *paint source* (bounded to the
+// filled shape's own geometry) rather than "sh"'s whole-clip painting.
+func buildShadingPatternFill() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Pattern << /P0 << /PatternType 2 /Shading "+
+		"<< /ShadingType 2 /ColorSpace /DeviceRGB /Coords [10 0 90 0] "+
+		"/Function << /FunctionType 2 /Domain [0 1] /C0 [0 0 0] /C1 [1 1 1] /N 1 >> >> "+
+		">> >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("/Pattern cs\n/P0 scn\n10 10 80 80 re\nf\n")
 	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
 	return b.finish(1)
 }

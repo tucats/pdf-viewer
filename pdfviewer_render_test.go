@@ -176,6 +176,9 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"text-rotated-page.pdf",
 		"separation-fill.pdf",
 		"lab-fill.pdf",
+		"axial-shading.pdf",
+		"radial-shading.pdf",
+		"shading-pattern-fill.pdf",
 	}
 
 	if *update {

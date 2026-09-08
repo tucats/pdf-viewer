@@ -119,6 +119,41 @@ func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, i
 	})
 }
 
+// FillShading rasterizes path under rule exactly like Fill, but instead
+// of a single solid color, samples sh (a resolved gradient - see
+// graphics.Shading) once per covered device pixel, at that pixel's own
+// center - used for a fill or stroke painted with a shading pattern (see
+// graphics.DrawOp.Shading's doc comment). A pixel sh.At reports as
+// uncovered (outside the gradient's own geometry, with no applicable
+// /Extend) paints nothing there, leaving whatever was already
+// underneath - the same "partial coverage" tolerance DrawImage already
+// has for a device pixel outside an image's own unit square.
+func (c *Canvas) FillShading(path *graphics.Path, rule graphics.FillRule, sh *graphics.Shading, clips []graphics.ClipPath) {
+	c.paint(path, rule, clips, func(col, row int) (r, g, b, a float64) {
+		color, ok := sh.At(float64(col)+0.5, float64(row)+0.5)
+		if !ok {
+			return 0, 0, 0, 0
+		}
+		return color.R, color.G, color.B, 1
+	})
+}
+
+// PaintShading implements the "sh" operator's whole-region painting: sh
+// is composited across every pixel of the entire canvas, restricted only
+// by clips (empty/nil clips means the entire page, matching the
+// specification's "sh paints the whole current clipping region, which is
+// the whole page when unclipped") - see graphics.DrawOp.Shading's doc
+// comment for why internal/content hands this a nil Path rather than
+// building a covering rectangle itself.
+func (c *Canvas) PaintShading(sh *graphics.Shading, clips []graphics.ClipPath) {
+	var full graphics.Path
+	full.AppendRect([4]graphics.Point{
+		{X: 0, Y: 0}, {X: float64(c.width), Y: 0},
+		{X: float64(c.width), Y: float64(c.height)}, {X: 0, Y: float64(c.height)},
+	})
+	c.FillShading(&full, graphics.NonZero, sh, clips)
+}
+
 // paint is the shared core of Fill and DrawImage: it rasterizes path's
 // coverage under rule (intersected with every clip in clips, exactly as
 // Fill's own doc comment describes), then for every pixel with nonzero

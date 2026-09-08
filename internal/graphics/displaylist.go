@@ -63,4 +63,24 @@ type DrawOp struct {
 	// internally consistent: ImageToDevice always means exactly what
 	// Image's own doc comment says, with no caller-specific exception.
 	ImageToDevice Matrix
+
+	// Shading, when non-nil, means this DrawOp paints a gradient
+	// (internal/content's "sh" operator, or a fill/stroke painted with a
+	// shading pattern selected via "scn"/"SCN" - see that package's
+	// shading.go) rather than the solid Color above; mutually exclusive
+	// with Image, exactly like Color is.
+	//
+	// Path is nil only for a Shading DrawOp produced by "sh": per the
+	// specification, "sh" paints across the entire current clipping
+	// region, which is the whole page when unclipped - internal/content
+	// has no way to know the canvas's pixel dimensions to build a
+	// covering Path itself (it works entirely in an abstract coordinate
+	// space until internal/raster rasterizes), so a nil Path is this
+	// package's documented signal for "internal/raster should use its
+	// own canvas bounds as the painted region" (see internal/raster's
+	// Canvas.PaintShading). Every other DrawOp - including a shading
+	// *pattern* fill, which paints only the shape being filled or
+	// stroked, exactly like an ordinary solid-color fill would - always
+	// sets Path.
+	Shading *Shading
 }

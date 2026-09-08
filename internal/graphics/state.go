@@ -94,6 +94,24 @@ type State struct {
 	// either way, sc/scn's own component-count fallback applies.
 	FillColorSpace, StrokeColorSpace any
 
+	// FillShading and StrokeShading, when non-nil, mean the current
+	// fill/stroke paint is a shading pattern (a "scn"/"SCN" operand that
+	// named a /PatternType 2 resource - see internal/content/shading.go)
+	// rather than the solid FillColor/StrokeColor above; a painting
+	// operator (see internal/content's fillCurrentPath/strokeCurrentPath)
+	// checks these first and only falls back to the solid color when they
+	// are nil. Unlike FillColorSpace/StrokeColorSpace, these are typed as
+	// a concrete *Shading rather than `any`: Shading is itself defined in
+	// this package (shading.go), so storing it directly needs no type
+	// assertion and creates no import-cycle risk. Selecting an ordinary
+	// (non-pattern) color, via "sc"/"scn"/"SC"/"SCN" (see internal/
+	// content's setPaintColor) or directly via "g"/"rg"/"k"/"G"/"RG"/"K",
+	// clears the corresponding field back to nil - every content-stream
+	// operator that sets FillColor/StrokeColor also clears
+	// FillShading/StrokeShading, so a stale pattern from earlier in the
+	// content stream can never leak into a later, ordinary-colored fill.
+	FillShading, StrokeShading *Shading
+
 	// Clips holds every currently-active clipping path, most recently
 	// intersected last, together with the fill rule each was intersected
 	// under. The *effective* clip region is the intersection of all of

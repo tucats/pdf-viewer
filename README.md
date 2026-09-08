@@ -1189,3 +1189,106 @@ phase's entry with a note about what changed.
     annotation/form appearance streams, and the allocation-profiling/
     resource-caching/benchmark work - remains unimplemented, to land in
     further Phase 5 sub-phases.
+
+### Phase 5b: Shadings and shading patterns (2026-09-08)
+
+- **`internal/graphics`: `Shading` (new file, shading.go).** A resolved
+    axial or radial gradient, evaluated with no further PDF-specific
+    knowledge: `At` inverts a device-space point through
+    `ShadingToDevice` into shading space, solves for the gradient's
+    parametric position there (`axialParameter`: a straight vector
+    projection onto a line; `radialParameter`: the standard two-circle
+    quadratic from the specification's own geometry, selecting the
+    greatest valid root when more than one exists, as the specification
+    requires), clips the result into `[0,1]` per `/Extend`, and calls the
+    caller-supplied `ColorAt` closure - the same "plain closure, to avoid
+    an import cycle" pattern `graphics.State.Font` already established,
+    except `ColorAt` needs no type assertion at all. Function-based
+    (Type 1) and mesh (Types 4-7) shadings are out of scope for this
+    type entirely; only axial and radial are represented. Covered by
+    [shading_test.go](internal/graphics/shading_test.go), including a
+    degenerate (zero-length) axial shading, concentric-circle and
+    off-center radial cases, and both `/Extend` directions.
+- **`internal/graphics`: `DrawOp.Shading` and `graphics.State`'s
+    `Fill`/`StrokeShading`.** A `DrawOp` gained a `Shading` field
+    ([displaylist.go](internal/graphics/displaylist.go)), mutually
+    exclusive with `Image` exactly as `Color` already is - meaningful
+    with a nil `Path` only for the "sh" operator (documented as this
+    package's chosen signal for "paint the whole canvas", since
+    internal/content has no way to know the canvas's pixel dimensions
+    itself). `graphics.State` gained `FillShading`/`StrokeShading`
+    ([state.go](internal/graphics/state.go)), typed as a concrete
+    `*Shading` (no import-cycle risk, since `Shading` lives in this same
+    package) rather than `any` the way `FillColorSpace` is.
+- **`internal/raster`: `Canvas.FillShading`/`PaintShading`.** Added to
+    [canvas.go](internal/raster/canvas.go): `FillShading` samples a
+    `Shading` once per covered device pixel (mirroring `Fill`/
+    `DrawImage`'s shared `paint` core); `PaintShading` (the "sh"
+    operator's whole-canvas case) builds a rectangle covering the entire
+    canvas and delegates to `FillShading`, so clip intersection still
+    works identically. [render.go](internal/raster/render.go)'s `Render`
+    now dispatches each `DrawOp` to `DrawImage`, `FillShading`,
+    `PaintShading`, or `Fill` depending on which fields are set. Covered
+    by [canvas_shading_test.go](internal/raster/canvas_shading_test.go).
+- **`internal/content`: the "sh" operator and shading patterns (new
+    file, shading.go).** `doShading` resolves a named `/Resources
+    /Shading` entry and appends a `Shading` `DrawOp` with no `Path`,
+    using the *current* CTM as the shading's device mapping (since "sh"
+    paints in whatever coordinate system is live when it runs).
+    `resolvePatternPaint` resolves a `scn`/`SCN` pattern-name operand: for
+    a `/PatternType 2` (shading) pattern, it combines the pattern's own
+    `/Matrix` with `initialCTM` (a new field on `interpreter`, captured
+    once from `Interpret`'s own parameter) rather than the live CTM - per
+    the specification, a pattern's coordinate system is anchored to the
+    *default* coordinate system of the content stream that defined it,
+    independent of whatever transform is active wherever it is later
+    used to paint (`TestScnShadingPatternUsesInitialCTMNotCurrent`
+    regression-tests exactly this). `buildShading` (shared by both
+    callers) reads a shading dictionary's `/ShadingType` (2/3 only;
+    anything else is `ErrUnsupported`), `/Coords`, `/Domain`, `/Extend`,
+    `/Function` (`internal/function.Parse`), and `/ColorSpace`
+    (`internal/image.ResolveColorSpace`) into a `graphics.Shading`.
+    `colorspace.go`'s `setPaintColor` (replacing the direct `sc`/`scn`
+    dispatch) now intercepts a trailing pattern-name operand before
+    falling back to `colorFromComponents`' numeric-component guessing,
+    and `fillCurrentPath`/`strokeCurrentPath`
+    ([interpret.go](internal/content/interpret.go)) check
+    `FillShading`/`StrokeShading` first before falling back to the solid
+    `FillColor`/`StrokeColor`. A tiling pattern (`/PatternType 1`) still
+    returns `ErrUnsupported`, exactly as any pattern name did before this
+    sub-phase - only a resolvable *shading* pattern is new. Covered by
+    [shading_test.go](internal/content/shading_test.go).
+  - **A real bug this sub-phase's own tests caught before it shipped:**
+        the direct `"g"`/`"rg"`/`"k"`/`"G"`/`"RG"`/`"K"` color operators
+        originally set `FillColor`/`StrokeColor` without also clearing a
+        previously-selected shading pattern, so a plain color set *after*
+        a pattern (a legal, if unusual, content stream sequence) would
+        still incorrectly keep painting the stale pattern -
+        `TestRgAfterShadingPatternClearsShading` is the regression test;
+        seeing `TestScnPlainColorAfterPatternClearsShading` pass while
+        this failed is what surfaced the gap.
+- **Fixture corpus and end-to-end rendering tests.** Extended
+    [tools/genfixtures](tools/genfixtures/main.go) with
+    `axial-shading.pdf` (a black-to-white gradient painted directly via
+    `sh`), `radial-shading.pdf` (a black-center/blue-edge radial
+    gradient with `/Extend [false true]` carrying the edge color to the
+    page's corners), and `shading-pattern-fill.pdf` (the same axial
+    gradient used as a fill paint source for an 80x80 square via `cs
+    Pattern`/`scn`) - see
+    [testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md).
+    [pdfviewer_shading_test.go](pdfviewer_shading_test.go) adds direct
+    pixel-sampling assertions for all three, and all three were added to
+    [pdfviewer_render_test.go](pdfviewer_render_test.go)'s
+    `TestRenderMatchesReferenceImages`.
+- **Capability matrix updated.** `docs/capability-matrix.md` gained a
+    "Shading (`sh` operator)" row in "Content streams and graphics"
+    ("Partial": axial/radial done, function-based and mesh shadings
+    not); the "Transparency and advanced graphics" table's "Shading
+    patterns" row is now "Done" and "Tiling patterns" documents its
+    explicit `ErrUnsupported`; "Pattern color space" in "Color spaces" is
+    now "Partial" (shading patterns work, tiling patterns do not).
+- **What's carried forward.** Transparency groups, blend modes, soft
+    masks (ExtGState-level), tiling patterns, Form XObjects,
+    annotation/form appearance streams, and the allocation-profiling/
+    resource-caching/benchmark work all remain unimplemented, to land in
+    further Phase 5 sub-phases.

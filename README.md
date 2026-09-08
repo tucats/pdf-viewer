@@ -114,6 +114,9 @@ document it rather than silently promising full PDF compatibility.
 **Exit criteria:** a reproducible test corpus, documented non-goals, and no
 CGO, subprocess, network, or native-library dependency in the build.
 
+**Status: done.** See the Progress Log at the end of this document for
+what was actually built.
+
 ### Phase 1: File structure and safe object model
 
 - Parse the header, body objects, cross-reference tables and streams, trailers,
@@ -250,3 +253,71 @@ change; verify current terms before copying code, fixtures, fonts, or prose.
 ## License
 
 This project is released under the MIT License; see [LICENSE](LICENSE).
+
+## Progress Log
+
+This section is updated at the end of each phase with what was actually
+built, so this document stays an accurate record of implementation
+status rather than only a forward-looking plan. Entries are appended in
+phase order and are not rewritten later except to fix mistakes; if a
+later phase changes an earlier decision, that belongs in the later
+phase's entry with a note about what changed.
+
+### Phase 0: Scope, fixtures, and compatibility policy — done (2026-09-08)
+
+- **Module and error conventions.** Initialized the Go module as
+	`github.com/tucats/pdf-viewer` targeting Go 1.23. Added
+	[errors.go](errors.go), defining the sentinel errors every later
+	package will wrap its failures in: `ErrMalformed` (structurally
+	invalid input), `ErrUnsupported` (valid PDF, unimplemented feature),
+	`ErrClosed`, and `ErrPageIndex`, plus `MalformedErrorf`/
+	`UnsupportedErrorf` helper constructors that wrap them with `%w` so
+	`errors.Is` keeps working through any amount of further wrapping.
+	Covered by [errors_test.go](errors_test.go).
+- **Package skeleton.** Created the eight internal packages from the
+	"Proposed Internal Layout" section above
+	(`internal/{source,syntax,parser,model,content,graphics,raster,fonts}`),
+	each currently containing only a `doc.go` explaining that package's
+	future responsibility and which phase is expected to fill it in. No
+	parsing or rendering code exists yet — that starts in Phase 1.
+- **Hand-authored fixture corpus.** Added
+	[tools/genfixtures](tools/genfixtures/main.go), a small program that
+	*generates* the PDF fixtures under `testdata/fixtures/handmade` rather
+	than having them hand-edited byte-by-byte, so that their
+	cross-reference offsets are always correct by construction and the
+	corpus is reproducible (`go run ./tools/genfixtures` regenerates it
+	identically). Five fixtures were added: a minimal one-page PDF, a
+	two-page PDF (page-tree traversal), an incrementally-updated PDF (two
+	chained trailers via `/Prev`), a PDF with a deliberately corrupted
+	cross-reference offset, and a truncated PDF. Each fixture's purpose is
+	documented in [testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md),
+	along with provenance/license (original work, MIT, same as the rest of
+	the repository). The fixtures were independently validated against
+	`pypdf` during development to confirm they parse the way each was
+	designed to (including the corrupted one being auto-repaired via a
+	linear object scan, and the truncated one correctly failing).
+	[tools/genfixtures/main_test.go](tools/genfixtures/main_test.go) keeps
+	the checked-in `.pdf` files from silently drifting out of sync with
+	the generator code that is supposed to produce them, and
+	[fixtures_test.go](fixtures_test.go) adds a byte-level smoke test (the
+	fixtures exist and start with a PDF header) that will be superseded by
+	real structural parsing tests once Phase 1 lands.
+- **Capability matrix.** Added
+	[docs/capability-matrix.md](docs/capability-matrix.md), tracking
+	support status per PDF version, encryption scheme, filter, color
+	space, font type, transparency/graphics feature, image feature,
+	annotation feature, and page box, each tagged with its target phase.
+	Everything is currently "Not started," which is expected for Phase 0.
+- **Fuzz targets deferred to Phase 1.** The README's Phase 0 bullet list
+	calls for fuzz targets for "file parsing and content streams" — there
+	is deliberately no parser yet to fuzz, so this was not done in Phase 0.
+	It is carried forward as a Phase 1 deliverable instead: fuzz targets
+	for `internal/source`/`internal/syntax`/`internal/parser` should land
+	alongside the parsing code they exercise, not as an empty scaffold
+	ahead of it.
+- **CI.** Added [.github/workflows/ci.yml](.github/workflows/ci.yml),
+	which builds, vets, and tests the module with `CGO_ENABLED=0` on
+	Linux, macOS, and Windows, plus a `gofmt` check. This turns the "no
+	CGO, subprocess, network, or native-library dependency" exit criterion
+	into something enforced automatically rather than only stated in this
+	document.

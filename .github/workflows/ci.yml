@@ -1,0 +1,80 @@
+# Continuous integration for pdf-viewer.
+#
+# This workflow exists to make two Phase 0 exit criteria (see the
+# "Phased Plan" section of the repository README) into things that are
+# checked automatically on every push and pull request, rather than
+# relying on a contributor to remember them:
+#
+#   1. "no CGO, subprocess, network, or native-library dependency in the
+#      build" - enforced below by building and testing with
+#      CGO_ENABLED=0 on every supported platform. If any dependency ever
+#      required CGO, this build would fail immediately rather than the
+#      problem being discovered later by an embedder on a platform
+#      without a C toolchain.
+#   2. cross-platform correctness - enforced by running the same build
+#      and test matrix on Linux, macOS, and Windows. A pure-Go renderer
+#      with no native dependencies should behave identically everywhere;
+#      this is what actually verifies that claim instead of just
+#      asserting it.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel a still-running workflow for the same branch/PR when a new push
+# arrives, so CI capacity isn't spent on commits nobody is waiting on
+# anymore.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # The whole point of this job: prove the module builds and tests
+      # pass with cgo turned off, on every platform.
+      CGO_ENABLED: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+  gofmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi

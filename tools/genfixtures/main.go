@@ -34,10 +34,12 @@ package main
 
 import (
 	"bytes"
+	"compress/zlib"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // outputDir is where every generated fixture is written: the
@@ -74,6 +76,13 @@ func main() {
 		{"incremental-update.pdf", buildIncrementalUpdate()},
 		{"malformed-bad-xref-offset.pdf", buildMalformedBadXrefOffset()},
 		{"truncated.pdf", buildTruncated()},
+		{"xref-stream.pdf", buildXrefStream()},
+		{"object-stream.pdf", buildObjectStream()},
+		{"filled-rect.pdf", buildFilledRect()},
+		{"stroked-line.pdf", buildStrokedLine()},
+		{"clipped-rect.pdf", buildClippedRect()},
+		{"transformed-rect.pdf", buildTransformedRect()},
+		{"flate-content-rect.pdf", buildFlateContentRect()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -203,6 +212,217 @@ func buildTruncated() []byte {
 	// startxref entirely - a reader cannot even locate where object
 	// data starts, which is deliberately the harshest truncation case.
 	return full[:len(full)/2]
+}
+
+// buildXrefStream returns a PDF whose page tree is structurally
+// identical to buildMinimalBlankPage's, but whose cross-reference
+// section is a PDF 1.5+ cross-reference stream (Flate-compressed, per
+// how real producers almost always write one) rather than a classic
+// "xref" table - the Phase 2 counterpart exercising
+// internal/parser.Document.loadXrefStream. The chosen field widths,
+// /W [1 4 2], are deliberately not the "natural" 4-byte-everything
+// choice some implementations default to, so that a reader which
+// silently assumed a fixed record layout instead of reading /W would
+// fail on this fixture.
+func buildXrefStream() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R >>", nil)
+	b.addObject(4, 0, "<< /Length 0 >>", []byte{})
+
+	const xrefObjNum = 5
+	size := xrefObjNum + 1
+	// The xref stream object's own "5 0 obj" is about to begin at the
+	// buffer's current length; its own entry (below) describes exactly
+	// that offset, which is how a real cross-reference stream always
+	// includes itself - the table is written as part of the very object
+	// it describes.
+	xrefOffset := b.buf.Len()
+
+	var raw bytes.Buffer
+	writeXrefStreamRecord(&raw, 0, 0, 65535) // object 0: free list head
+	for n := 1; n < xrefObjNum; n++ {
+		writeXrefStreamRecord(&raw, 1, b.offsets[n], 0)
+	}
+	writeXrefStreamRecord(&raw, 1, xrefOffset, 0)
+
+	compressed := deflate(raw.Bytes())
+	dict := fmt.Sprintf("<< /Type /XRef /Size %d /W [1 4 2] /Root 1 0 R /Filter /FlateDecode /Length %d >>", size, len(compressed))
+	b.addObject(xrefObjNum, 0, dict, compressed)
+
+	fmt.Fprintf(&b.buf, "startxref\n%d\n%%%%EOF\n", xrefOffset)
+	return b.buf.Bytes()
+}
+
+// buildObjectStream returns a PDF whose Pages and Page dictionaries
+// (object numbers 2 and 3) are packed together inside a single PDF 1.5+
+// object stream (object 5) instead of each having its own "N G obj ...
+// endobj" definition, described via a cross-reference stream (object 6)
+// whose entries for 2 and 3 are type-2 ("compressed") records - the
+// Phase 2 counterpart exercising internal/parser's
+// Document.loadObjectStream and resolveCompressed. The content stream
+// (object 4) and the catalog (object 1) remain ordinary top-level
+// objects: the PDF specification forbids storing a stream inside an
+// object stream, and there is no reason to compress the catalog itself,
+// so this fixture exercises a document that mixes both storage forms -
+// exactly what real-world PDF 1.5+ producers do (a document's very first
+// objects are often left uncompressed for a "fast web view" preview).
+func buildObjectStream() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(4, 0, "<< /Length 0 >>", []byte{})
+
+	packed := []struct {
+		num  int
+		dict string
+	}{
+		{2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+		{3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R >>"},
+	}
+	var header, body strings.Builder
+	for _, p := range packed {
+		fmt.Fprintf(&header, "%d %d ", p.num, body.Len())
+		body.WriteString(p.dict)
+		body.WriteString("\n")
+	}
+	first := header.Len()
+	compressed := deflate([]byte(header.String() + body.String()))
+
+	const objStmNum = 5
+	objStmDict := fmt.Sprintf("<< /Type /ObjStm /N %d /First %d /Filter /FlateDecode /Length %d >>", len(packed), first, len(compressed))
+	b.addObject(objStmNum, 0, objStmDict, compressed)
+
+	const xrefObjNum = 6
+	size := xrefObjNum + 1
+	xrefOffset := b.buf.Len()
+
+	var raw bytes.Buffer
+	writeXrefStreamRecord(&raw, 0, 0, 65535)                // 0: free list head
+	writeXrefStreamRecord(&raw, 1, b.offsets[1], 0)         // 1: Catalog
+	writeXrefStreamRecord(&raw, 2, objStmNum, 0)            // 2: Pages, packed at index 0
+	writeXrefStreamRecord(&raw, 2, objStmNum, 1)            // 3: Page, packed at index 1
+	writeXrefStreamRecord(&raw, 1, b.offsets[4], 0)         // 4: content stream
+	writeXrefStreamRecord(&raw, 1, b.offsets[objStmNum], 0) // 5: the object stream itself
+	writeXrefStreamRecord(&raw, 1, xrefOffset, 0)           // 6: the xref stream itself
+
+	compressedXref := deflate(raw.Bytes())
+	xrefDict := fmt.Sprintf("<< /Type /XRef /Size %d /W [1 4 2] /Root 1 0 R /Filter /FlateDecode /Length %d >>", size, len(compressedXref))
+	b.addObject(xrefObjNum, 0, xrefDict, compressedXref)
+
+	fmt.Fprintf(&b.buf, "startxref\n%d\n%%%%EOF\n", xrefOffset)
+	return b.buf.Bytes()
+}
+
+// writeXrefStreamRecord appends one fixed-width cross-reference stream
+// record matching the /W [1 4 2] layout buildXrefStream and
+// buildObjectStream both use: a 1-byte type, a 4-byte big-endian
+// field2, and a 2-byte big-endian field3. See
+// internal/parser/xrefstream.go's parseXrefStreamRecord for what each
+// type/field2/field3 combination means.
+func writeXrefStreamRecord(buf *bytes.Buffer, typ byte, field2, field3 int) {
+	buf.WriteByte(typ)
+	buf.WriteByte(byte(field2 >> 24))
+	buf.WriteByte(byte(field2 >> 16))
+	buf.WriteByte(byte(field2 >> 8))
+	buf.WriteByte(byte(field2))
+	buf.WriteByte(byte(field3 >> 8))
+	buf.WriteByte(byte(field3))
+}
+
+// deflate zlib-compresses data (the wrapping PDF's FlateDecode filter
+// expects - see internal/filter's decodeFlate), for use by any fixture
+// whose stream declares /Filter /FlateDecode.
+func deflate(data []byte) []byte {
+	var buf bytes.Buffer
+	w := zlib.NewWriter(&buf)
+	if _, err := w.Write(data); err != nil {
+		panic(fmt.Sprintf("genfixtures: deflate: %v", err))
+	}
+	if err := w.Close(); err != nil {
+		panic(fmt.Sprintf("genfixtures: deflate: %v", err))
+	}
+	return buf.Bytes()
+}
+
+// buildFilledRect returns a single 100x100-point page whose content
+// stream fills an 80x80 red square with an 10-point margin on every
+// side, using plain (unfiltered) content stream bytes. This is the
+// baseline Phase 2 rendering fixture: solid color, axis-aligned path
+// construction ("re"), and nonzero-winding fill ("f") with no transform
+// beyond the page's own device mapping.
+func buildFilledRect() []byte {
+	return buildSinglePageContent(100, 100, "1 0 0 rg\n10 10 80 80 re\nf\n")
+}
+
+// buildStrokedLine returns a single 100x100-point page whose content
+// stream strokes a diagonal blue line, corner to corner, with a 5-point
+// line width - exercising path construction via "m"/"l" and the "S"
+// stroke operator together with a non-default line width, distinct from
+// buildFilledRect's fill-only content.
+func buildStrokedLine() []byte {
+	return buildSinglePageContent(100, 100, "0 0 1 RG\n5 w\n10 10 m\n90 90 l\nS\n")
+}
+
+// buildClippedRect returns a single 100x100-point page whose content
+// stream clips to a 40x40 square in the page's center ("re W n") and
+// then fills the entire page green - only the clipped square should
+// actually end up green in the rendered output, exercising clipping
+// together with fill.
+func buildClippedRect() []byte {
+	return buildSinglePageContent(100, 100, "30 30 40 40 re\nW\nn\n0 1 0 rg\n0 0 100 100 re\nf\n")
+}
+
+// buildTransformedRect returns a single 100x100-point page whose content
+// stream translates to the page center and rotates 45 degrees ("cm")
+// before filling an axis-aligned (in its own, now-rotated, user space)
+// orange square - exercising the current transformation matrix, saved
+// and restored with "q"/"Q" around the temporary transform so it does
+// not leak into anything painted afterward.
+func buildTransformedRect() []byte {
+	return buildSinglePageContent(100, 100,
+		"q\n1 0 0 1 50 50 cm\n0.70710678 0.70710678 -0.70710678 0.70710678 0 0 cm\n"+
+			"1 0.5 0 rg\n-20 -20 40 40 re\nf\nQ\n")
+}
+
+// buildFlateContentRect returns a single 100x100-point page identical in
+// appearance to buildFilledRect (a red 80x80 square with a 10-point
+// margin), but whose content stream is Flate-compressed - exercising
+// filter decoding applied to a *page content* stream specifically,
+// distinct from buildXrefStream/buildObjectStream's use of Flate for
+// structural (cross-reference/object-stream) data. This is what actually
+// closes the loop on Phase 2's "decode ... Flate ... streams as needed
+// by the fixture corpus" exit criterion for the content-stream pipeline
+// (internal/model.PageContentBytes -> internal/parser.DecodeStream ->
+// internal/filter.Decode), not just the parser's own bootstrapping use
+// of it.
+func buildFlateContentRect() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>", nil)
+
+	content := deflate([]byte("1 0 0 rg\n10 10 80 80 re\nf\n"))
+	dict := fmt.Sprintf("<< /Length %d /Filter /FlateDecode >>", len(content))
+	b.addObject(4, 0, dict, content)
+	return b.finish(1)
+}
+
+// buildSinglePageContent is the shared skeleton behind the vector
+// rendering fixtures above: one page of the given size, one content
+// stream holding contentOps verbatim (unfiltered - internal/filter is
+// exercised separately by buildXrefStream/buildObjectStream's Flate
+// streams, so these rendering fixtures keep their content streams
+// plain text for easy reading in a hex/text dump while debugging a
+// rendering test failure).
+func buildSinglePageContent(width, height int, contentOps string) []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] /Resources << >> /Contents 4 0 R >>", width, height), nil)
+	content := []byte(contentOps)
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
 }
 
 // --- Low-level PDF byte assembly ------------------------------------

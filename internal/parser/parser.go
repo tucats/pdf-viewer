@@ -8,19 +8,20 @@
 //
 // # What this package supports so far
 //
-// This initial implementation (Phase 1 of the project's phased plan;
-// see the repository README) supports the classic, table-based
-// cross-reference format ("xref" followed by subsection headers and
-// fixed-width entries) and classic trailers, including files that have
-// been incrementally updated one or more times. It deliberately does
-// not yet support PDF 1.5+ cross-reference streams or object streams:
-// both are normally Flate-compressed, and Flate decoding is scoped to
-// Phase 2 ("Content streams and a minimal raster backend") of the
-// phased plan, alongside the other stream filters. Opening a file that
-// uses a cross-reference stream currently fails with an error wrapping
-// pdfviewer.ErrUnsupported rather than silently misreading it; see
-// docs/capability-matrix.md for the up-to-date status of this and every
-// other capability.
+// Phase 1 of the project's phased plan (see the repository README)
+// implemented the classic, table-based cross-reference format ("xref"
+// followed by subsection headers and fixed-width entries) and classic
+// trailers, including files that have been incrementally updated one or
+// more times. Phase 2 added PDF 1.5+ cross-reference streams (see
+// xrefstream.go) and object streams (see objstream.go) - both were
+// deliberately deferred to Phase 2 because both are normally
+// Flate-compressed, and Flate decoding did not exist until Phase 2
+// ("Content streams and a minimal raster backend") added
+// internal/filter. A document may freely mix classic and stream-based
+// cross-reference sections across its chain of incremental updates
+// (Adobe's own tools sometimes do exactly this); loadXref does not care
+// which kind of section it is walking. See docs/capability-matrix.md for
+// the up-to-date status of this and every other capability.
 //
 // # Recovering from a corrupted cross-reference table
 //
@@ -50,15 +51,29 @@ import (
 	"github.com/tucats/pdf-viewer/internal/syntax"
 )
 
-// xrefEntry is one cross-reference table entry: either "object N,
-// generation G, lives at byte offset Offset" (Free == false) or "object
-// N is on the free list" (Free == true, meaning the object does not
-// currently exist - resolving a reference to it yields the PDF null
-// object, per the specification).
+// xrefEntry is one cross-reference entry, in one of three states a
+// classic table can only describe two of (Free and, via Offset, "in
+// use") - PDF 1.5's cross-reference streams (see xrefstream.go) added a
+// third: an object whose bytes are not at a byte offset in the file at
+// all, but packed inside an object stream (see objstream.go) alongside
+// other objects, sharing a single compressed representation.
+//
+//   - Free (type 0 in a cross-reference stream): the object does not
+//     currently exist - resolving a reference to it yields the PDF null
+//     object, per the specification.
+//   - Compressed == false, Free == false (type 1): "object N lives at
+//     byte offset Offset", exactly as a classic table entry describes.
+//   - Compressed == true (type 2): "object N is the StreamIdx'th object
+//     stored inside the object stream whose own object number is
+//     StreamNum" - Offset is not meaningful for this case.
 type xrefEntry struct {
 	Offset     int64
 	Generation int
 	Free       bool
+
+	Compressed bool
+	StreamNum  int
+	StreamIdx  int
 }
 
 // Document is a parsed PDF file's object-level structure: everything
@@ -106,6 +121,14 @@ type Document struct {
 	// that a file with several genuinely-broken objects does not
 	// trigger a full linear file scan once per broken object.
 	recovered bool
+
+	// objStreams caches the parsed contents of object streams (see
+	// objstream.go) already loaded by loadObjectStream, keyed by that
+	// stream's own object number, so that resolving several objects
+	// packed into the same object stream - the common case, since a
+	// producer typically groups many objects into one for better
+	// compression - decodes and parses that stream's bytes only once.
+	objStreams map[int]*objStreamContents
 }
 
 // Open parses src's header, trailer, and cross-reference table (and any
@@ -127,10 +150,11 @@ func Open(src *source.Reader) (*Document, error) {
 	}
 
 	d := &Document{
-		src:       src,
-		xref:      make(map[int]xrefEntry),
-		cache:     make(map[int]syntax.Object),
-		resolving: make(map[int]bool),
+		src:        src,
+		xref:       make(map[int]xrefEntry),
+		cache:      make(map[int]syntax.Object),
+		resolving:  make(map[int]bool),
+		objStreams: make(map[int]*objStreamContents),
 	}
 	if err := d.loadXref(startOffset); err != nil {
 		return nil, err
@@ -257,9 +281,10 @@ func (d *Document) loadXref(startOffset int64) error {
 }
 
 // loadXrefSection parses one cross-reference section at offset - either
-// a classic "xref" table or (not yet supported; see the package doc
-// comment) a cross-reference stream - merging its entries into d.xref
-// and returning its trailer dictionary.
+// a classic "xref" table or a PDF 1.5+ cross-reference stream - merging
+// its entries into d.xref and returning its trailer dictionary (the
+// stream's own dictionary, in the cross-reference-stream case; see
+// xrefstream.go).
 func (d *Document) loadXrefSection(offset int64) (syntax.Dictionary, error) {
 	r, err := d.src.SectionFrom(offset)
 	if err != nil {
@@ -279,9 +304,10 @@ func (d *Document) loadXrefSection(offset int64) (syntax.Dictionary, error) {
 	// Anything else at this offset that isn't the "xref" keyword is
 	// expected to be an indirect object definition ("N G obj << ...
 	// /Type /XRef ... >> stream ... endstream") - a cross-reference
-	// stream. See the package doc comment for why that is not supported
-	// yet.
-	return nil, pdferror.Unsupportedf("cross-reference streams (PDF 1.5+); this document does not use a classic xref table")
+	// stream. Push the already-read token back so loadXrefStream sees
+	// the object number it starts with.
+	lex.PushBack(tok)
+	return d.loadXrefStream(lex, offset)
 }
 
 // loadClassicXrefTable parses a classic cross-reference table, having

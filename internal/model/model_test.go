@@ -163,6 +163,63 @@ func TestResourcesAreInherited(t *testing.T) {
 	}
 }
 
+// TestRotateIsInheritedAndNormalized exercises the same inheritance rule
+// as TestMediaBoxIsInherited, but for /Rotate, and additionally checks
+// that a negative rotation value is normalized into [0,360).
+func TestRotateIsInheritedAndNormalized(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 10 10] /Rotate -90 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+`)
+	d := openTestDocument(t, data)
+	if got, want := d.Page(0).Rotate, 270; got != want {
+		t.Errorf("Page(0).Rotate = %d, want %d (-90 normalized into [0,360))", got, want)
+	}
+}
+
+func TestRotateDefaultsToZero(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 10 10] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+`)
+	d := openTestDocument(t, data)
+	if got := d.Page(0).Rotate; got != 0 {
+		t.Errorf("Page(0).Rotate = %d, want 0", got)
+	}
+}
+
+// TestPageRotateOverridesInherited confirms a page's own /Rotate takes
+// precedence over one inherited from an ancestor.
+func TestPageRotateOverridesInherited(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 10 10] /Rotate 90 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Rotate 180 >> endobj
+`)
+	d := openTestDocument(t, data)
+	if got, want := d.Page(0).Rotate, 180; got != want {
+		t.Errorf("Page(0).Rotate = %d, want %d (page's own value should win)", got, want)
+	}
+}
+
+// TestRotateNotAMultipleOf90FallsBackToDefault confirms a malformed
+// /Rotate value (not a multiple of 90, which the specification requires)
+// does not propagate as a nonsensical rotation - it falls back to
+// whatever was otherwise inherited (here, nothing, so 0).
+func TestRotateNotAMultipleOf90FallsBackToDefault(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 10 10] /Rotate 45 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+`)
+	d := openTestDocument(t, data)
+	if got := d.Page(0).Rotate; got != 0 {
+		t.Errorf("Page(0).Rotate = %d, want 0 (invalid /Rotate 45 should not propagate)", got)
+	}
+}
+
 // TestMultiLevelPageTree confirms traversal works through more than one
 // level of intermediate Pages nodes, not just a single flat Kids array,
 // and that document order is preserved.

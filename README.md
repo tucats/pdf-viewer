@@ -149,6 +149,12 @@ Phase 2 work. See the Progress Log at the end of this document.
 **Exit criteria:** `Page.Render` produces correct images for basic paths,
 transforms, clipping, and page boxes on every supported platform.
 
+**Status: done.** See the Progress Log at the end of this document for
+what was actually built, and `docs/capability-matrix.md`'s new "Content
+streams and graphics" section for the detailed, row-by-row breakdown
+(stroke joins and multi-clip intersection are documented approximations,
+not full implementations - see that table's notes).
+
 ### Phase 3: Images, color, and thumbnails
 
 - Support inline and referenced images, image masks, soft masks, and the common
@@ -425,3 +431,210 @@ phase's entry with a note about what changed.
 	object streams move to Phase 2, alongside Flate decoding. `CropBox`,
 	page rotation, and everything content-stream-related remain
 	unimplemented, as planned.
+
+### Phase 2: Content streams and a minimal raster backend — done (2026-09-08)
+
+- **`internal/filter` (new package).** Added stream filter decoding:
+	[ascii85.go](internal/filter/ascii85.go), [asciihex.go](internal/filter/asciihex.go),
+	[runlength.go](internal/filter/runlength.go), [lzw.go](internal/filter/lzw.go)
+	(via the standard library's `compress/lzw`, whose `MSB` bit order is
+	explicitly documented as PDF-compatible - no separate LZW
+	implementation was needed), and [flate.go](internal/filter/flate.go)
+	(via `compress/zlib`), with shared PNG/TIFF predictor support in
+	[predictor.go](internal/filter/predictor.go) for `/BitsPerComponent`
+	1, 2, 4, 8, and 16. [filter.go](internal/filter/filter.go) dispatches
+	a stream's `/Filter` (a name or an array, applying a chain in order)
+	and matching `/DecodeParms`. Every decoder bounds its output size
+	(`maxDecodedSize`) against decompression bombs, and the predictor
+	dimension parameters (`/Colors`, `/Columns`) are bounds-checked to
+	prevent integer-overflow-driven out-of-range slice access - see
+	[fuzz_test.go](internal/filter/fuzz_test.go) (`FuzzDecode`,
+	`FuzzApplyPredictor`), which ran clean across several million
+	executions each during development. `LZWDecode`'s `/EarlyChange 0`
+	variant is explicitly unsupported (the standard library offers no way
+	to select it); every other named filter this project does not
+	implement (`DCTDecode`, `CCITTFaxDecode`, `JBIG2Decode`, ...) returns
+	an error wrapping `ErrUnsupported` rather than being silently skipped.
+- **PDF 1.5+ cross-reference streams and object streams.** Extended
+	`internal/parser` (deferred from Phase 1 specifically until
+	`internal/filter` existed to decompress them):
+	[xrefstream.go](internal/parser/xrefstream.go) parses a
+	Flate-compressed cross-reference stream's fixed-width `/W`-described
+	records (including the type-2 "compressed" record type classic
+	tables have no way to express) and folds its own dictionary in as
+	that section's trailer; [objstream.go](internal/parser/objstream.go)
+	resolves a compressed entry by decoding and header-parsing its object
+	stream (`/Type /ObjStm`) and caching the result
+	(`Document.objStreams`) so objects packed into the same stream are
+	only decoded once. `xrefEntry` gained `Compressed`/`StreamNum`/
+	`StreamIdx` fields; `Document.Resolve` branches on them, skipping the
+	linear-scan recovery path for compressed entries (they have no
+	"N G obj" marker for that scan to find). A document may freely mix
+	classic and stream-based cross-reference sections across its `/Prev`
+	chain. Covered by
+	[xrefstream_test.go](internal/parser/xrefstream_test.go) against two
+	new fixtures (see below) plus ad hoc malformed-input constructions
+	(out-of-range compressed index, missing `/W`), and by the existing
+	`FuzzOpenAndResolveAll` fuzz target, reseeded with the new fixtures.
+	Hybrid-reference files (`/XRefStm` alongside a classic table) are not
+	specially handled; see `docs/capability-matrix.md`.
+- **Fixed a Phase 1 bug in `internal/syntax`, surfaced by Phase 2.**
+	`readStreamBody`'s direct-`/Length` path (`readExactly`) stopped
+	exactly at the end of a stream's raw data without consuming the
+	mandatory `endstream` keyword that follows, leaving it for whatever
+	the caller read next (normally `endobj`) to trip over - meaning
+	`Document.Resolve` on *any* stream object with a direct integer
+	`/Length` failed. This went unnoticed through Phase 1 because nothing
+	that phase built ever resolved a stream object all the way through
+	(`Page.Render` always returned `ErrUnsupported` without reading
+	`/Contents`); Phase 2's filter decoding and content-stream rendering
+	both resolve stream objects directly, which is what surfaced it.
+	Fixed by [value.go](internal/syntax/value.go)'s new `expectEndstream`;
+	regression-tested by
+	[value_test.go](internal/syntax/value_test.go)'s
+	`TestParseValueStreamWithDirectLengthConsumesEndstream` and
+	`TestParseValueStreamMissingEndstreamKeywordIsMalformed`.
+- **`internal/graphics` (implemented; previously a Phase 0 stub).** The
+	PDF graphics state machine: [matrix.go](internal/graphics/matrix.go)
+	(the six-number affine transform PDF's `cm` operator and this
+	package's own `Mul`/`Apply` use, matching the specification's own
+	row-vector convention exactly); [path.go](internal/graphics/path.go)
+	(device-space path construction, including a fixed-segment-count
+	Bézier flattener chosen specifically to keep rasterization
+	deterministic, and a coordinate clamp - `clampPoint` - applied at
+	every point of entry so a hostile or overflowed content stream number
+	can never hand internal/raster a NaN or unbounded coordinate);
+	[style.go](internal/graphics/style.go) (`Color`, `FillRule`,
+	`LineCap`, `LineJoin`); [state.go](internal/graphics/state.go) (the
+	`q`/`Q` `Stack` and clip-path accumulation, `WithClip`); and
+	[stroke.go](internal/graphics/stroke.go) (`StrokeToFill`, converting
+	a stroked path into its filled outline - segment rectangles, caps per
+	`LineCap`, and joins approximated as round regardless of the
+	requested `LineJoin`, a documented simplification rather than full
+	miter/bevel geometry). Covered by
+	[matrix_test.go](internal/graphics/matrix_test.go),
+	[path_test.go](internal/graphics/path_test.go),
+	[state_test.go](internal/graphics/state_test.go), and
+	[stroke_test.go](internal/graphics/stroke_test.go).
+- **`internal/content` (implemented; previously a Phase 0 stub).**
+	[operator.go](internal/content/operator.go)'s `Parse` tokenizes an
+	already filter-decoded content stream into `Operator` values, reusing
+	`internal/syntax`'s `Lexer`/`ParseValue` for operand syntax; inline
+	images (`BI`) are explicitly detected and rejected as unsupported
+	(Phase 3) rather than misparsed as further operators.
+	[interpret.go](internal/content/interpret.go)'s `Interpret` replays
+	`Operator`s against a `graphics.Stack`, implementing graphics state,
+	path construction/painting, clipping, and solid
+	DeviceGray/RGB/CMYK color per the phase's scope (see the package doc
+	comment and `docs/capability-matrix.md`'s new "Content streams and
+	graphics" section for the full operator-by-operator breakdown). An
+	operator this package does not recognize (text, `Do`, `sh`, marked
+	content, ...) is silently skipped rather than aborting the whole
+	page's render, so a page mixing supported vector content with
+	not-yet-supported features still renders what it can. Covered by
+	[operator_test.go](internal/content/operator_test.go) and
+	[interpret_test.go](internal/content/interpret_test.go), plus
+	[fuzz_test.go](internal/content/fuzz_test.go) (`FuzzParseAndInterpret`).
+- **`internal/raster` (implemented; previously a Phase 0 stub).** A
+	from-scratch scanline coverage-accumulation rasterizer -
+	[scanline.go](internal/raster/scanline.go)'s `rasterizeCoverage` -
+	implementing both of PDF's fill rules with vertical supersampling
+	(fixed sub-scanline offsets) and exact horizontal fractional-pixel
+	coverage, used identically for ordinary fills, stroke outlines
+	(already converted to fill geometry by `graphics.StrokeToFill`), and
+	clip evaluation - one algorithm, not three.
+	[canvas.go](internal/raster/canvas.go)'s `Canvas.Fill` composites a
+	filled path onto an always-fully-opaque `*image.RGBA`, intersecting
+	every active clip by multiplying each one's independently
+	rasterized coverage (an approximation, exact for opaque-interior
+	clips, documented in `docs/capability-matrix.md`).
+	[render.go](internal/raster/render.go)'s `Render` is the package's
+	entry point, painting a `graphics.DisplayList` in order onto a fresh
+	background-filled `Canvas`. Every source of variation in the
+	algorithm is a fixed constant (never derived from timing, map
+	iteration order, or viewport size), which is what makes the
+	reference-image comparison below meaningful. Covered by
+	[scanline_test.go](internal/raster/scanline_test.go) (fill rules,
+	anti-aliasing, nonzero-winding cancellation via opposite-direction
+	subpaths) and [canvas_test.go](internal/raster/canvas_test.go)
+	(background, clipping, multi-clip intersection, paint order).
+- **`internal/model`.** Added
+	[content.go](internal/model/content.go)'s `PageContentBytes`,
+	resolving a page's `/Contents` (a single stream, or an array
+	concatenated with a separating newline per the specification) and
+	decoding it through `internal/parser.Document.DecodeStream` (a new
+	method, in `internal/parser/resolve.go`, that resolves a stream
+	dictionary's `/Filter`/`/DecodeParms` - which are technically
+	permitted to be indirect references, though real files essentially
+	never do this - before handing off to `internal/filter.Decode`).
+	Also added `/Rotate` as a fourth inheritable page attribute
+	(alongside `/MediaBox` and `/Resources`), normalized to 0/90/180/270
+	with an invalid value falling back to whatever was otherwise
+	inherited rather than propagating nonsense. Covered by
+	[content_test.go](internal/model/content_test.go) and new cases in
+	[model_test.go](internal/model/model_test.go)
+	(`TestRotateIsInheritedAndNormalized` and siblings).
+- **Public API: `Page.Render` implemented.** [page.go](page.go)'s
+	`Render` now runs the full pipeline (`PageContentBytes` ->
+	`content.Parse` -> `content.Interpret` -> `raster.Render`),
+	establishing the initial content-transformation matrix from the
+	page's `MediaBox` and `Rotate` (`pageDeviceGeometry`, including the
+	standard PDF-to-raster y-axis flip and - new - rotating the rendered
+	canvas, swapping pixel dimensions for 90/270). A `maxRenderPixels`
+	bound rejects (with `ErrUnsupported`) a request that would produce an
+	absurdly large image, consistent with this project's bounded-work
+	policy. [options.go](options.go)'s `RenderOptions` gained `Scale`
+	(device pixels per point) and `Background` (a standard library
+	`image/color.Color`, defaulting to opaque white); a fuller
+	`RenderOptions` (explicit pixel size, non-MediaBox page-box
+	selection, color mode) is left for a later change. `Page.Thumbnail`
+	remains unimplemented (`ErrUnsupported`), as planned for Phase 3.
+- **Fixture corpus.** Extended
+	[tools/genfixtures](tools/genfixtures/main.go) with six new
+	generated fixtures documented in
+	[testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md):
+	`xref-stream.pdf` and `object-stream.pdf` (Phase 2's cross-reference
+	stream and object stream support, with deliberately non-default `/W`
+	field widths); `filled-rect.pdf`, `stroked-line.pdf`,
+	`clipped-rect.pdf`, and `transformed-rect.pdf` (solid fill, stroke
+	width, clipping, and `cm` transforms respectively); and
+	`flate-content-rect.pdf` (the same square as `filled-rect.pdf`, but
+	Flate-compressed, to exercise filter decoding applied to a page
+	*content* stream specifically, distinct from the structural-data use
+	in the two cross-reference-stream fixtures).
+- **Reference-image rendering tests.** Added
+	[pdfviewer_render_test.go](pdfviewer_render_test.go): direct
+	hand-derived pixel-sampling assertions per vector fixture, plus
+	`TestRenderMatchesReferenceImages`, which is this phase's "compare
+	rendered output against checked-in reference images with a
+	documented tolerance" exit criterion - it re-renders every vector
+	fixture and compares against a checked-in PNG under
+	`testdata/renderrefs/` (documented further in
+	`testdata/fixtures/FIXTURES.md`), allowing a mean per-channel
+	difference of at most 0.5/255 (see `maxMeanChannelDiff`'s doc
+	comment for why: absorbing last-bit floating-point differences
+	across this project's multi-platform CI without masking an actual
+	regression). Reference images regenerate via
+	`go test . -run TestRenderMatchesReferenceImages -update`. Also
+	added `FuzzOpenAndRender` ([fuzz_test.go](fuzz_test.go)), extending
+	Phase 1's `FuzzOpenAndResolveAll` all the way through content-stream
+	interpretation and rasterization - ran clean across tens of millions
+	of executions during development, seeded from the full fixture
+	corpus.
+- **Capability matrix updated.**
+	[docs/capability-matrix.md](docs/capability-matrix.md) gained a new
+	"Content streams and graphics" section (Phase 2's core deliverable
+	previously had no dedicated section at all) documenting every
+	content-stream operator category and its known simplifications
+	(round-only stroke joins, coverage-multiplication clip
+	intersection, no `/Resources`/`/ColorSpace` resolution for
+	`scn`/`SCN`). The "PDF 1.5+ cross-reference streams and object
+	streams", filter, `/Rotate`, and DeviceGray/RGB/CMYK rows are now
+	"Done" or "Partial" as described above.
+- **What's carried forward.** Form XObjects, images (referenced and
+	inline), text, transparency, patterns, shadings, true miter/bevel
+	stroke joins, exact (non-coverage-multiplied) clip intersection, and
+	`/Resources`/`/ColorSpace` resolution for named color spaces all
+	remain unimplemented, as planned for Phase 3-5. `CropBox`,
+	`BleedBox`, `TrimBox`, and `ArtBox` (page-box selection beyond
+	`MediaBox`) also remain unimplemented.

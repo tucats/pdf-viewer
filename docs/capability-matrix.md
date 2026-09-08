@@ -19,17 +19,17 @@ rather than discovered by accident.
 | Done | Implemented and covered by tests. |
 | Non-goal | Deliberately out of scope; see the README's "Non-goals for the Initial Release" section. |
 
-Every row below is currently **Not started**, since Phase 0 is
-scaffolding only (see [README.md](../README.md)). This table should be
-updated in the same change that changes a capability's support level —
-treat a code change that isn't reflected here as incomplete.
+This table should be updated in the same change that changes a
+capability's support level — treat a code change that isn't reflected
+here as incomplete. See [README.md](../README.md) for the phased plan
+and its Progress Log for what was actually built in each phase.
 
 ## PDF versions
 
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
 | PDF 1.4–1.7 core structure (classic xref tables, classic trailers, incremental updates via /Prev, recovery scan for a corrupted xref table) | Phase 1 | Partial | Implemented in `internal/parser`; see its package doc comment. "Partial" because broader real-world compatibility is still growing, not because the mechanism itself is incomplete. |
-| PDF 1.5+ cross-reference streams and object streams | Phase 2 (moved from Phase 1) | Not started | Both are normally Flate-compressed, so implementing them was deferred until Flate decoding lands in Phase 2 alongside the other stream filters, rather than half-implementing decompression early; see `internal/parser`'s package doc comment. Opening such a file currently fails with an error wrapping `ErrUnsupported`. |
+| PDF 1.5+ cross-reference streams and object streams | Phase 2 (moved from Phase 1) | Done | Implemented in `internal/parser` (`xrefstream.go`, `objstream.go`), now that Flate decoding exists (`internal/filter`). A document may freely mix classic and stream-based cross-reference sections across its `/Prev` chain. Hybrid-reference files (a classic table plus a supplementary `/XRefStm` for stream-unaware readers) are not specially handled - objects only reachable via `/XRefStm` are not found - but this is rare in practice and does not cause an error, only a missing object (resolved as null). |
 | PDF 2.0 (ISO 32000-2) structural changes | Phase 6 | Not started | Revisited during API stabilization once the 1.x corpus is solid. |
 | Linearized ("fast web view") files | Not scheduled | Not started | Linearization is an optimization hint or convention layered on top of standard structure, not the file's ground truth; a linearized file must still be readable using vanilla xref/trailer parsing, so this project treats it as automatically handled rather than as a scheduled feature. |
 
@@ -46,21 +46,37 @@ treat a code change that isn't reflected here as incomplete.
 
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
-| ASCII85Decode, ASCIIHexDecode | Phase 2 | Not started | |
-| FlateDecode (with predictors) | Phase 2 | Not started | The most common filter in modern PDFs; PNG/TIFF predictor support is required, not optional, since most real-world Flate streams use one. |
-| RunLengthDecode | Phase 2 | Not started | |
-| LZWDecode | Phase 2 | Not started | |
+| ASCII85Decode, ASCIIHexDecode | Phase 2 | Done | Implemented in `internal/filter` (`ascii85.go`, `asciihex.go`). |
+| FlateDecode (with predictors) | Phase 2 | Done | Implemented in `internal/filter` (`flate.go`, `predictor.go`). Both PNG (predictor 10-15) and TIFF (predictor 2) predictors are supported for `/BitsPerComponent` 1, 2, 4, 8, and 16. |
+| RunLengthDecode | Phase 2 | Done | Implemented in `internal/filter` (`runlength.go`). |
+| LZWDecode | Phase 2 | Partial | Implemented in `internal/filter` (`lzw.go`) via the standard library's `compress/lzw`, whose `MSB` order is explicitly documented as PDF-compatible. "Partial" because only the default `/EarlyChange 1` is supported - `/EarlyChange 0` returns an error wrapping `ErrUnsupported`, since the standard library offers no way to select that variant. PNG/TIFF predictors are supported here too, sharing `predictor.go` with FlateDecode. |
 | DCTDecode (JPEG) | Phase 3 | Not started | Gated on standard-library `image/jpeg` sufficing; see README "Images, color, and thumbnails". |
 | CCITTFaxDecode | Not yet scheduled | Not started | Common in scanned/fax-derived PDFs; no standard-library decoder exists, so this needs its own design decision before scheduling. |
 | JBIG2Decode | Not scheduled | Not started | Encumbered, complex format with narrow real-world benefit relative to implementation cost; revisit only on concrete demand. |
 | JPXDecode (JPEG 2000) | Not scheduled | Not started | Same rationale as JBIG2Decode. |
 | Crypt filter | Not scheduled | Not started | Depends on encryption support above. |
 
+## Content streams and graphics
+
+| Capability | Target phase | Status | Notes |
+| --- | --- | --- | --- |
+| Content stream operator parsing | Phase 2 | Done | Implemented in `internal/content` (`operator.go`); reuses `internal/syntax` for operand syntax. Inline images (`BI`/`ID`/`EI`) are explicitly detected and rejected as unsupported (Phase 3) rather than silently misparsed. |
+| Graphics state stack (`q`/`Q`), coordinate transforms (`cm`) | Phase 2 | Done | Implemented in `internal/graphics` (`state.go`, `matrix.go`). |
+| Path construction (`m`/`l`/`c`/`v`/`y`/`h`/`re`) | Phase 2 | Done | Implemented in `internal/graphics` (`path.go`). Bézier curves are flattened into a fixed number of line segments for deterministic rasterization. |
+| Path painting: fill, nonzero and even-odd (`f`/`F`/`f*`/`B`/`B*`/`b`/`b*`) | Phase 2 | Done | Implemented in `internal/raster`'s scanline coverage rasterizer (`scanline.go`). |
+| Path painting: stroke (`S`/`s`), line width/cap/join | Phase 2 | Partial | Implemented via `internal/graphics.StrokeToFill` (`stroke.go`): a stroke is converted to its filled outline before rasterization. Line width and caps (butt/round/square) are exact; joins are always rendered as round joins regardless of the requested join style - true miter (with miter-limit fallback to bevel) and bevel join geometry are not yet implemented. Dash patterns (`d`) are parsed and ignored; every stroke is solid. |
+| Clipping (`W`/`W*`) | Phase 2 | Partial | Implemented in `internal/graphics` (`state.go`'s `Clips`) and `internal/raster` (coverage-multiplication intersection). Multiple simultaneously active clips are supported, but combined via multiplying each clip's independently anti-aliased coverage rather than true polygon-boolean intersection - an approximation, exact for non-anti-aliased (opaque-interior) clip regions. |
+| Solid color: DeviceGray/RGB/CMYK (`g`/`G`/`rg`/`RG`/`k`/`K`) | Phase 2 | Done | Implemented in `internal/content` (`interpret.go`). CMYK uses the PDF specification's own baseline (non-color-managed) conversion formula. |
+| `sc`/`SC`/`scn`/`SCN` with a resolved `/ColorSpace` resource | Phase 2/3 | Partial | `internal/content` infers DeviceGray/RGB/CMYK directly from the operand count (1, 3, or 4 numeric components) without resolving `/Resources`/`/ColorSpace` at all; this covers the common case but not a named color space with a different component count. `cs`/`CS` are accepted and otherwise ignored. A pattern name operand (`scn`/`SCN` with `/Pattern`) is explicitly detected and rejected as unsupported (Phase 5). |
+| Form XObjects (`Do` with a `/Form` XObject) | Phase 3/5 (not yet scheduled precisely) | Not started | `Do` is currently silently skipped, along with every other unrecognized operator - see `internal/content`'s package doc comment. |
+| Text showing/positioning operators | Phase 4 | Not started | Silently skipped; see the row above. |
+| Marked content (`BMC`/`BDC`/`EMC`/`MP`/`DP`) | Not scheduled | Not started | Silently skipped. No rendering-relevant effect for this project's scope (marked content is a metadata/structure mechanism, not a paint operation). |
+
 ## Color spaces
 
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
-| DeviceGray, DeviceRGB, DeviceCMYK | Phase 2–3 | Not started | |
+| DeviceGray, DeviceRGB, DeviceCMYK | Phase 2–3 | Partial | Solid-color operators (`g`/`rg`/`k`, `sc`/`scn` by component count) are implemented - see "Content streams and graphics" above. Use as an image color space (decoding pixel samples) is Phase 3 work. |
 | Indexed | Phase 3 | Not started | |
 | CalGray, CalRGB, Lab | Phase 3 | Not started | |
 | ICCBased | Phase 3 | Not started | Target: use the ICC profile's declared alternate/component count for correct rendering without implementing a full color management engine. |
@@ -113,7 +129,7 @@ treat a code change that isn't reflected here as incomplete.
 | MediaBox | Phase 1 | Done | Implemented in `internal/model`, including inheritance from an ancestor Pages node when a page does not specify its own; exposed publicly via `Page.Bounds`. |
 | CropBox | Phase 1–2 | Not started | Falls back to MediaBox when absent, per spec. |
 | BleedBox, TrimBox, ArtBox | Phase 2 | Not started | Exposed via `RenderOptions`' page-box selection (see README Draft Public API). |
-| Page rotation (`/Rotate`) | Phase 2 | Not started | |
+| Page rotation (`/Rotate`) | Phase 2 | Done | Implemented in `internal/model` (inherited like `/MediaBox`/`/Resources`, normalized to 0/90/180/270 with an invalid value falling back to the inherited default) and applied in `Page.Render`'s device geometry (root package `page.go`). |
 
 ## Explicit non-goals
 

@@ -261,6 +261,49 @@ func TestParseValueStreamWithoutDirectLength(t *testing.T) {
 	}
 }
 
+// TestParseValueStreamWithDirectLengthConsumesEndstream is a regression
+// test for a bug where reading a stream's raw bytes via a direct
+// /Length (readExactly) stopped exactly at the end of that data without
+// consuming the mandatory "endstream" keyword that follows - leaving it
+// sitting in the token stream for whatever the caller reads next
+// (typically "endobj") to trip over instead. This went unnoticed through
+// Phase 1 because nothing in that phase ever resolved a stream object
+// all the way through internal/parser.Document.Resolve (Page.Render
+// always returned ErrUnsupported without reading /Contents); Phase 2's
+// filter decoding and content-stream rendering both resolve stream
+// objects directly, which is what surfaced it. See value.go's
+// expectEndstream.
+func TestParseValueStreamWithDirectLengthConsumesEndstream(t *testing.T) {
+	lex := NewLexer(strings.NewReader("<< /Length 5 >>\nstream\nHello\nendstream\nendobj"))
+	got, err := ParseValue(lex, 0)
+	if err != nil {
+		t.Fatalf("ParseValue: %v", err)
+	}
+	if _, ok := got.(Stream); !ok {
+		t.Fatalf("got %#v (%T), want Stream", got, got)
+	}
+
+	tok, err := lex.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if tok.Kind != KindKeyword || tok.Text != "endobj" {
+		t.Fatalf("Token after the stream = %#v, want keyword \"endobj\" (the \"endstream\" keyword was not consumed)", tok)
+	}
+}
+
+// TestParseValueStreamMissingEndstreamKeywordIsMalformed confirms that a
+// direct-/Length stream whose data is *not* actually followed by
+// "endstream" - i.e. /Length itself is wrong - is reported as malformed
+// rather than silently accepted or silently misreading whatever comes
+// next as the stream's own content.
+func TestParseValueStreamMissingEndstreamKeywordIsMalformed(t *testing.T) {
+	lex := NewLexer(strings.NewReader("<< /Length 5 >>\nstream\nHello\nNOT-ENDSTREAM"))
+	if _, err := ParseValue(lex, 0); !errors.Is(err, pdferror.ErrMalformed) {
+		t.Fatalf("error = %v, want ErrMalformed", err)
+	}
+}
+
 func TestParseValueStreamCRLFAfterKeyword(t *testing.T) {
 	src := "<< /Length 5 >>\nstream\r\nHello\r\nendstream"
 	got := parse(t, src)

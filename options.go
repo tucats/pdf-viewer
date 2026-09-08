@@ -1,21 +1,28 @@
 package pdfviewer
 
+import "image/color"
+
 // This file declares the option types sketched in the README's "Draft
 // Public API" section: OpenOption for Open and OpenFile, and
 // RenderOptions/ThumbnailOptions for Page.Render and Page.Thumbnail.
 //
-// None of these carry any fields yet. That is deliberate, not an
-// oversight: Open and OpenFile currently have nothing to configure (see
-// OpenOption below), and Render/Thumbnail are not implemented yet at all
-// (they return an error wrapping ErrUnsupported - see page.go) since
-// actual rendering is Phase 2 and Phase 3 work per the repository
-// README's phased plan. The three types exist now, ahead of having
-// anything to put in them, purely so that this package's exported
-// function and method *signatures* already match the shape described in
+// Open and OpenFile still have nothing to configure (see OpenOption
+// below) - that extension point exists purely so this package's
+// exported function *signatures* already match the shape described in
 // the README's Draft Public API and will not need to change (only grow)
-// once rendering lands - adding a field to an existing options struct is
-// backward compatible in Go; adding a previously-absent parameter to an
-// existing function is not.
+// once there is something to put in it, since adding a field to an
+// existing options struct is backward compatible in Go, but adding a
+// previously-absent parameter to an existing function is not.
+//
+// RenderOptions now carries the minimal set of fields Phase 2's Render
+// implementation (see page.go) actually uses: Scale and Background. Per
+// the README's Draft Public API notes, a fuller RenderOptions is
+// expected to also cover an explicit pixel size, page-box selection
+// beyond MediaBox (CropBox/BleedBox/TrimBox/ArtBox - Phase 2/3 per
+// docs/capability-matrix.md), and color mode; those are not implemented
+// yet and are left for a later change now that there is a real Render
+// to extend. ThumbnailOptions remains empty, since Thumbnail itself is
+// Phase 3 work.
 
 // OpenOption configures how Open or OpenFile parses a document. No
 // options are defined yet - this type exists as an extension point for
@@ -29,12 +36,27 @@ type OpenOption func(*openConfig)
 // no fields yet, matching OpenOption above.
 type openConfig struct{}
 
-// RenderOptions configures Page.Render. Per the README's Draft Public
-// API, once implemented (Phase 2) this is expected to cover DPI or an
-// explicit pixel size, page-box selection, rotation, background color,
-// and color mode - none of which exist yet, since Render itself is not
-// implemented yet; see page.go.
-type RenderOptions struct{}
+// RenderOptions configures Page.Render.
+type RenderOptions struct {
+	// Scale is the number of device pixels per PDF point (1/72 inch).
+	// The zero value means the default, 1.0 - a page's rendered pixel
+	// dimensions then exactly match its MediaBox dimensions in points
+	// (before accounting for Rotate; see Page.Render). A caller wanting
+	// a specific DPI can compute Scale as dpi/72.
+	Scale float64
+
+	// Background is the solid color painted behind the page before any
+	// content is drawn, visible wherever the page's own content does not
+	// fully cover it - most pages do not paint their own full-page
+	// background. A nil Background means the default, opaque white,
+	// matching how most real-world PDF viewers render a page with no
+	// explicit background. Only opacity implied by full coverage exists;
+	// Background's own alpha channel (if any) is otherwise ignored - the
+	// rendered image is always fully opaque, since this project does not
+	// yet track a page's transparency beyond what is opaquely painted
+	// (see docs/capability-matrix.md's transparency row).
+	Background color.Color
+}
 
 // ThumbnailOptions configures Page.Thumbnail. Per the README's Draft
 // Public API, once implemented (Phase 3) this is expected to be a

@@ -268,9 +268,41 @@ func readStreamBody(lex *Lexer, dict Dictionary) ([]byte, error) {
 	}
 
 	if length, ok := directLength(dict); ok {
-		return readExactly(lex, length)
+		raw, err := readExactly(lex, length)
+		if err != nil {
+			return nil, err
+		}
+		// Unlike readUntilEndstream below (which finds "endstream" by
+		// scanning for it, and so has necessarily already consumed it by
+		// the time it returns), reading exactly /Length bytes stops
+		// right where the raw data ends without looking at what comes
+		// next - the mandatory "endstream" keyword the specification
+		// requires there is still unconsumed input at this point, and
+		// must be read here so the caller's own next token (parsing
+		// "endobj") is not confused by seeing "endstream" first.
+		if err := expectEndstream(lex); err != nil {
+			return nil, err
+		}
+		return raw, nil
 	}
 	return readUntilEndstream(lex)
+}
+
+// expectEndstream consumes the "endstream" keyword expected immediately
+// after a stream's raw data, once that data was read by taking exactly
+// /Length bytes. A producer that pads with extra whitespace before
+// "endstream" beyond the single mandated end-of-line is tolerated
+// automatically, since the Lexer's ordinary token reading already skips
+// whitespace ahead of every token.
+func expectEndstream(lex *Lexer) error {
+	tok, err := lex.Next()
+	if err != nil {
+		return err
+	}
+	if tok.Kind != KindKeyword || tok.Text != "endstream" {
+		return pdferror.Malformedf("stream data (read via a direct /Length) is not followed by the \"endstream\" keyword")
+	}
+	return nil
 }
 
 // skipStreamKeywordEOL consumes the single end-of-line sequence

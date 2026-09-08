@@ -1,0 +1,51 @@
+package filter
+
+import (
+	"testing"
+
+	"github.com/tucats/pdf-viewer/internal/syntax"
+)
+
+// FuzzDecode exercises every filter's decoder against arbitrary bytes,
+// checking only that a malformed or hostile input is rejected with an
+// error rather than panicking or hanging - it does not check the
+// decoded content, since arbitrary input has no known-correct decoding.
+// This is the Phase 2 counterpart to the fuzz targets internal/syntax
+// and internal/parser added in Phase 1 for the same reason: a stream's
+// raw bytes are attacker-controlled input, and this package is exactly
+// where PDF's various compressed/encoded byte formats get parsed.
+func FuzzDecode(f *testing.F) {
+	f.Add("ASCII85Decode", []byte("9jqo^BlbD-BleB1DJ+*+F(f,q~>"))
+	f.Add("ASCIIHexDecode", []byte("48656C6C6F>"))
+	f.Add("RunLengthDecode", []byte{2, 'a', 'b', 'c', 128})
+	f.Add("LZWDecode", []byte{0x80, 0x0b, 0x60, 0x50, 0x22, 0x0c})
+	f.Add("FlateDecode", []byte{0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01})
+
+	f.Fuzz(func(t *testing.T, filterName string, data []byte) {
+		dict := syntax.Dictionary{"Filter": syntax.Name(filterName)}
+		// Decode must never panic and must always terminate, regardless
+		// of whether it returns an error - that is the entire property
+		// under test here.
+		_, _ = Decode(dict, data)
+	})
+}
+
+// FuzzApplyPredictor exercises the PNG/TIFF predictor un-filtering logic
+// directly (bypassing compression) against arbitrary already-decoded
+// bytes and arbitrary shape parameters, since a malformed /Colors,
+// /BitsPerComponent, or /Columns combined with arbitrary data is exactly
+// the kind of input a hostile or corrupted stream dictionary can produce.
+func FuzzApplyPredictor(f *testing.F) {
+	f.Add([]byte{0, 1, 2, 3, 4}, int64(15), int64(1), int64(8), int64(4))
+	f.Add([]byte{10, 10, 10}, int64(2), int64(1), int64(8), int64(3))
+
+	f.Fuzz(func(t *testing.T, data []byte, predictor, colors, bpc, columns int64) {
+		parms := syntax.Dictionary{
+			"Predictor":        syntax.Integer(predictor),
+			"Colors":           syntax.Integer(colors),
+			"BitsPerComponent": syntax.Integer(bpc),
+			"Columns":          syntax.Integer(columns),
+		}
+		_, _ = applyPredictor(data, parms)
+	})
+}

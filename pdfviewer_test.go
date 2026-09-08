@@ -164,12 +164,13 @@ func TestPageCountValidAfterClose(t *testing.T) {
 	}
 }
 
-// TestRenderIsNotYetImplemented and TestThumbnailIsNotYetImplemented
-// confirm the documented placeholder behavior of Page.Render and
-// Page.Thumbnail (see page.go): both must fail with ErrUnsupported,
-// distinctly from any other kind of failure, since Phase 1 has not
-// implemented a rasterizer yet.
-func TestRenderIsNotYetImplemented(t *testing.T) {
+// TestRenderProducesImage confirms Page.Render (implemented in Phase 2)
+// produces an image of the expected pixel dimensions for a blank page
+// (minimal-blank-page.pdf has an empty content stream, so this only
+// checks size and the default white background, not any painted
+// content - see pdfviewer_render_test.go for tests against pages with
+// actual vector content).
+func TestRenderProducesImage(t *testing.T) {
 	doc, err := pdfviewer.OpenFile(fixturePath("minimal-blank-page.pdf"))
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
@@ -180,11 +181,24 @@ func TestRenderIsNotYetImplemented(t *testing.T) {
 		t.Fatalf("Page(0): %v", err)
 	}
 
-	if _, err := page.Render(context.Background(), pdfviewer.RenderOptions{}); !errors.Is(err, pdfviewer.ErrUnsupported) {
-		t.Fatalf("Render error = %v, want ErrUnsupported", err)
+	img, err := page.Render(context.Background(), pdfviewer.RenderOptions{})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() != 200 || bounds.Dy() != 200 {
+		t.Errorf("Render() image size = %dx%d, want 200x200 (MediaBox is [0 0 200 200], default Scale 1)", bounds.Dx(), bounds.Dy())
+	}
+	r, g, b, a := img.At(100, 100).RGBA()
+	if r>>8 != 255 || g>>8 != 255 || b>>8 != 255 || a>>8 != 255 {
+		t.Errorf("blank page center pixel = (%d,%d,%d,%d), want opaque white (255,255,255,255)", r>>8, g>>8, b>>8, a>>8)
 	}
 }
 
+// TestThumbnailIsNotYetImplemented confirms the documented placeholder
+// behavior of Page.Thumbnail (see page.go): it must fail with
+// ErrUnsupported, since Thumbnail is Phase 3 work per the README's
+// phased plan.
 func TestThumbnailIsNotYetImplemented(t *testing.T) {
 	doc, err := pdfviewer.OpenFile(fixturePath("minimal-blank-page.pdf"))
 	if err != nil {

@@ -40,6 +40,13 @@ go run ./tools/genfixtures
 | `incremental-update.pdf` | A file that has been incrementally saved once: the original single-page revision is followed by an appended update that adds a second page and rewrites the Pages object, with a second trailer chained to the first via `/Prev`. Regression fixture for readers that only look at the final trailer and ignore earlier revisions. |
 | `malformed-bad-xref-offset.pdf` | Otherwise-valid file with one cross-reference entry deliberately pointed at the wrong byte offset. Exercises malformed-input error classification (and, ideally, recovery via a linear "N G obj" scan). |
 | `truncated.pdf` | A valid file cut off partway through, before its cross-reference table and trailer exist at all. Simulates a partial download or interrupted write. |
+| `xref-stream.pdf` | Same page tree as `minimal-blank-page.pdf`, but described by a PDF 1.5+ cross-reference *stream* (Flate-compressed, non-default `/W` field widths) instead of a classic table. |
+| `object-stream.pdf` | The Pages and Page dictionaries are packed together inside a single object stream (`/Type /ObjStm`), described via type-2 ("compressed") entries in a cross-reference stream; the catalog and content stream remain ordinary top-level objects, matching how real PDF 1.5+ producers mix both storage forms. |
+| `filled-rect.pdf` | One 100x100-point page whose (plain-text) content stream fills an 80x80 red square with a 10-point margin - the baseline Phase 2 rendering fixture (solid color, axis-aligned path, nonzero fill). |
+| `stroked-line.pdf` | One 100x100-point page whose content stream strokes a diagonal blue line, corner to corner, with a 5-point line width - exercises stroking with a non-default width. |
+| `clipped-rect.pdf` | One 100x100-point page whose content stream clips to a 40x40 centered square, then fills the entire page green - only the clipped square should render green. |
+| `transformed-rect.pdf` | One 100x100-point page whose content stream translates to the page center and rotates 45 degrees before filling a square - exercises the current transformation matrix (`cm`) and its `q`/`Q` scoping. |
+| `flate-content-rect.pdf` | Identical in appearance to `filled-rect.pdf`, but its content stream is Flate-compressed rather than plain text - exercises filter decoding applied to a page *content* stream specifically (as opposed to `xref-stream.pdf`/`object-stream.pdf`'s use of Flate for structural data). |
 
 ## real-world/
 
@@ -47,3 +54,14 @@ Empty for now. Phase 0 permits adding real-world PDF fixtures alongside
 the hand-authored ones, but only with their license and source recorded
 in a table here at the time they are added — do not add a real-world PDF
 fixture without doing so in the same change.
+
+## Rendered reference images
+
+`testdata/renderrefs/` (a sibling of `testdata/fixtures/`, outside this
+directory) holds checked-in PNG reference images for Phase 2's rendering
+tests — see `pdfviewer_render_test.go`'s `TestRenderMatchesReferenceImages`
+in the repository root for the comparison tolerance and how to regenerate
+them (`go test . -run TestRenderMatchesReferenceImages -update`) after a
+deliberate, reviewed change to rendering output. Same license and
+provenance as everything under `handmade/` above: original work of this
+project, MIT.

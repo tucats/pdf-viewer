@@ -49,10 +49,19 @@ type Page struct {
 	// RawResources is the page's (possibly inherited) /Resources
 	// dictionary, not yet interpreted. It is exposed now, ahead of the
 	// fonts/images/content-stream work that will actually use it
-	// (Phases 2-4 of the phased plan), so that model.Document's shape
+	// (Phases 3-4 of the phased plan), so that model.Document's shape
 	// does not need to change again once those phases add code that
 	// consumes it.
 	RawResources syntax.Dictionary
+
+	// Rotate is the page's (possibly inherited) /Rotate entry, normalized
+	// to one of 0, 90, 180, or 270: the number of degrees clockwise the
+	// page shall be rotated when displayed or printed, per the PDF
+	// specification. It defaults to 0 when /Rotate is absent anywhere in
+	// the page's ancestry, or when a present value is not a multiple of
+	// 90 (itself malformed, but not worth rejecting the whole page over -
+	// see mergeInherited).
+	Rotate int
 
 	// dict is the page's own (unmerged) dictionary, kept for future use
 	// by higher layers (for example, internal/content will need the
@@ -145,6 +154,7 @@ type inheritable struct {
 	mediaBox     *Rect
 	resources    syntax.Dictionary
 	hasResources bool
+	rotate       int
 }
 
 // collectPages recursively walks the page tree rooted at node
@@ -215,7 +225,32 @@ func mergeInherited(inherited inheritable, dict syntax.Dictionary) inheritable {
 		inherited.resources = res
 		inherited.hasResources = true
 	}
+	if rot, ok := dict["Rotate"].(syntax.Integer); ok {
+		if normalized, ok := normalizeRotate(int(rot)); ok {
+			inherited.rotate = normalized
+		}
+		// A /Rotate present but not a multiple of 90 is malformed per
+		// the specification; rather than rejecting the whole page over
+		// one bad inheritable attribute, this simply keeps whatever
+		// rotation was inherited from further up the tree (or the
+		// default 0), consistent with this package's general tolerance
+		// for a single bad field - see collectPages's doc comment.
+	}
 	return inherited
+}
+
+// normalizeRotate reduces deg to the equivalent value in [0,360) and
+// reports ok=false if it is not a multiple of 90 - the only values the
+// PDF specification permits for /Rotate.
+func normalizeRotate(deg int) (int, bool) {
+	if deg%90 != 0 {
+		return 0, false
+	}
+	deg %= 360
+	if deg < 0 {
+		deg += 360
+	}
+	return deg, true
 }
 
 // buildPage constructs a Page from a leaf page dictionary and whatever
@@ -228,6 +263,7 @@ func buildPage(dict syntax.Dictionary, inherited inheritable) (Page, error) {
 	}
 	page := Page{
 		MediaBox: *inherited.mediaBox,
+		Rotate:   inherited.rotate,
 		dict:     dict,
 	}
 	if inherited.hasResources {

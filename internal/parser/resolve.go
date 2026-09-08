@@ -3,6 +3,7 @@ package parser
 import (
 	"fmt"
 
+	"github.com/tucats/pdf-viewer/internal/filter"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
 	"github.com/tucats/pdf-viewer/internal/syntax"
 )
@@ -32,7 +33,11 @@ import (
 // attempt to recover by scanning the entire file for "N G obj" markers
 // (see recoverByScanning) and retries. If recovery also fails, or has
 // already been attempted for this Document, the original error is
-// returned.
+// returned. This linear-scan recovery only applies to objects with their
+// own byte offset; an object packed inside an object stream (see
+// objstream.go) has no "N G obj" marker of its own for such a scan to
+// find in the first place, so a failure resolving one of those is
+// returned directly.
 func (d *Document) Resolve(num int) (syntax.Object, error) {
 	if obj, ok := d.cache[num]; ok {
 		return obj, nil
@@ -47,10 +52,19 @@ func (d *Document) Resolve(num int) (syntax.Object, error) {
 	}
 
 	d.resolving[num] = true
-	obj, err := d.readObjectAt(num, entry.Offset)
+	var obj syntax.Object
+	var err error
+	if entry.Compressed {
+		obj, err = d.resolveCompressed(entry)
+	} else {
+		obj, err = d.readObjectAt(num, entry.Offset)
+	}
 	delete(d.resolving, num)
 
 	if err != nil {
+		if entry.Compressed {
+			return nil, err
+		}
 		obj, err = d.retryAfterRecovery(num, err)
 		if err != nil {
 			return nil, err
@@ -103,9 +117,28 @@ func (d *Document) readObjectAt(num int, offset int64) (syntax.Object, error) {
 	}
 	lex := syntax.NewLexer(r)
 
+	gotNum, val, err := parseIndirectObject(lex)
+	if err != nil {
+		return nil, fmt.Errorf("object %d: %w", num, err)
+	}
+	if gotNum != num {
+		return nil, pdferror.Malformedf("object %d: cross-reference table points at offset %d, which begins object %d instead", num, offset, gotNum)
+	}
+	return val, nil
+}
+
+// parseIndirectObject reads one complete indirect object definition -
+// "N G obj <value> endobj" - from lex, having consumed nothing yet, and
+// returns the object number found and its value. It is shared by
+// readObjectAt above (which already knows which object number it
+// expects, at a location the cross-reference table names) and
+// loadXrefSection in parser.go (which does not: a cross-reference
+// stream's own object number is only discovered by reading it, since
+// nothing has pointed at it yet by the time it is read).
+func parseIndirectObject(lex *syntax.Lexer) (num int, val syntax.Object, err error) {
 	numTok, err := lex.Next()
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	// The generation number token is read (so the Lexer's position moves
 	// past it) but not currently cross-checked against the
@@ -115,35 +148,70 @@ func (d *Document) readObjectAt(num int, offset int64) (syntax.Object, error) {
 	// doc comment), so the generation number in the file is, for now,
 	// only ever informative.
 	if _, err := lex.Next(); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	objTok, err := lex.Next()
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 
 	if numTok.Kind != syntax.KindNumber || objTok.Kind != syntax.KindKeyword || objTok.Text != "obj" {
-		return nil, pdferror.Malformedf("object %d: no \"N G obj\" header found at offset %d", num, offset)
+		return 0, nil, pdferror.Malformedf("no \"N G obj\" header found")
 	}
 	gotNum, ok := parseNonNegativeInt(numTok.Text)
-	if !ok || gotNum != num {
-		return nil, pdferror.Malformedf("object %d: cross-reference table points at offset %d, which begins object %q instead", num, offset, numTok.Text)
+	if !ok {
+		return 0, nil, pdferror.Malformedf("object number %q is not a valid non-negative integer", numTok.Text)
 	}
 
-	val, err := syntax.ParseValue(lex, 0)
+	val, err = syntax.ParseValue(lex, 0)
 	if err != nil {
-		return nil, fmt.Errorf("object %d: %w", num, err)
+		return 0, nil, err
 	}
 
 	endTok, err := lex.Next()
 	if err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if endTok.Kind != syntax.KindKeyword || endTok.Text != "endobj" {
-		return nil, pdferror.Malformedf("object %d: missing \"endobj\" keyword", num)
+		return 0, nil, pdferror.Malformedf("object %d: missing \"endobj\" keyword", gotNum)
 	}
 
-	return val, nil
+	return gotNum, val, nil
+}
+
+// resolveIfReference returns obj unchanged unless it is itself a
+// syntax.Reference, in which case it resolves that reference through
+// Resolve. PDF permits many dictionary entries to be either a direct
+// value or an indirect reference to one interchangeably; callers that
+// need a concrete value rather than "possibly another layer of
+// indirection" go through this helper rather than duplicating the type
+// assertion.
+func (d *Document) resolveIfReference(obj syntax.Object) (syntax.Object, error) {
+	ref, ok := obj.(syntax.Reference)
+	if !ok {
+		return obj, nil
+	}
+	return d.Resolve(ref.Number)
+}
+
+// DecodeStream returns s's fully-decoded bytes: it resolves s.Dict's
+// /Filter and /DecodeParms entries (which are, in the vast majority of
+// real files, direct values already - but PDF technically permits them
+// to be indirect references too) and hands the result to
+// internal/filter.Decode. Only the stream dictionary's top-level entries
+// are resolved this way, not values nested inside a /DecodeParms array
+// or dictionary; see internal/filter's package doc comment for why that
+// is a reasonable, documented limitation rather than an oversight.
+func (d *Document) DecodeStream(s syntax.Stream) ([]byte, error) {
+	dict := make(syntax.Dictionary, len(s.Dict))
+	for k, v := range s.Dict {
+		rv, err := d.resolveIfReference(v)
+		if err != nil {
+			return nil, fmt.Errorf("resolving /%s: %w", k, err)
+		}
+		dict[k] = rv
+	}
+	return filter.Decode(dict, s.Raw)
 }
 
 // maxRecoveryScanSize bounds how large a file recoverByScanning is

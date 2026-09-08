@@ -28,6 +28,13 @@ func TestGeneratedFixturesMatchCheckedInFiles(t *testing.T) {
 		"incremental-update.pdf":        buildIncrementalUpdate(),
 		"malformed-bad-xref-offset.pdf": buildMalformedBadXrefOffset(),
 		"truncated.pdf":                 buildTruncated(),
+		"xref-stream.pdf":               buildXrefStream(),
+		"object-stream.pdf":             buildObjectStream(),
+		"filled-rect.pdf":               buildFilledRect(),
+		"stroked-line.pdf":              buildStrokedLine(),
+		"clipped-rect.pdf":              buildClippedRect(),
+		"transformed-rect.pdf":          buildTransformedRect(),
+		"flate-content-rect.pdf":        buildFlateContentRect(),
 	}
 
 	for name, want := range fixtures {
@@ -56,6 +63,13 @@ func TestFixtureSetIsComplete(t *testing.T) {
 		"incremental-update.pdf":        true,
 		"malformed-bad-xref-offset.pdf": true,
 		"truncated.pdf":                 true,
+		"xref-stream.pdf":               true,
+		"object-stream.pdf":             true,
+		"filled-rect.pdf":               true,
+		"stroked-line.pdf":              true,
+		"clipped-rect.pdf":              true,
+		"transformed-rect.pdf":          true,
+		"flate-content-rect.pdf":        true,
 	}
 
 	entries, err := os.ReadDir(outputDir)

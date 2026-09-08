@@ -1444,3 +1444,97 @@ phase's entry with a note about what changed.
     blend modes, ExtGState-level soft masks, and the allocation-
     profiling/resource-caching/benchmark work all remain unimplemented,
     to land in further Phase 5 sub-phases.
+
+### Phase 5e: Constant alpha and blend modes (2026-09-08)
+
+- **`internal/graphics`: `BlendMode` and `Blend` (new file, blend.go).**
+    `BlendMode` (style.go) enumerates PDF's six *separable* blend modes
+    (Multiply, Screen, Darken, Lighten, Difference, Exclusion) plus
+    `BlendNormal` (the zero value, reproducing ordinary "paint over"
+    compositing exactly); `Blend` computes one channel's blended value
+    per mode's own formula. The four non-separable modes (Hue,
+    Saturation, Color, Luminosity - each needs all three color channels
+    together, unlike the six implemented here) are out of scope
+    entirely, and are grouped in the type's own doc comment with the
+    remaining separable modes this project chose not to implement
+    (ColorDodge, ColorBurn, HardLight, SoftLight, Overlay) as a
+    deliberately small, clearly documented boundary. Covered by
+    [blend_test.go](internal/graphics/blend_test.go).
+- **`internal/graphics`: `State`/`DrawOp` gain alpha and blend
+    fields.** `State` ([state.go](internal/graphics/state.go)) gained
+    `FillAlpha`/`StrokeAlpha` (PDF's "ca"/"CA", both defaulting to 1 -
+    `NewState` sets this explicitly, since the Go zero value would
+    otherwise silently mean fully transparent) and `BlendMode` (a single
+    mode for both fill and stroke, per the specification); all three are
+    part of the graphics state proper, saved/restored by `q`/`Q`
+    exactly like `FillColor`. `DrawOp`
+    ([displaylist.go](internal/graphics/displaylist.go)) gained matching
+    `Alpha`/`BlendMode` fields, captured at the moment each `DrawOp` is
+    recorded - `Alpha` needs to be set explicitly at every construction
+    site (documented on the field itself), unlike `BlendMode`, whose
+    zero value (`BlendNormal`) already reproduces pre-Phase-5 behavior.
+- **`internal/raster`: alpha and blend-mode compositing.** `Canvas`'s
+    `Fill`/`DrawImage`/`FillShading`/`PaintShading`
+    ([canvas.go](internal/raster/canvas.go)) all gained `alpha`/`mode`
+    parameters, threaded down to the shared `paint` core (which now
+    multiplies the constant alpha into its existing per-pixel shape-
+    coverage/image-alpha computation) and a renamed, blend-mode-aware
+    `blendChannel` (previously `blend8`) implementing the specification's
+    actual compositing formula, `Cr = (1-alpha)*Cb + alpha*B(Cb,Cs)`,
+    rather than a plain, mode-oblivious linear interpolation.
+    [render.go](internal/raster/render.go)'s `Render` passes each
+    `DrawOp`'s own `Alpha`/`BlendMode` through. Covered by new cases in
+    [canvas_blend_test.go](internal/raster/canvas_blend_test.go)
+    (partial alpha, zero alpha, Multiply/Screen against a non-white
+    backdrop, and blend-mode strength itself scaling with alpha) -
+    every pre-existing `canvas_test.go`/`canvas_shading_test.go` call
+    site was updated to pass `1, graphics.BlendNormal` explicitly,
+    reproducing its previous behavior exactly.
+- **`internal/content`: "gs" (new file, extgstate.go).**
+    `applyExtGState` resolves a named `/Resources /ExtGState` resource
+    and applies its `/ca`, `/CA`, and `/BM` entries to the current
+    `graphics.State` (a malformed individual entry, or the whole
+    resource being unresolvable, is tolerated - the value in question
+    simply stays whatever it was, matching this package's general
+    "missing/malformed resource" policy); `/BM` may be a single Name or
+    an Array of them (the specification's own fallback-list mechanism,
+    honored via `resolveBlendMode` picking the first recognized entry),
+    and an unrecognized name resolves to `graphics.BlendNormal` per the
+    specification's own documented behavior for an unsupported blend
+    mode. Every `DrawOp`-constructing site in this package
+    ([interpret.go](internal/content/interpret.go)'s
+    `fillCurrentPath`/`strokeCurrentPath`,
+    [image.go](internal/content/image.go)'s `paintImage`,
+    [text.go](internal/content/text.go)'s `showGlyph`, and
+    [shading.go](internal/content/shading.go)'s `doShading`) was updated
+    to set `Alpha`/`BlendMode` from the current state (an image and "sh"
+    both use the non-stroking, "ca", alpha, per the specification's
+    treatment of them as non-stroking operations). Covered by
+    [extgstate_test.go](internal/content/extgstate_test.go), including
+    that `/ca`/`/CA`/`/BM` are saved and restored by `q`/`Q`.
+- **Fixture corpus and end-to-end rendering tests.** Extended
+    [tools/genfixtures](tools/genfixtures/main.go) with `alpha-fill.pdf`
+    (a black fill at 50% `/ca` over white, landing at ~50% gray) and
+    `blend-multiply.pdf` (a `/Multiply`-blended 50% gray over an
+    already-50%-gray background, landing at 25% gray - a result
+    `BlendNormal` could never produce, since replacing gray with the
+    same gray is a no-op) - see
+    [testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md). Both
+    were added to
+    [pdfviewer_render_test.go](pdfviewer_render_test.go)'s
+    `TestRenderMatchesReferenceImages`, and
+    [pdfviewer_transparency_test.go](pdfviewer_transparency_test.go)
+    adds direct pixel-sampling assertions.
+- **Capability matrix updated.** `docs/capability-matrix.md`'s "Alpha
+    constants and basic transparency" row is now "Done"; "Transparency
+    groups and blend modes" is now "Partial" (blend modes done; groups
+    themselves are not implemented - a Form XObject's `/Group` entry is
+    not inspected, noted on both that row and the "Form XObjects" row).
+- **What's carried forward.** Tiling patterns, transparency groups
+    (isolated/knockout compositing semantics for a `/Group` Form
+    XObject), ExtGState-level soft masks, the four non-separable blend
+    modes, and the allocation-profiling/resource-caching/benchmark work
+    all remain unimplemented. This closes out the transparency-adjacent
+    sub-phases that did not need an alpha-aware offscreen tile buffer;
+    tiling patterns specifically await that buffer, which a future
+    sub-phase will need to design as part of implementing them.

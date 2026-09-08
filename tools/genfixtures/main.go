@@ -105,6 +105,8 @@ func main() {
 		{"form-xobject.pdf", buildFormXObject()},
 		{"annotation-appearance.pdf", buildAnnotationAppearance()},
 		{"annotation-hidden.pdf", buildAnnotationHidden()},
+		{"alpha-fill.pdf", buildAlphaFill()},
+		{"blend-multiply.pdf", buildBlendMultiply()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -824,6 +826,47 @@ func buildAnnotationHidden() []byte {
 	b.addObject(5, 0, "<< /Type /Annot /Subtype /Square /Rect [0 0 100 100] /F 2 "+
 		"/AP << /N 6 0 R >> >>", nil)
 
+	return b.finish(1)
+}
+
+// buildAlphaFill returns a single 100x100-point page with a white
+// background that selects an ExtGState (/GS0) setting the non-stroking
+// constant alpha (/ca) to 0.5, then fills the entire page black - the
+// baseline Phase 5 fixture for "gs"/`ca`: the result should be
+// approximately 50% gray (black blended at half strength over white),
+// not solid black, which is what this fixture would show if "gs"'s
+// /ca were still silently ignored (as it was before Phase 5's
+// transparency work).
+func buildAlphaFill() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /ExtGState << /GS0 << /ca 0.5 >> >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("/GS0 gs\n0 0 0 rg\n0 0 100 100 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
+}
+
+// buildBlendMultiply returns a single 100x100-point page that fills the
+// entire page 50% gray, then - after selecting an ExtGState (/GS0)
+// setting /BM to /Multiply - fills the right half of the page with
+// another 50% gray: Multiply(0.5,0.5)=0.25, a darker gray than either
+// input alone, so the right half should end up visibly darker than the
+// (untouched, still 50% gray) left half - a result BlendNormal (an
+// ordinary replace) could never produce, since replacing 50% gray with
+// 50% gray leaves it exactly as it was.
+func buildBlendMultiply() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /ExtGState << /GS0 << /BM /Multiply >> >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("0.5 0.5 0.5 rg\n0 0 100 100 re\nf\n" +
+		"/GS0 gs\n0.5 0.5 0.5 rg\n50 0 50 100 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
 	return b.finish(1)
 }
 

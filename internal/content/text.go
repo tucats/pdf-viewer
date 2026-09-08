@@ -237,10 +237,12 @@ func (in *interpreter) showGlyph(st *graphics.State, glyph *graphics.Path, trm g
 		}
 	}
 	in.list = append(in.list, graphics.DrawOp{
-		Path:  device,
-		Rule:  graphics.NonZero,
-		Color: st.FillColor,
-		Clips: st.Clips,
+		Path:      device,
+		Rule:      graphics.NonZero,
+		Color:     st.FillColor,
+		Clips:     st.Clips,
+		Alpha:     st.FillAlpha,
+		BlendMode: st.BlendMode,
 	})
 }
 

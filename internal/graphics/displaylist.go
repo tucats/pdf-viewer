@@ -83,4 +83,24 @@ type DrawOp struct {
 	// stroked, exactly like an ordinary solid-color fill would - always
 	// sets Path.
 	Shading *Shading
+
+	// Alpha is the constant alpha (graphics.State's FillAlpha or
+	// StrokeAlpha, whichever this DrawOp's painting operator uses - see
+	// internal/content's fillCurrentPath/strokeCurrentPath/paintImage/
+	// doShading) active when this DrawOp was recorded, in [0,1]. Every
+	// DrawOp constructor in this module sets it explicitly (there is no
+	// implicit default here the way graphics.State.NewState provides
+	// one) - the Go zero value would otherwise mean fully transparent,
+	// silently making an un-migrated DrawOp construction site invisible
+	// rather than the fully-opaque behavior every DrawOp had before
+	// alpha existed at all.
+	Alpha float64
+
+	// BlendMode is graphics.State.BlendMode at the same moment - see
+	// that field's doc comment. BlendNormal (the Go zero value) is
+	// exactly the "no blending against the backdrop" behavior every
+	// DrawOp had before blend modes existed, so - unlike Alpha - no
+	// construction site needs to set this field explicitly for
+	// unchanged, pre-Phase-5 behavior.
+	BlendMode BlendMode
 }

@@ -170,12 +170,15 @@ func (in *interpreter) exec(op Operator) error {
 			return err
 		}
 		st.MiterLimit = vals[0]
-	case "d", "ri", "i", "gs":
-		// Accepted and ignored: dash patterns, rendering intent,
-		// flatness tolerance, and ExtGState parameters (transparency,
-		// blend modes, ...) are not yet implemented - see
-		// docs/capability-matrix.md. Every stroke is painted solid and
-		// fully opaque regardless of these.
+	case "d", "ri", "i":
+		// Accepted and ignored: dash patterns, rendering intent, and
+		// flatness tolerance are not implemented - see
+		// docs/capability-matrix.md. Every stroke is painted solid
+		// regardless of these.
+	case "gs":
+		if err := in.applyExtGState(st, op.Operands); err != nil {
+			return err
+		}
 
 	case "m":
 		pt, err := in.point(st, op.Operands)
@@ -510,7 +513,7 @@ func (in *interpreter) fillCurrentPath(st *graphics.State, rule graphics.FillRul
 	if len(in.path.Subpaths) == 0 {
 		return
 	}
-	op := graphics.DrawOp{Path: clonePath(&in.path), Rule: rule, Clips: st.Clips}
+	op := graphics.DrawOp{Path: clonePath(&in.path), Rule: rule, Clips: st.Clips, Alpha: st.FillAlpha, BlendMode: st.BlendMode}
 	if st.FillShading != nil {
 		op.Shading = st.FillShading
 	} else {
@@ -540,7 +543,7 @@ func (in *interpreter) strokeCurrentPath(st *graphics.State) {
 	}
 	deviceWidth := st.LineWidth * ctmScale(st.CTM)
 	outline := graphics.StrokeToFill(&in.path, deviceWidth, st.LineCap, st.LineJoin, st.MiterLimit)
-	op := graphics.DrawOp{Path: outline, Rule: graphics.NonZero, Clips: st.Clips}
+	op := graphics.DrawOp{Path: outline, Rule: graphics.NonZero, Clips: st.Clips, Alpha: st.StrokeAlpha, BlendMode: st.BlendMode}
 	if st.StrokeShading != nil {
 		op.Shading = st.StrokeShading
 	} else {

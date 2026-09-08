@@ -54,6 +54,8 @@ func TestGeneratedFixturesMatchCheckedInFiles(t *testing.T) {
 		"form-xobject.pdf":              buildFormXObject(),
 		"annotation-appearance.pdf":     buildAnnotationAppearance(),
 		"annotation-hidden.pdf":         buildAnnotationHidden(),
+		"alpha-fill.pdf":                buildAlphaFill(),
+		"blend-multiply.pdf":            buildBlendMultiply(),
 	}
 
 	for name, want := range fixtures {
@@ -108,6 +110,8 @@ func TestFixtureSetIsComplete(t *testing.T) {
 		"form-xobject.pdf":              true,
 		"annotation-appearance.pdf":     true,
 		"annotation-hidden.pdf":         true,
+		"alpha-fill.pdf":                true,
+		"blend-multiply.pdf":            true,
 	}
 
 	entries, err := os.ReadDir(outputDir)

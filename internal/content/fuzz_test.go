@@ -45,6 +45,10 @@ func FuzzParseAndInterpret(f *testing.F) {
 		// never reaching form.go's real recursion/BBox/Matrix logic; that
 		// is instead covered directly by form_test.go.
 		"q 1 0 0 1 10 10 cm /Fm1 Do Q",
+		// Phase 5: ExtGState alpha/blend mode - with resources nil, "gs"
+		// always hits the "no /Resources" tolerance path; real coverage
+		// is in extgstate_test.go.
+		"/GS1 gs 0 0 5 5 re f",
 		"(text) Tj BT ET",
 		"/Im1 Do",
 		"[[[[1]]]] op",

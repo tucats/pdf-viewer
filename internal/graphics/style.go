@@ -56,3 +56,49 @@ const (
 	RoundJoin LineJoin = 1
 	BevelJoin LineJoin = 2
 )
+
+// BlendMode selects how a newly painted color combines with whatever is
+// already on the canvas underneath it, matching PDF's "/BM" ExtGState
+// parameter (11.3.5) - set via "gs" (see internal/content's
+// applyExtGState) and carried on both graphics.State (the currently
+// selected mode) and graphics.DrawOp (the mode a specific paint
+// operation was made under, baked in at the time it was recorded).
+//
+// Only PDF's six "separable" blend modes (11.3.5.2 - each output channel
+// computed independently from the same input channel, with no
+// dependency on the other channels) are implemented; see blend.go's
+// doc comment for the formulas. The four "non-separable" modes (Hue,
+// Saturation, Color, Luminosity, 11.3.5.3 - each needs all three
+// channels together, since they operate on HSL-like properties of the
+// whole color) are not implemented: an unrecognized or unsupported mode
+// name resolves to BlendNormal rather than an error, per the
+// specification's own documented fallback rule ("If the blend mode ...
+// is not a supported one, the application shall use Normal instead").
+type BlendMode int
+
+const (
+	// BlendNormal simply replaces (is not blended with) the backdrop,
+	// exactly as every DrawOp painted before this project supported
+	// blend modes already did - it produces bit-identical output to
+	// that unblended compositing, so it is deliberately the zero value.
+	BlendNormal BlendMode = iota
+	// BlendMultiply darkens: the result is never lighter than either
+	// input.
+	BlendMultiply
+	// BlendScreen lightens: the result is never darker than either
+	// input - the inverse operation of Multiply.
+	BlendScreen
+	// BlendDarken keeps, per channel, whichever of the backdrop or
+	// source is darker.
+	BlendDarken
+	// BlendLighten keeps, per channel, whichever of the backdrop or
+	// source is lighter.
+	BlendLighten
+	// BlendDifference subtracts the darker channel value from the
+	// lighter one, producing 0 wherever the two already agree.
+	BlendDifference
+	// BlendExclusion is similar to Difference but with lower contrast
+	// (it never reaches full black or full white except at the input
+	// extremes).
+	BlendExclusion
+)

@@ -163,6 +163,12 @@ func (in *interpreter) paintImage(st *graphics.State, dict syntax.Dictionary, sa
 		Image:         img,
 		ImageToDevice: imageSpaceToDevice(st.CTM),
 		Clips:         st.Clips,
+		// Per the specification, an image XObject is a non-stroking
+		// paint operation, so it uses the non-stroking ("ca") alpha
+		// constant, exactly like an ordinary fill - see graphics.State.
+		// FillAlpha's doc comment.
+		Alpha:     st.FillAlpha,
+		BlendMode: st.BlendMode,
 	})
 	return nil
 }

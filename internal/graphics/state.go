@@ -112,6 +112,24 @@ type State struct {
 	// content stream can never leak into a later, ordinary-colored fill.
 	FillShading, StrokeShading *Shading
 
+	// FillAlpha and StrokeAlpha are PDF's "ca" and "CA" ExtGState
+	// parameters respectively (11.6.4.3): a constant alpha, in [0,1],
+	// applied to every non-stroking (ca) or stroking (CA) paint
+	// operation - a fill, an image, a shading, or a stroke - in addition
+	// to whatever coverage a shape's own edges (anti-aliasing) or an
+	// image's own per-pixel alpha already contribute. Both default to 1
+	// (fully opaque, i.e. "no additional attenuation") per the
+	// specification, which NewState sets explicitly since the Go zero
+	// value (0, fully transparent) would otherwise silently make every
+	// paint operation invisible.
+	FillAlpha, StrokeAlpha float64
+
+	// BlendMode is PDF's "BM" ExtGState parameter (11.3.5): unlike
+	// FillAlpha/StrokeAlpha, there is only one blend mode, used for both
+	// non-stroking and stroking operations alike. BlendNormal (the Go
+	// zero value) needs no explicit initialization in NewState.
+	BlendMode BlendMode
+
 	// Clips holds every currently-active clipping path, most recently
 	// intersected last, together with the fill rule each was intersected
 	// under. The *effective* clip region is the intersection of all of
@@ -153,6 +171,10 @@ func NewState(initialCTM Matrix) *State {
 		// "scale every glyph to zero width", which is not what a fresh
 		// graphics state (before any "Tz" operator) means.
 		Hscale: 100,
+		// FillAlpha/StrokeAlpha default to 1 (fully opaque) - see their
+		// own doc comment for why this needs to be explicit.
+		FillAlpha:   1,
+		StrokeAlpha: 1,
 	}
 }
 

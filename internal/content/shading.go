@@ -74,7 +74,7 @@ func (in *interpreter) doShading(st *graphics.State, operands []syntax.Object) e
 	if err != nil {
 		return err
 	}
-	in.list = append(in.list, graphics.DrawOp{Shading: sh, Clips: st.Clips})
+	in.list = append(in.list, graphics.DrawOp{Shading: sh, Clips: st.Clips, Alpha: st.FillAlpha, BlendMode: st.BlendMode})
 	return nil
 }
 

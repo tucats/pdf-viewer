@@ -182,6 +182,8 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"form-xobject.pdf",
 		"annotation-appearance.pdf",
 		"annotation-hidden.pdf",
+		"alpha-fill.pdf",
+		"blend-multiply.pdf",
 	}
 
 	if *update {

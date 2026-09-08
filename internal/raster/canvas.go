@@ -45,7 +45,11 @@ func (c *Canvas) Image() *image.RGBA {
 
 // Fill rasterizes path under rule and composites it onto the canvas with
 // color, restricted to the intersection of every clip in clips (nil or
-// empty means unclipped, besides the canvas's own bounds).
+// empty means unclipped, besides the canvas's own bounds), attenuated by
+// the constant alpha and combined with the existing canvas contents per
+// mode (graphics.BlendNormal - ordinary "paint over" compositing, with
+// no dependence on what is already there - reproduces this method's
+// pre-Phase-5 behavior exactly).
 //
 // path's coordinates are trusted to already be finite and within
 // graphics.Path's own bounded range - every method that adds a point to
@@ -53,9 +57,9 @@ func (c *Canvas) Image() *image.RGBA {
 // single choke point that guarantees it regardless of which content
 // stream operator or how much arithmetic produced the point; see
 // graphics.Path's clampPoint.
-func (c *Canvas) Fill(path *graphics.Path, rule graphics.FillRule, color graphics.Color, clips []graphics.ClipPath) {
+func (c *Canvas) Fill(path *graphics.Path, rule graphics.FillRule, color graphics.Color, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
 	r, g, b := color.R, color.G, color.B
-	c.paint(path, rule, clips, func(_, _ int) (float64, float64, float64, float64) {
+	c.paint(path, rule, clips, alpha, mode, func(_, _ int) (float64, float64, float64, float64) {
 		return r, g, b, 1
 	})
 }
@@ -91,7 +95,7 @@ func (c *Canvas) Fill(path *graphics.Path, rule graphics.FillRule, color graphic
 // content, e.g. "0 0 0 0 0 0 cm" active when "Do" runs - simply paints
 // nothing, matching Fill's own "nothing to paint" handling for a path
 // with no area.
-func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, img *graphics.Image, clips []graphics.ClipPath) {
+func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, img *graphics.Image, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
 	if img == nil || img.Width <= 0 || img.Height <= 0 {
 		return
 	}
@@ -100,7 +104,7 @@ func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, i
 		return
 	}
 
-	c.paint(quad, graphics.NonZero, clips, func(col, row int) (float64, float64, float64, float64) {
+	c.paint(quad, graphics.NonZero, clips, alpha, mode, func(col, row int) (float64, float64, float64, float64) {
 		// Sample at the pixel's center (col+0.5, row+0.5), not its
 		// integer corner, so a pixel is colored by whatever image sample
 		// its middle actually falls under.
@@ -128,8 +132,8 @@ func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, i
 // /Extend) paints nothing there, leaving whatever was already
 // underneath - the same "partial coverage" tolerance DrawImage already
 // has for a device pixel outside an image's own unit square.
-func (c *Canvas) FillShading(path *graphics.Path, rule graphics.FillRule, sh *graphics.Shading, clips []graphics.ClipPath) {
-	c.paint(path, rule, clips, func(col, row int) (r, g, b, a float64) {
+func (c *Canvas) FillShading(path *graphics.Path, rule graphics.FillRule, sh *graphics.Shading, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
+	c.paint(path, rule, clips, alpha, mode, func(col, row int) (r, g, b, a float64) {
 		color, ok := sh.At(float64(col)+0.5, float64(row)+0.5)
 		if !ok {
 			return 0, 0, 0, 0
@@ -145,13 +149,13 @@ func (c *Canvas) FillShading(path *graphics.Path, rule graphics.FillRule, sh *gr
 // the whole page when unclipped") - see graphics.DrawOp.Shading's doc
 // comment for why internal/content hands this a nil Path rather than
 // building a covering rectangle itself.
-func (c *Canvas) PaintShading(sh *graphics.Shading, clips []graphics.ClipPath) {
+func (c *Canvas) PaintShading(sh *graphics.Shading, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
 	var full graphics.Path
 	full.AppendRect([4]graphics.Point{
 		{X: 0, Y: 0}, {X: float64(c.width), Y: 0},
 		{X: float64(c.width), Y: float64(c.height)}, {X: 0, Y: float64(c.height)},
 	})
-	c.FillShading(&full, graphics.NonZero, sh, clips)
+	c.FillShading(&full, graphics.NonZero, sh, alpha, mode, clips)
 }
 
 // paint is the shared core of Fill and DrawImage: it rasterizes path's
@@ -161,8 +165,11 @@ func (c *Canvas) PaintShading(sh *graphics.Shading, clips []graphics.ClipPath) {
 // composite there - sample receives the pixel's own (col, row) device
 // coordinates so DrawImage's image-space mapping (or, for Fill, nothing
 // at all - a constant color) can be computed per pixel without paint
-// itself needing to know which case it is serving.
-func (c *Canvas) paint(path *graphics.Path, rule graphics.FillRule, clips []graphics.ClipPath, sample func(col, row int) (r, g, b, a float64)) {
+// itself needing to know which case it is serving. constantAlpha (PDF's
+// "ca"/"CA") further attenuates sample's own per-pixel alpha, and mode
+// selects how the result combines with whatever is already on the
+// canvas (see blendChannel).
+func (c *Canvas) paint(path *graphics.Path, rule graphics.FillRule, clips []graphics.ClipPath, constantAlpha float64, mode graphics.BlendMode, sample func(col, row int) (r, g, b, a float64)) {
 	minXf, minYf, maxXf, maxYf, ok := path.Bounds()
 	if !ok {
 		return
@@ -198,31 +205,40 @@ func (c *Canvas) paint(path *graphics.Path, rule graphics.FillRule, clips []grap
 			if a <= 0 {
 				continue
 			}
-			alpha := float64(shapeCov) * a
+			alpha := float64(shapeCov) * a * constantAlpha
 			if alpha > 1 {
 				alpha = 1
 			}
-			c.blend(col, row, r, g, b, alpha)
+			if alpha <= 0 {
+				continue
+			}
+			c.blend(col, row, r, g, b, alpha, mode)
 		}
 	}
 }
 
-func (c *Canvas) blend(x, y int, r, g, b, alpha float64) {
+func (c *Canvas) blend(x, y int, r, g, b, alpha float64, mode graphics.BlendMode) {
 	i := c.img.PixOffset(x, y)
 	pix := c.img.Pix
-	pix[i+0] = blend8(pix[i+0], r, alpha)
-	pix[i+1] = blend8(pix[i+1], g, alpha)
-	pix[i+2] = blend8(pix[i+2], b, alpha)
+	pix[i+0] = blendChannel(pix[i+0], r, alpha, mode)
+	pix[i+1] = blendChannel(pix[i+1], g, alpha, mode)
+	pix[i+2] = blendChannel(pix[i+2], b, alpha, mode)
 	pix[i+3] = 255
 }
 
-// blend8 linearly interpolates between the existing 8-bit channel value
-// dst and the new color component src (in [0,1]) by alpha (in [0,1]) -
-// ordinary "over" alpha compositing onto an always-opaque destination.
-func blend8(dst uint8, src, alpha float64) uint8 {
-	d := float64(dst) / 255
-	s := clamp01(src)
-	out := d*(1-alpha) + s*alpha
+// blendChannel implements one channel of PDF's compositing formula
+// (11.3.6): Cr = (1-alpha)*Cb + alpha*B(Cb,Cs), where Cb is the existing
+// backdrop channel (dst, normalized to [0,1]), Cs is the newly painted
+// source channel (src), B is mode's blend function (graphics.Blend -
+// BlendNormal's B(Cb,Cs) is simply Cs, reducing this to ordinary linear
+// "over" alpha compositing, exactly this method's pre-Phase-5 behavior
+// under its old name, blend8), and alpha is the combined shape-coverage/
+// image-alpha/constant-alpha value paint has already computed.
+func blendChannel(dst uint8, src, alpha float64, mode graphics.BlendMode) uint8 {
+	cb := float64(dst) / 255
+	cs := clamp01(src)
+	blended := graphics.Blend(mode, cb, cs)
+	out := cb*(1-alpha) + blended*alpha
 	return to8(out)
 }
 

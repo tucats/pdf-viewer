@@ -100,7 +100,7 @@ func (in *interpreter) doForm(st *graphics.State, dict syntax.Dictionary, stream
 		return err
 	}
 
-	nested, err := interpretAtDepth(ops, formCTM, resources, in.resolver, in.formDepth+1)
+	nested, err := interpretAtDepth(ops, formCTM, resources, in.resolver, in.fontCache, in.formDepth+1)
 	if err != nil {
 		return err
 	}

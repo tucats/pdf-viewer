@@ -55,6 +55,12 @@ func mustParseSyntheticOps(src string) []content.Operator {
 // appearance into the page's default user space, and pageCTM finishes
 // the job of mapping the page's default user space into device pixels.
 //
+// fontCache is passed straight through to content.InterpretCached (see
+// its doc comment) so that an annotation appearance showing text shares
+// the same cross-render font cache the page's own content does - it may
+// be nil, in which case no cross-call caching happens for annotation
+// text either.
+//
 // A single annotation whose appearance stream itself turns out to be
 // malformed, or to use a feature this project cannot render (an
 // unsupported image filter inside it, say), is skipped rather than
@@ -63,7 +69,7 @@ func mustParseSyntheticOps(src string) []content.Operator {
 // decorative content" tolerance for a bad annotation *dictionary*,
 // extended here to a bad annotation *content stream* for the same
 // reason.
-func annotationDrawOps(resolver *model.Document, pageDict syntax.Dictionary, pageCTM graphics.Matrix) graphics.DisplayList {
+func annotationDrawOps(resolver *model.Document, pageDict syntax.Dictionary, pageCTM graphics.Matrix, fontCache *content.FontCache) graphics.DisplayList {
 	appearances := annotation.Resolve(resolver, pageDict)
 	if len(appearances) == 0 {
 		return nil
@@ -72,7 +78,7 @@ func annotationDrawOps(resolver *model.Document, pageDict syntax.Dictionary, pag
 	var all graphics.DisplayList
 	for _, app := range appearances {
 		resources := syntax.Dictionary{"XObject": syntax.Dictionary{"A": app.Stream}}
-		list, err := content.Interpret(syntheticAnnotationOps, app.Matrix.Mul(pageCTM), resources, resolver)
+		list, err := content.InterpretCached(syntheticAnnotationOps, app.Matrix.Mul(pageCTM), resources, resolver, fontCache)
 		if err != nil {
 			continue
 		}

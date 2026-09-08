@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/tucats/pdf-viewer/internal/content"
 	"github.com/tucats/pdf-viewer/internal/model"
 	"github.com/tucats/pdf-viewer/internal/parser"
 	"github.com/tucats/pdf-viewer/internal/source"
@@ -66,6 +67,16 @@ type Document struct {
 	closer io.Closer
 
 	closed bool
+
+	// fontCache remembers every font already loaded from this document's
+	// embedded font programs, shared across every Page.Render/Thumbnail
+	// call made against this Document for its whole lifetime - see
+	// internal/content.FontCache's doc comment for why this is safe
+	// (given this project's Phase 6 concurrency decision, above) and
+	// what it actually saves. It is never reset or invalidated by Close,
+	// since Close's own contract already forbids using anything derived
+	// from a closed Document.
+	fontCache *content.FontCache
 }
 
 // Open parses the PDF document read from r, which must contain size
@@ -100,7 +111,7 @@ func Open(r io.ReaderAt, size int64, opts ...OpenOption) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Document{model: m}, nil
+	return &Document{model: m, fontCache: content.NewFontCache()}, nil
 }
 
 // OpenFile opens the named file and parses it as a PDF document,

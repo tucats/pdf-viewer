@@ -46,21 +46,37 @@ import (
 // filter, a tiling pattern, an unsupported shading type) rather than
 // merely not recognizing.
 func Interpret(ops []Operator, initialCTM graphics.Matrix, resources syntax.Dictionary, resolver pdfimage.Resolver) (graphics.DisplayList, error) {
-	return interpretAtDepth(ops, initialCTM, resources, resolver, 0)
+	return interpretAtDepth(ops, initialCTM, resources, resolver, nil, 0)
 }
 
-// interpretAtDepth is Interpret's actual implementation, parameterized
-// by formDepth so a Form XObject's own content stream (doForm, in
-// form.go) can recursively call back into this same machinery while
-// still being counted against maxFormDepth - Interpret itself is just
-// this function called with formDepth 0, the only value a caller outside
-// this package could ever need.
-func interpretAtDepth(ops []Operator, initialCTM graphics.Matrix, resources syntax.Dictionary, resolver pdfimage.Resolver, formDepth int) (graphics.DisplayList, error) {
+// InterpretCached is exactly like Interpret, except every font a "Tf"
+// operator loads is looked up in (and, once loaded, stored into) cache
+// first - see FontCache's doc comment for the caching this enables when
+// the same *FontCache is reused across more than one Interpret call. A
+// nil cache makes this behave exactly like Interpret.
+//
+// The root package's Page.Render/Thumbnail (see page.go) call this
+// instead of Interpret, passing a *FontCache that lives on the
+// Document itself and outlives any single render - see document.go.
+func InterpretCached(ops []Operator, initialCTM graphics.Matrix, resources syntax.Dictionary, resolver pdfimage.Resolver, cache *FontCache) (graphics.DisplayList, error) {
+	return interpretAtDepth(ops, initialCTM, resources, resolver, cache, 0)
+}
+
+// interpretAtDepth is Interpret's (and InterpretCached's) actual
+// implementation, parameterized by formDepth so a Form XObject's own
+// content stream (doForm, in form.go) or a tiling pattern's own content
+// stream (buildTilingPattern, in tilingpattern.go) can recursively call
+// back into this same machinery while still being counted against
+// maxFormDepth - Interpret itself is just this function called with a
+// nil cache and formDepth 0, the only values a caller outside this
+// package could ever need.
+func interpretAtDepth(ops []Operator, initialCTM graphics.Matrix, resources syntax.Dictionary, resolver pdfimage.Resolver, fontCache *FontCache, formDepth int) (graphics.DisplayList, error) {
 	in := &interpreter{
 		stack:      graphics.NewStack(graphics.NewState(initialCTM)),
 		resources:  resources,
 		resolver:   resolver,
 		initialCTM: initialCTM,
+		fontCache:  fontCache,
 		formDepth:  formDepth,
 	}
 	for _, op := range ops {
@@ -113,6 +129,19 @@ type interpreter struct {
 	// nested (0 for the page's own top-level content) - see form.go's
 	// maxFormDepth and doForm for the recursion guard this backs.
 	formDepth int
+
+	// fontCache is the (possibly nil - see FontCache's doc comment)
+	// cross-Interpret-call font cache passed to InterpretCached, shared
+	// unchanged with any Form XObject or tiling pattern content this
+	// interpreter recursively interprets (doForm, buildTilingPattern) so
+	// that a font loaded while interpreting nested content is cached for
+	// every other caller of that same cache too, not just re-lookups
+	// within one nested interpretation. This is a separate cache from
+	// text.fontCache below: that one is keyed by resource *name* and
+	// lives only for this one Interpret call; this one is keyed by the
+	// font dictionary's own object number and can outlive it - see
+	// text.go's lookupFont for how both are used together.
+	fontCache *FontCache
 
 	// text holds Phase 4's text-object-local state (the text/line
 	// matrices and the font cache) - see textInterpreterState's doc

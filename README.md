@@ -1851,3 +1851,73 @@ phase's entry with a note about what changed.
     settled) and the remaining Phase 6 bullets (viewer-integration
     examples, CI hardening, and eventual package versioning) move to
     further Phase 6 sub-phases.
+
+### Phase 6b: Resource caching (fonts) (2026-09-08)
+
+- **`internal/content`: `FontCache` (new file, fontcache.go).** The
+    resource-caching work Phase 5g deferred to Phase 6, now unblocked by
+    6a's concurrency decision: a `*FontCache` remembers every
+    `*fonts.Font` already built via `internal/fonts.Load`, keyed by the
+    font dictionary's own indirect object number (a stable identity
+    across an entire document, unlike a `/Resources /Font` resource
+    *name*, which is only meaningful within one content stream). It
+    carries no locking, matching 6a's "not safe for concurrent use"
+    decision, and a nil `*FontCache` is valid and behaves as "no
+    cross-call caching" via nil-receiver-safe `get`/`put` methods.
+- **`internal/content`: `InterpretCached` (new function, interpret.go).**
+    `Interpret` is now `interpretAtDepth(..., nil, 0)`; the new
+    `InterpretCached` is `interpretAtDepth(..., cache, 0)` - both existing
+    callers unaffected (every one of the 68 existing call sites across
+    this package's own tests keeps using plain `Interpret`, needing no
+    changes at all). `interpreter` gained a `fontCache *FontCache` field,
+    threaded unchanged through both recursive `interpretAtDepth` call
+    sites (`form.go`'s `doForm`, `tilingpattern.go`'s
+    `buildTilingPattern`) so a font loaded while interpreting a nested
+    Form XObject or tiling pattern is cached for every other caller of
+    that same cache too.
+  - `text.go`'s `lookupFont` now checks two caches for two different
+        lifetimes: the existing by-name `textInterpreterState.fontCache`
+        (local to one `Interpret` call, checked first as the cheapest
+        possible hit) and, only when a resource's `/Font` entry is
+        itself an indirect reference (which real producers essentially
+        always make it), the new by-ref `in.fontCache` - which is what
+        actually survives past one `Interpret` call.
+  - Covered by [fontcache_test.go](internal/content/fontcache_test.go):
+        `TestInterpretCachedReusesFontAcrossCalls` confirms a shared
+        `*FontCache` avoids a second `Resolve` of the same font
+        dictionary across two `InterpretCached` calls (observed via a
+        new `resolveCalls` counter added to `image_test.go`'s
+        `fakeResolver`, lazily allocated so every other existing use of
+        that type is unaffected), and
+        `TestInterpretCachedWithoutSharedCacheReloadsFont` is its control
+        case (no shared cache still means no caching, confirming the
+        first test's assertion is not a false positive from some
+        unrelated reason `resolveCalls` stopped increasing).
+- **Root package: wiring (`Document`, `page.go`, `annotations.go`).**
+    `Document` ([document.go](document.go)) gained a `fontCache
+    *content.FontCache` field, created once by `Open` and never reset by
+    `Close` (nothing derived from a closed Document may be used anyway -
+    see `Close`'s existing doc comment). `page.go`'s `renderAtScale` now
+    calls `content.InterpretCached` instead of `Interpret`, passing
+    `p.doc.fontCache`, and threads it through to `annotationDrawOps`
+    ([annotations.go](annotations.go), which gained a `fontCache`
+    parameter) so annotation appearance text shares the same cache as
+    the page's own content. Covered by
+    [pdfviewer_fontcache_test.go](pdfviewer_fontcache_test.go)'s
+    `TestRepeatedRenderOfTextPageReusesFontCache`, a public-API-level
+    integration test: rendering (and thumbnailing) the same text page
+    more than once from one shared `Document` keeps succeeding and keeps
+    producing identical pixels - this does not observe a cache hit
+    directly (`Document.fontCache` is unexported by design, matching the
+    README's original "without making cache lifetime observable through
+    the public API" requirement), but is exactly the calling pattern the
+    cache exists to make cheaper, and would most likely catch a wiring
+    bug (the wrong or a stale `*FontCache` passed into a later render) as
+    a wrong or inconsistent image.
+- **What's carried forward.** The remaining Phase 6 bullets
+    (viewer-integration examples, CI hardening, and eventual package
+    versioning) move to further Phase 6 sub-phases. Caching is scoped to
+    fonts only, matching the README's original Phase 5 bullet's own
+    example ("fonts, in particular"); decoded images and content-stream
+    parse results are not cached across renders - see
+    docs/capability-matrix.md if this changes.

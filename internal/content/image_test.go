@@ -18,9 +18,22 @@ import (
 // through, and it is a handful of lines).
 type fakeResolver struct {
 	objects map[int]syntax.Object
+
+	// resolveCalls counts how many times Resolve was called for each
+	// object number - nil until the first call, lazily allocated (see
+	// Resolve below) so every existing use of fakeResolver, which never
+	// looks at this field, is unaffected. fontcache_test.go's tests use
+	// this to confirm InterpretCached's shared cache actually avoids a
+	// redundant Resolve (and therefore a redundant internal/fonts.Load)
+	// on a cache hit.
+	resolveCalls map[int]int
 }
 
 func (f *fakeResolver) Resolve(num int) (syntax.Object, error) {
+	if f.resolveCalls == nil {
+		f.resolveCalls = make(map[int]int)
+	}
+	f.resolveCalls[num]++
 	if obj, ok := f.objects[num]; ok {
 		return obj, nil
 	}

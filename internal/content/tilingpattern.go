@@ -148,7 +148,7 @@ func (in *interpreter) buildTilingPattern(dict syntax.Dictionary, stream syntax.
 	if err != nil {
 		return nil, err
 	}
-	list, err := interpretAtDepth(ops, tileCTM, resources, in.resolver, in.formDepth+1)
+	list, err := interpretAtDepth(ops, tileCTM, resources, in.resolver, in.fontCache, in.formDepth+1)
 	if err != nil {
 		return nil, err
 	}

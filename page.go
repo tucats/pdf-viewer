@@ -160,7 +160,7 @@ func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	list, err := content.Interpret(ops, ctm, p.page.RawResources, p.doc.model)
+	list, err := content.InterpretCached(ops, ctm, p.page.RawResources, p.doc.model, p.doc.fontCache)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background 
 		// Painted after the page's own content, matching how real-world
 		// PDF viewers layer an annotation's appearance on top of
 		// whatever the page itself already drew - see annotations.go.
-		annotOps := annotationDrawOps(p.doc.model, p.page.Dict(), ctm)
+		annotOps := annotationDrawOps(p.doc.model, p.page.Dict(), ctm, p.doc.fontCache)
 		list = append(list, annotOps...)
 	}
 	if err := ctx.Err(); err != nil {

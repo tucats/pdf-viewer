@@ -1,21 +1,54 @@
 # Continuous integration for pdf-viewer.
 #
-# This workflow exists to make two Phase 0 exit criteria (see the
-# "Phased Plan" section of the repository README) into things that are
-# checked automatically on every push and pull request, rather than
-# relying on a contributor to remember them:
+# This workflow exists to make several exit criteria from the "Phased
+# Plan" section of the repository README into things that are checked
+# automatically on every push and pull request, rather than relying on a
+# contributor to remember them:
 #
-#   1. "no CGO, subprocess, network, or native-library dependency in the
-#      build" - enforced below by building and testing with
-#      CGO_ENABLED=0 on every supported platform. If any dependency ever
-#      required CGO, this build would fail immediately rather than the
-#      problem being discovered later by an embedder on a platform
-#      without a C toolchain.
-#   2. cross-platform correctness - enforced by running the same build
-#      and test matrix on Linux, macOS, and Windows. A pure-Go renderer
-#      with no native dependencies should behave identically everywhere;
-#      this is what actually verifies that claim instead of just
-#      asserting it.
+#   1. Phase 0: "no CGO, subprocess, network, or native-library
+#      dependency in the build" - enforced by the build-and-test job
+#      below building and testing with CGO_ENABLED=0 on every supported
+#      platform. If any dependency ever required CGO, this build would
+#      fail immediately rather than the problem being discovered later
+#      by an embedder on a platform without a C toolchain.
+#   2. Phase 0: cross-platform correctness - enforced by running the
+#      same build and test matrix on Linux, macOS, and Windows. A
+#      pure-Go renderer with no native dependencies should behave
+#      identically everywhere; this is what actually verifies that claim
+#      instead of just asserting it.
+#   3. Phase 6: "race tests" - the race job below runs the full test
+#      suite under Go's race detector. This deliberately is NOT part of
+#      the CGO_ENABLED=0 job above: the race detector's own
+#      instrumentation runtime needs a working C toolchain to build,
+#      regardless of whether the code under test uses cgo - that is a
+#      test-tooling requirement, not a dependency of the pdf-viewer
+#      module itself (which the build-and-test job already proves builds
+#      and runs with CGO_ENABLED=0), so it gets its own job with cgo left
+#      at its default rather than being forced into the same job as the
+#      "prove no cgo is needed" check.
+#   4. Phase 6: "fuzzing" - the fuzz job below runs every FuzzXxx target
+#      in the module for a short, fixed duration each on every push/PR.
+#      This is deliberately brief (see fuzztimeSeconds below) - continuous
+#      background fuzzing for hours is a different, heavier practice
+#      (for example, via OSS-Fuzz) that this project does not run today;
+#      what this job actually catches is a *regression* serious enough to
+#      surface within seconds of mutated input, which is still valuable
+#      to know about before merging.
+#   5. Phase 6: "benchmarks" - the build-and-test job also runs every
+#      Benchmark once each (via -benchtime=1x). This is not a performance
+#      gate (a single-iteration run is too noisy to compare against a
+#      threshold) - it exists so a benchmark that no longer even compiles
+#      or panics partway through is caught here rather than only being
+#      discovered the next time someone tries to actually use one.
+#   6. Phase 6: "dependency/license checks" - the dependency-check job
+#      below fails if go.mod ever grows a dependency on anything outside
+#      the Go standard library, enforcing the "Go standard library only"
+#      half of the README's "Dependency and safety policy" the same way
+#      CGO_ENABLED=0 enforces the other half. This project has no
+#      third-party dependencies to license-scan (by design - see that
+#      job's own comment for what "license check" means when true),
+#      unlike test fixtures, whose own licenses/provenance are tracked in
+#      testdata/fixtures/FIXTURES.md rather than by an automated scanner.
 name: CI
 
 on:
@@ -59,6 +92,9 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Run every benchmark once (compile/execute smoke test only)
+        run: go test -run '^$' -bench . -benchtime=1x ./...
+
   gofmt:
     runs-on: ubuntu-latest
     steps:
@@ -76,5 +112,103 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "The following files are not gofmt-formatted:"
             echo "$unformatted"
+            exit 1
+          fi
+
+  race:
+    # Linux only: the race detector's findings are about Go's memory
+    # model, not the OS, so running it on every platform the
+    # build-and-test job already covers would not find anything a single
+    # platform's run wouldn't - this job exists to catch data races (see
+    # pdfviewer_concurrency_test.go for this project's own regression
+    # test of its documented concurrency guarantee), not to re-prove
+    # cross-platform correctness a second time.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test with the race detector
+        run: go test -race ./...
+
+  fuzz:
+    # Each entry is one FuzzXxx function (there is no way to run more
+    # than one fuzz target per `go test -fuzz` invocation, and `-fuzz`
+    # also requires naming exactly one package) - see this file's header
+    # comment for why each only runs briefly rather than for hours.
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - { pkg: ".", func: "FuzzOpenAndRender" }
+          - { pkg: "./internal/content", func: "FuzzParseAndInterpret" }
+          - { pkg: "./internal/parser", func: "FuzzOpenAndResolveAll" }
+          - { pkg: "./internal/filter", func: "FuzzDecode" }
+          - { pkg: "./internal/filter", func: "FuzzApplyPredictor" }
+          - { pkg: "./internal/syntax", func: "FuzzParseValue" }
+          - { pkg: "./internal/syntax", func: "FuzzLexer" }
+          - { pkg: "./internal/fonts", func: "FuzzParseSfnt" }
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Fuzz ${{ matrix.target.func }}
+        # -run '^$' skips ordinary tests (already covered by
+        # build-and-test above) so this step's time budget goes entirely
+        # to the fuzz engine; the seed corpus each target already ships
+        # with (see each package's testdata/fuzz directory) is what a
+        # real regression would most likely be caught by, with mutation
+        # beyond that a bonus within the short time available here.
+        run: go test -run '^$' -fuzz "^${{ matrix.target.func }}\$" -fuzztime=15s ${{ matrix.target.pkg }}
+
+  dependency-check:
+    # Enforces the README's "Dependency and safety policy": "The core
+    # will use the Go standard library only unless a later decision
+    # records a compelling reason otherwise." go.mod currently declares
+    # no requirements at all beyond the module's own path and Go version,
+    # so `go list -m all` should print exactly one line (this module
+    # itself) - more than that means a dependency was added, which should
+    # be a deliberate, documented decision (a README update), not
+    # something that lands silently via `go get`.
+    #
+    # This doubles as the "license check" this job's name refers to:
+    # with zero third-party dependencies, there is nothing else to
+    # license-scan - the moment a real dependency is added, whatever
+    # license-scanning tool is appropriate for it should be added here
+    # alongside updating the README's dependency policy, not before.
+    # Test fixtures are a separate case with their own provenance
+    # records - see testdata/fixtures/FIXTURES.md - since they are data
+    # checked into this repository, not linked dependencies.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Verify LICENSE file is present
+        run: test -f LICENSE
+
+      - name: Verify no third-party Go module dependencies
+        run: |
+          modules="$(go list -m all)"
+          count="$(printf '%s\n' "$modules" | wc -l)"
+          if [ "$count" -ne 1 ]; then
+            echo "expected go.mod to declare zero third-party dependencies; found:"
+            printf '%s\n' "$modules"
             exit 1
           fi

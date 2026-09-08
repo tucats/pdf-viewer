@@ -1987,3 +1987,66 @@ phase's entry with a note about what changed.
     hardening - race tests, fuzzing, benchmarks, dependency/license
     checks - and eventual package versioning) move to further Phase 6
     sub-phases.
+
+### Phase 6d: CI hardening (2026-09-08)
+
+- **New `race` job.** Runs `go test -race ./...` on `ubuntu-latest`
+    only, deliberately kept out of the existing `build-and-test` job:
+    that job's whole point is proving the module builds and tests pass
+    with `CGO_ENABLED=0`, but the race detector's own instrumentation
+    runtime needs a working C toolchain to build regardless of whether
+    the code under test uses cgo - a test-tooling requirement, not a
+    dependency of the module itself. Running once (Linux) rather than on
+    every OS the `build-and-test` matrix covers is deliberate too: a
+    data race is a property of Go's memory model, not the platform, so a
+    second and third run would not find anything the first run
+    wouldn't - this job exists to actually enforce Phase 6a's documented
+    concurrency guarantee (see
+    [pdfviewer_concurrency_test.go](pdfviewer_concurrency_test.go)) going
+    forward, not to re-prove cross-platform correctness a second time.
+- **New `fuzz` job.** A matrix of all eight `FuzzXxx` targets across the
+    module (`.`, `internal/content`, `internal/parser`,
+    `internal/filter` x2, `internal/syntax` x2, `internal/fonts`), each
+    run for a short, fixed 15 seconds via `go test -fuzz`. `-fuzz`
+    accepts only one target name and one package per invocation, which
+    is why this is a matrix of `{pkg, func}` pairs rather than one step.
+    Deliberately brief rather than the hours-long runs a dedicated
+    fuzzing service would do (this project runs no such service today -
+    see the workflow file's own header comment) - what a short CI run
+    actually catches is a regression serious enough to surface within
+    seconds of mutated input against each target's existing seed corpus,
+    which is still worth knowing about before a merge. Verified locally
+    before landing that a short fuzz run does not leave any new files in
+    the working tree unless it actually finds a failing input (Go only
+    ever promotes a corpus entry into the package's own
+    `testdata/fuzz/<Name>/` directory on an actual failure; merely
+    "interesting", coverage-increasing inputs found along the way stay in
+    the (per-machine, not committed) build cache) - so running this in
+    CI cannot accidentally dirty the repository on a clean run.
+- **New `dependency-check` job.** Enforces the README's "Go standard
+    library only" dependency policy the same way `CGO_ENABLED=0` already
+    enforces the "no CGO" half of it: fails if `go list -m all` ever
+    prints more than one line (this module itself), which is what a
+    silently-added `go get` dependency would look like. Doubles as the
+    "license check" this phase's bullet also calls for: with zero
+    third-party dependencies today, there is nothing else to
+    license-scan - the moment a real dependency is ever added, whatever
+    scanning tool fits it should be added to this job alongside a README
+    update recording *why* the "standard library only" policy no longer
+    holds, not silently beforehand. Also verifies the repository's own
+    `LICENSE` file is present.
+- **Benchmark smoke step (added to the existing `build-and-test`
+    job).** `go test -run '^$' -bench . -benchtime=1x ./...` runs every
+    `Benchmark` function exactly once. This is not a performance gate,
+    since a single-iteration run is too noisy to compare against any
+    threshold; it exists instead so a benchmark that no longer compiles,
+    or panics partway through, is caught here, on every push and pull
+    request, rather than only discovered the next time someone tries to
+    actually use one (see
+    [pdfviewer_bench_test.go](pdfviewer_bench_test.go), added in Phase
+    5g).
+- **What's carried forward.** Package versioning (the README's Phase 6
+    bullet "Version the public package only after the API has passed the
+    preceding compatibility and ownership review") is the one remaining
+    Phase 6 bullet, addressed in the closing Phase 6 sub-phase alongside
+    a final documentation pass.

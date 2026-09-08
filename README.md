@@ -1,2 +1,252 @@
 # pdf-viewer
-Go PDF viewer without external dependencies
+
+An embeddable PDF renderer written in Go.
+
+The goal is a package that a Go program can import to inspect and render PDF
+documents without CGO, without launching a local PDF utility, and without
+requiring a separately installed native rendering engine. The renderer will be
+implemented in this repository rather than wrapping MuPDF, PDFium, Poppler, or
+another existing renderer.
+
+This document is both the project plan and the beginning of the package
+contract. As implementation proceeds, the API and internal design sections
+should be updated with the behavior that the tests actually guarantee.
+
+## Decisions So Far
+
+### Primary output: `image.Image`
+
+The primary output should be a raster image for one page at a time. This fits
+the Go standard library, works for desktop viewers and image pipelines, and is
+the interface used by the most relevant existing Go renderers:
+
+| Project | Rendering interface | Dependency/runtime observation |
+| --- | --- | --- |
+| [go-pdfium](https://github.com/klippa-app/go-pdfium) | Renders selected pages to Go images, with DPI or pixel sizing; also exposes PNG/JPEG helpers | PDFium through CGO, subprocesses, or embedded WebAssembly depending on the chosen implementation |
+| [go-fitz](https://github.com/gen2brain/go-fitz) | `Document.Image(page)` returns an image; also supports text, HTML, and SVG extraction | MuPDF wrapper; native libraries and CGO/purego loading are part of its deployment model |
+| [pdfcpu](https://github.com/pdfcpu/pdfcpu) | Strong pure-Go PDF parsing and document operations | Not a page renderer; useful as a design reference for validation, object resolution, and dependency independence |
+| [UniPDF](https://github.com/unidoc/unipdf) | Separate render package in a full PDF model, with page and content operations | Pure Go, but its current distribution requires a commercial license key |
+| [benoitkugler/pdf](https://github.com/benoitkugler/pdf) | Typed PDF model and reader layers intended to be reused by higher-level libraries | Pure Go and MIT licensed; useful as a parser/model reference, not a finished renderer |
+
+These projects point to a page-oriented API rather than returning one giant
+document result. A caller can render only the visible page, retain only the
+images it needs, and choose a separate low-resolution operation for a page
+strip or thumbnail view. HTML and SVG are not the primary output: they require
+another layout or browser-like interpretation and cannot faithfully represent
+all PDF compositing, clipping, transparency, and print geometry.
+
+### Pagination and resource ownership
+
+Documents will expose a stable page count and allow random access to pages.
+Rendering will be lazy: opening a document parses enough structure to inspect
+it, while `Render` does the expensive work for one requested page. A future
+streaming iterator may be added for sequential workloads, but it must not
+replace random access or force every page into memory.
+
+The proposed indexing convention is zero-based, matching Go slices and the
+existing rendering APIs surveyed above. Page dimensions are expressed in PDF
+points (1/72 inch); rendered dimensions are pixels selected by a render option.
+
+### Dependency and safety policy
+
+The core will use the Go standard library only unless a later decision records
+a compelling reason otherwise. In particular, it must not use CGO, `os/exec`,
+subprocess workers, or runtime loading of a system PDF library. Malformed and
+hostile input is expected: parsers must have bounded work where practical,
+return errors instead of panicking, and never write files or access the network
+as a consequence of rendering.
+
+## Draft Public API
+
+Names and exact signatures are provisional until the first implementation and
+tests land. The important contract is the ownership and granularity:
+
+```go
+package pdfviewer
+
+type Document struct { /* opaque implementation */ }
+
+func Open(r io.ReaderAt, size int64, opts ...OpenOption) (*Document, error)
+func OpenFile(name string, opts ...OpenOption) (*Document, error)
+
+func (d *Document) Close() error
+func (d *Document) PageCount() int
+func (d *Document) Page(index int) (Page, error)
+
+type Page interface {
+	Bounds() Rect // page box in PDF points
+	Render(ctx context.Context, opts RenderOptions) (image.Image, error)
+	Thumbnail(ctx context.Context, opts ThumbnailOptions) (image.Image, error)
+}
+```
+
+The implementation should prefer `io.ReaderAt` plus a size because PDF files
+use offsets and can be large. `OpenFile` is a convenience, not a requirement
+for embedding. `Close` releases caches and any backing reader resources; pages
+must not outlive their document. Rendered images belong to the caller and may
+be retained after the document is closed.
+
+`RenderOptions` should make the output predictable without tying callers to an
+image file format. It is expected to cover DPI or an explicit pixel size,
+page-box selection, rotation, background color, and color mode. Encoding PNG or
+JPEG belongs to the caller through the standard `image/png` and `image/jpeg`
+packages. `ThumbnailOptions` should be a convenience for a bounded maximum
+dimension and should share the same page interpretation as full rendering.
+
+The API still needs decisions for password-protected files, cancellation
+granularity, annotations, and whether a document or a page may be rendered
+concurrently. The initial contract should choose conservative behavior and
+document it rather than silently promising full PDF compatibility.
+
+## Phased Plan
+
+### Phase 0: Scope, fixtures, and compatibility policy
+
+- Establish the module path, supported Go versions, error conventions, and
+	zero-based page indexing.
+- Create small hand-authored PDFs for each feature under test, plus permitted
+	real-world fixtures with recorded licenses and provenance.
+- Define a capability matrix for PDF versions, encryption, filters, color
+	spaces, fonts, transparency, images, annotations, and page boxes.
+- Add fuzz targets for file parsing and content streams before accepting broad
+	input compatibility claims.
+
+**Exit criteria:** a reproducible test corpus, documented non-goals, and no
+CGO, subprocess, network, or native-library dependency in the build.
+
+### Phase 1: File structure and safe object model
+
+- Parse the header, body objects, cross-reference tables and streams, trailers,
+	incremental updates, and object streams as their support is added.
+- Resolve indirect references lazily and distinguish missing, null, malformed,
+	and unsupported values.
+- Implement limits for recursion, stream sizes, nesting, and decompression to
+	keep resource use inspectable.
+- Expose only document metadata, page count, page boxes, and basic page access
+	at first; do not couple the public API to internal PDF dictionary types.
+
+**Exit criteria:** valid documents can be opened and paginated; invalid input
+returns classified errors; parser fuzzing finds no panics or unbounded loops.
+
+### Phase 2: Content streams and a minimal raster backend
+
+- Decode ASCII85, ASCIIHex, Flate, RunLength, and LZW streams as needed by the
+	fixture corpus, with explicit unsupported-filter errors for the remainder.
+- Implement the PDF graphics state, coordinate transforms, paths, fills,
+	strokes, clipping, line styles, and solid colors.
+- Add a deterministic software rasterizer using standard-library image types.
+- Render simple vector pages and compare output against checked-in reference
+	images with a documented tolerance.
+
+**Exit criteria:** `Page.Render` produces correct images for basic paths,
+transforms, clipping, and page boxes on every supported platform.
+
+### Phase 3: Images, color, and thumbnails
+
+- Support inline and referenced images, image masks, soft masks, and the common
+	PDF image color spaces and decode arrays.
+- Add JPEG and other image decoding only where the license and standard-library
+	support are clear; preserve a narrow unsupported path rather than guessing.
+- Implement `Thumbnail` as a bounded render of the same page display list,
+	with no second interpretation of the PDF.
+- Test thumbnails for aspect ratio, orientation, transparent/background
+	behavior, and memory bounds.
+
+**Exit criteria:** image-heavy pages and thumbnails are correct, bounded, and
+	visibly consistent with full-page rendering.
+
+### Phase 4: Text and fonts
+
+- Parse text operators, text matrices, character mappings, widths, and font
+	encodings.
+- Support embedded Type 1, TrueType, and Type 0/CID fonts incrementally.
+- Define font fallback and missing-glyph behavior; do not assume that a system
+	font is available or silently invoke a platform font service.
+- Keep text extraction as a separate capability from text painting so it can be
+	added without changing page rendering ownership.
+
+**Exit criteria:** representative Latin text renders with embedded fonts and
+	predictable fallback; text positioning tests cover rotation and scaling.
+
+### Phase 5: Transparency, patterns, shadings, and advanced graphics
+
+- Add transparency groups, blend modes, soft masks, tiling patterns, shading
+	patterns, and the remaining color-space behavior needed by the corpus.
+- Add annotations and form appearance streams only after ordinary page content
+	is stable.
+- Profile allocations and cache decoded resources without making cache
+	lifetime observable through the public API.
+
+**Exit criteria:** the renderer handles a broad compatibility corpus and has
+	benchmark results for single-page, multi-page, and thumbnail workloads.
+
+### Phase 6: API stabilization and viewer integration
+
+- Decide and document concurrency guarantees, cancellation behavior, password
+	handling, error taxonomy, and supported PDF versions.
+- Add examples for a page preview, page list with thumbnails, and full-page
+	export using standard-library image encoders.
+- Run cross-platform CI with `CGO_ENABLED=0`, race tests, fuzzing, benchmarks,
+	and dependency/license checks.
+- Version the public package only after the API has passed the preceding
+	compatibility and ownership review.
+
+**Exit criteria:** an importing Go program can open, inspect, render, thumbnail,
+	and close a document without knowing the PDF internals.
+
+## Proposed Internal Layout
+
+The package boundaries should follow the PDF pipeline and remain testable in
+isolation:
+
+```text
+source       random-access input, bounds and read accounting
+syntax       tokens, names, strings, arrays, dictionaries and streams
+parser       xref/trailer resolution, object streams and lazy references
+model        pages, resources, boxes, fonts, images and document metadata
+content      content-stream operators and display-list construction
+graphics     graphics state, paths, compositing and clipping
+raster       software rasterization into image.Image
+fonts        font decoding, metrics, mappings and fallback policy
+```
+
+The public package should compose these layers without exposing their concrete
+types. A display list or equivalent intermediate representation is preferred
+over drawing directly while parsing: it enables thumbnails, caching,
+inspection, and later alternate backends without reparsing the file.
+
+## Reference Material and Attribution
+
+PDF is specified by ISO 32000. The freely available Adobe PDF 1.7 reference is
+useful historical reading, while PDF 2.0 is maintained through ISO 32000-2 and
+the PDF Association. The project will link to those sources and record the
+edition used for each implementation decision, but will not copy a standard or
+third-party manual into this repository unless its redistribution terms clearly
+permit that copy. Code, test fixtures, fonts, and sample PDFs must each carry
+their own attribution and license information.
+
+Useful references:
+
+- [Adobe PDF 1.7 reference materials](https://www.adobe.com/go/pdfreference)
+- [PDF Association: ISO 32000-2 PDF 2.0](https://pdfa.org/resource/iso-32000-2-pdf-2-0/)
+- [ISO 32000-2:2020 official record](https://www.iso.org/standard/75839.html)
+- [pdfcpu documentation and source](https://github.com/pdfcpu/pdfcpu)
+- [go-pdfium rendering API and runtime notes](https://github.com/klippa-app/go-pdfium)
+- [go-fitz page image API](https://github.com/gen2brain/go-fitz)
+- [benoitkugler/pdf model and reader](https://github.com/benoitkugler/pdf)
+
+Survey performed September 8, 2026. The linked projects and their licenses can
+change; verify current terms before copying code, fixtures, fonts, or prose.
+
+## Non-goals for the Initial Release
+
+- HTML as the canonical rendering output.
+- A command-line wrapper around another PDF program.
+- CGO, native shared libraries, runtime-loaded PDF engines, or forked workers.
+- Guaranteed support for every PDF feature, malformed file, encryption scheme,
+	or embedded scripting behavior.
+- PDF creation or editing before the reader and renderer are dependable.
+
+## License
+
+This project is released under the MIT License; see [LICENSE](LICENSE).

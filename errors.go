@@ -2,7 +2,8 @@ package pdfviewer
 
 import (
 	"errors"
-	"fmt"
+
+	"github.com/tucats/pdf-viewer/internal/pdferror"
 )
 
 // This file defines the error conventions used across the whole
@@ -20,6 +21,17 @@ import (
 // letting calling code make decisions based on a small, stable set of
 // sentinel errors (e.g. "was this ErrMalformed?"). See the Go standard
 // library "errors" package documentation for more detail.
+//
+// ErrMalformed and ErrUnsupported are declared in the internal
+// internal/pdferror package, not here, and simply re-exported by the two
+// variables below. That indirection exists so that internal packages
+// (which cannot import this root package without creating an import
+// cycle, since this package imports them) can still produce errors that
+// wrap the exact same sentinel values a caller checks against here — see
+// the comment on internal/pdferror for the full explanation. From the
+// perspective of anyone importing pdfviewer, ErrMalformed and
+// ErrUnsupported behave exactly as if they had been declared directly in
+// this file.
 
 // Sentinel errors classify *why* an operation failed. Callers should use
 // errors.Is to test for these rather than comparing strings, and should
@@ -31,7 +43,7 @@ var (
 	// rules of the PDF specification badly enough that it cannot be
 	// interpreted at all. This is the error to return for garbled,
 	// truncated, or deliberately hostile input.
-	ErrMalformed = errors.New("pdfviewer: malformed PDF input")
+	ErrMalformed = pdferror.ErrMalformed
 
 	// ErrUnsupported indicates that the input is structurally valid PDF
 	// but uses a feature this package does not implement yet (or ever
@@ -40,7 +52,7 @@ var (
 	// expected to occur frequently on real-world files until later
 	// phases land; it must never be confused with ErrMalformed, since a
 	// well-formed-but-unsupported file is not itself invalid.
-	ErrUnsupported = errors.New("pdfviewer: unsupported PDF feature")
+	ErrUnsupported = pdferror.ErrUnsupported
 
 	// ErrClosed indicates that a method was called on a Document (or a
 	// value obtained from one, such as a Page) after Close had already
@@ -58,9 +70,12 @@ var (
 // MalformedErrorf builds an error that wraps ErrMalformed with a
 // formatted, human-readable message describing exactly what was wrong
 // and, wherever practical, where in the input it was found (for example
-// a byte offset or object number). Internal packages should use this
-// instead of constructing ad hoc errors so that ErrMalformed remains
-// reliably detectable with errors.Is anywhere in the call stack.
+// a byte offset or object number). Internal packages should use the
+// equivalent internal/pdferror.Malformedf instead of constructing ad hoc
+// errors, so that ErrMalformed remains reliably detectable with
+// errors.Is anywhere in the call stack; this exported copy exists so
+// code outside this module (or example code in this module) can build
+// consistent errors too.
 //
 // Example:
 //
@@ -68,7 +83,7 @@ var (
 //		return MalformedErrorf("truncated header: only %d bytes", len(header))
 //	}
 func MalformedErrorf(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", ErrMalformed, fmt.Sprintf(format, args...))
+	return pdferror.Malformedf(format, args...)
 }
 
 // UnsupportedErrorf builds an error that wraps ErrUnsupported with a
@@ -83,5 +98,5 @@ func MalformedErrorf(format string, args ...any) error {
 //		return UnsupportedErrorf("stream filter %q", filter)
 //	}
 func UnsupportedErrorf(format string, args ...any) error {
-	return fmt.Errorf("%w: %s", ErrUnsupported, fmt.Sprintf(format, args...))
+	return pdferror.Unsupportedf(format, args...)
 }

@@ -9,13 +9,16 @@
 // way it is. This doc comment only covers what is true of the code that
 // actually exists right now.
 //
-// As of Phase 0, this package contains no PDF parsing or rendering logic
-// yet. Phase 0 is scaffolding: the Go module, the error conventions used
-// throughout the codebase, the internal package skeleton described in the
-// README, a hand-authored test fixture corpus, a capability matrix, and a
-// CI check that keeps the build free of CGO and other native dependencies.
-// The public API sketched in the README (Document, Page, Open, OpenFile,
-// RenderOptions, and so on) will be implemented starting in Phase 1.
+// As of Phase 1, this package can open a PDF document (Open, OpenFile),
+// report its page count, and return each page's box in PDF points
+// (Page.Bounds) - see internal/parser and internal/model for how that
+// is implemented. Page.Render and Page.Thumbnail exist, matching the
+// README's Draft Public API, but are not implemented yet: they always
+// return an error wrapping ErrUnsupported until Phase 2 and Phase 3,
+// respectively, add a rasterizer. Phase 1 also only supports the
+// classic, table-based cross-reference format, not PDF 1.5+
+// cross-reference streams - see internal/parser's package doc comment
+// and docs/capability-matrix.md for what is and is not supported yet.
 //
 // # Design constraints that hold from the start
 //
@@ -33,7 +36,7 @@
 //
 // # Page indexing
 //
-// Once page access is implemented (Phase 1), pages will be indexed
-// zero-based, matching Go slice conventions and the page-oriented APIs of
-// the comparable projects surveyed in the README.
+// Pages are indexed zero-based (Document.Page(0) is the first page),
+// matching Go slice conventions and the page-oriented APIs of the
+// comparable projects surveyed in the README.
 package pdfviewer

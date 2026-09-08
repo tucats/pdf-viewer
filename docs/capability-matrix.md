@@ -28,8 +28,8 @@ treat a code change that isn't reflected here as incomplete.
 
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
-| PDF 1.4–1.7 core structure (xref tables, classic trailers) | Phase 1 | Not started | The baseline this project is designed around; see the fixture corpus under `testdata/fixtures/handmade`. |
-| PDF 1.5+ cross-reference streams and object streams | Phase 1 | Not started | Required for many PDFs produced by modern tools, which no longer emit classic xref tables. |
+| PDF 1.4–1.7 core structure (classic xref tables, classic trailers, incremental updates via /Prev, recovery scan for a corrupted xref table) | Phase 1 | Partial | Implemented in `internal/parser`; see its package doc comment. "Partial" because broader real-world compatibility is still growing, not because the mechanism itself is incomplete. |
+| PDF 1.5+ cross-reference streams and object streams | Phase 2 (moved from Phase 1) | Not started | Both are normally Flate-compressed, so implementing them was deferred until Flate decoding lands in Phase 2 alongside the other stream filters, rather than half-implementing decompression early; see `internal/parser`'s package doc comment. Opening such a file currently fails with an error wrapping `ErrUnsupported`. |
 | PDF 2.0 (ISO 32000-2) structural changes | Phase 6 | Not started | Revisited during API stabilization once the 1.x corpus is solid. |
 | Linearized ("fast web view") files | Not scheduled | Not started | Linearization is an optimization hint or convention layered on top of standard structure, not the file's ground truth; a linearized file must still be readable using vanilla xref/trailer parsing, so this project treats it as automatically handled rather than as a scheduled feature. |
 
@@ -110,7 +110,7 @@ treat a code change that isn't reflected here as incomplete.
 
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
-| MediaBox | Phase 1 | Not started | Minimum needed to know a page's dimensions at all. |
+| MediaBox | Phase 1 | Done | Implemented in `internal/model`, including inheritance from an ancestor Pages node when a page does not specify its own; exposed publicly via `Page.Bounds`. |
 | CropBox | Phase 1–2 | Not started | Falls back to MediaBox when absent, per spec. |
 | BleedBox, TrimBox, ArtBox | Phase 2 | Not started | Exposed via `RenderOptions`' page-box selection (see README Draft Public API). |
 | Page rotation (`/Rotate`) | Phase 2 | Not started | |

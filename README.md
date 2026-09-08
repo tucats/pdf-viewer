@@ -131,6 +131,11 @@ what was actually built.
 **Exit criteria:** valid documents can be opened and paginated; invalid input
 returns classified errors; parser fuzzing finds no panics or unbounded loops.
 
+**Status: done for classic (table-based) cross-reference structure**; PDF
+1.5+ cross-reference streams and object streams were deliberately moved to
+Phase 2, since both are normally Flate-compressed and Flate decoding is
+Phase 2 work. See the Progress Log at the end of this document.
+
 ### Phase 2: Content streams and a minimal raster backend
 
 - Decode ASCII85, ASCIIHex, Flate, RunLength, and LZW streams as needed by the
@@ -321,3 +326,102 @@ phase's entry with a note about what changed.
 	CGO, subprocess, network, or native-library dependency" exit criterion
 	into something enforced automatically rather than only stated in this
 	document.
+
+### Phase 1: File structure and safe object model — mostly done (2026-09-08)
+
+- **Shared error sentinels.** Added `internal/pdferror`, a small leaf
+	package holding the actual `ErrMalformed`/`ErrUnsupported` values;
+	the root package's `errors.go` now re-exports them instead of
+	declaring its own copies, so every internal package (which cannot
+	import the root package without an import cycle) can still produce
+	errors a caller's `errors.Is(err, pdfviewer.ErrMalformed)` finds. See
+	the package doc comment on `internal/pdferror` for the full rationale.
+- **`internal/source`.** Added [source.go](internal/source/source.go): a
+	bounds-checked wrapper around `io.ReaderAt` that every byte read in
+	this module ultimately goes through, so an out-of-range offset or
+	length anywhere in the file always fails as a classified error
+	instead of forwarding to whatever the caller's `io.ReaderAt` happens
+	to do. Covered by
+	[source_test.go](internal/source/source_test.go).
+- **`internal/syntax`.** Added the PDF object grammar: a tokenizer
+	([lexer.go](internal/syntax/lexer.go)) implementing PDF's whitespace/
+	delimiter/regular-character lexical rules (including literal- and
+	hex-string escapes, name `#xx` escapes, and comments), and a value
+	parser ([value.go](internal/syntax/value.go)) that assembles tokens
+	into booleans, numbers, strings, names, arrays, dictionaries,
+	streams, indirect references, and null
+	([object.go](internal/syntax/object.go)). Nesting depth is bounded
+	(`maxNestingDepth`) to prevent stack exhaustion on adversarial input.
+	A stream's raw bytes are read either by its dictionary's direct
+	`/Length` or, when `/Length` is an indirect reference this package
+	cannot resolve on its own, by a bounded scan for the `endstream`
+	keyword. Covered by
+	[lexer_test.go](internal/syntax/lexer_test.go) and
+	[value_test.go](internal/syntax/value_test.go), plus the Phase 1 fuzz
+	targets promised in the Phase 0 entry above:
+	[fuzz_test.go](internal/syntax/fuzz_test.go) (`FuzzLexer`,
+	`FuzzParseValue`) ran clean across several million executions each
+	during development.
+- **`internal/parser`.** Added
+	[parser.go](internal/parser/parser.go) and
+	[resolve.go](internal/parser/resolve.go): header validation, locating
+	`startxref` and walking a classic cross-reference table's trailer,
+	following any chain of incremental updates via each trailer's `/Prev`
+	entry (newest revision's object definitions correctly shadow older
+	ones), and lazy, cached indirect-object resolution. When the
+	cross-reference table's recorded offset for an object turns out to be
+	wrong, `Document.Resolve` falls back once to a whole-file linear scan
+	for `"N G obj"` markers and retries — this is exactly what
+	`malformed-bad-xref-offset.pdf` (see the Phase 0 entry above) is a
+	regression test for. PDF 1.5+ cross-reference streams are not
+	supported yet: both cross-reference streams and object streams are
+	normally Flate-compressed, and decompression is Phase 2 work, so
+	implementing them now would have meant half-implementing
+	decompression ahead of schedule; opening such a file currently fails
+	with a clear error wrapping `ErrUnsupported` rather than being
+	silently misread. Covered by
+	[parser_test.go](internal/parser/parser_test.go) (against both the
+	fixture corpus and several small ad hoc malformed inputs built
+	in-test) and the fuzz target in
+	[fuzz_test.go](internal/parser/fuzz_test.go)
+	(`FuzzOpenAndResolveAll`), which ran over 17 million executions
+	clean during development.
+- **`internal/model`.** Added [model.go](internal/model/model.go):
+	page-tree traversal from the trailer's `/Root` through the document
+	catalog's `/Pages`, flattening it into an ordered slice of pages and
+	resolving PDF's page-attribute inheritance rules for `/MediaBox` and
+	`/Resources` (a page's own value wins; otherwise the nearest
+	ancestor's value is inherited). Bounded recursion depth
+	(`maxPageTreeDepth`) plus a visited-object-number check reject a
+	cyclic or absurdly deep page tree instead of recursing forever.
+	Covered by [model_test.go](internal/model/model_test.go), including
+	several page-tree shapes (multi-level trees, inheritance overridden
+	at the page level, a deliberate cycle) built with a small in-test
+	helper rather than as checked-in fixtures, since they each test one
+	narrow structural rule in isolation.
+- **Public API.** [document.go](document.go), [page.go](page.go),
+	[rect.go](rect.go), and [options.go](options.go) implement the first
+	real slice of the README's Draft Public API: `Open`, `OpenFile`,
+	`Document.Close` (idempotent; closes the underlying file only if
+	`OpenFile` opened it), `Document.PageCount`, `Document.Page`, and
+	`Page.Bounds`. `Page.Render` and `Page.Thumbnail` exist with the
+	signatures the README sketches but always return an error wrapping
+	`ErrUnsupported` for now, since a rasterizer is Phase 2/3 work — they
+	were added now, ahead of an implementation, so the `Page` interface's
+	shape will not need to change (only gain a working body) once
+	rendering lands. `OpenOption`/`RenderOptions`/`ThumbnailOptions` exist
+	as currently-empty extension points for the same reason. Covered by
+	[pdfviewer_test.go](pdfviewer_test.go), exercising the public API
+	end-to-end against the fixture corpus (rather than any internal
+	package directly), including the closed-document/page-index error
+	paths and a canceled-context check on `Render`.
+- **Capability matrix updated.** `docs/capability-matrix.md`'s "PDF
+	1.4–1.7 core structure" row is now "Partial" (classic xref/trailer/
+	incremental-update support exists; broader real-world corpus coverage
+	is still growing) and its "PDF 1.5+ cross-reference streams" row now
+	targets Phase 2 instead of Phase 1, matching the decision above.
+	`MediaBox` is now "Done."
+- **What's carried forward.** PDF 1.5+ cross-reference streams and
+	object streams move to Phase 2, alongside Flate decoding. `CropBox`,
+	page rotation, and everything content-stream-related remain
+	unimplemented, as planned.

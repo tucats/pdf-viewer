@@ -46,6 +46,8 @@ func TestGeneratedFixturesMatchCheckedInFiles(t *testing.T) {
 		"text-type0-identity.pdf":       buildTextType0Identity(),
 		"text-notdef-fallback.pdf":      buildTextNotdefFallback(),
 		"text-rotated-page.pdf":         buildTextRotatedPage(),
+		"separation-fill.pdf":           buildSeparationFill(),
+		"lab-fill.pdf":                  buildLabFill(),
 	}
 
 	for name, want := range fixtures {
@@ -92,6 +94,8 @@ func TestFixtureSetIsComplete(t *testing.T) {
 		"text-type0-identity.pdf":       true,
 		"text-notdef-fallback.pdf":      true,
 		"text-rotated-page.pdf":         true,
+		"separation-fill.pdf":           true,
+		"lab-fill.pdf":                  true,
 	}
 
 	entries, err := os.ReadDir(outputDir)

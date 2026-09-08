@@ -74,6 +74,26 @@ type State struct {
 	// observe.
 	Font any
 
+	// FillColorSpace and StrokeColorSpace hold the color space most
+	// recently selected by "cs" and "CS" respectively (7.10, "Colour
+	// Spaces" - a content-stream color space selection is itself part of
+	// the graphics state, saved and restored by "q"/"Q" exactly like
+	// FillColor or LineWidth), consulted by "sc"/"scn"/"SC"/"SCN" to
+	// interpret their numeric operands correctly for any color space
+	// beyond the three Device families internal/content can already infer
+	// directly from operand count (see that package's colorFromComponents
+	// and colorForOperandsWithSpace in colorspace.go).
+	//
+	// Typed `any` for the same reason Font is (see Font's doc comment):
+	// internal/graphics cannot import internal/image (which itself
+	// imports this package for graphics.Image), so the concrete type
+	// (image.ColorSpace, or internal/content's own pattern-selection
+	// marker) is only ever produced and consumed by internal/content, via
+	// a type assertion. A nil value means no color space has been
+	// explicitly selected, or the one that was could not be resolved -
+	// either way, sc/scn's own component-count fallback applies.
+	FillColorSpace, StrokeColorSpace any
+
 	// Clips holds every currently-active clipping path, most recently
 	// intersected last, together with the fill rule each was intersected
 	// under. The *effective* clip region is the intersection of all of

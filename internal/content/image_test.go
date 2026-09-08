@@ -169,11 +169,15 @@ func TestInterpretDoWithMissingXObjectIsSkipped(t *testing.T) {
 }
 
 func TestInterpretDoWithUnsupportedImageFeaturePropagatesError(t *testing.T) {
+	// /Pattern is not a legal image /ColorSpace at all (patterns are only
+	// meaningful for "scn"/"SCN" fill/stroke colors) - still an
+	// unsupported-color-space case now that /Lab itself (this test's
+	// former example - see docs/capability-matrix.md) is implemented.
 	imgDict := syntax.Dictionary{
 		"Subtype": syntax.Name("Image"),
 		"Width":   syntax.Integer(1), "Height": syntax.Integer(1),
 		"BitsPerComponent": syntax.Integer(8),
-		"ColorSpace":       syntax.Array{syntax.Name("Lab"), syntax.Dictionary{}},
+		"ColorSpace":       syntax.Array{syntax.Name("Pattern")},
 	}
 	resources := syntax.Dictionary{"XObject": syntax.Dictionary{"Im0": syntax.Stream{Dict: imgDict, Raw: []byte{0, 0, 0}}}}
 

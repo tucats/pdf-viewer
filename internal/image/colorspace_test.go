@@ -106,15 +106,53 @@ func TestDecodeUnresolvableNamedColorSpaceIsMalformed(t *testing.T) {
 	}
 }
 
-func TestDecodeLabColorSpaceIsUnsupported(t *testing.T) {
+// TestDecodeLabColorSpace exercises /Lab end to end through Decode: L*=0
+// with neutral a*=b*=0 (black) and L*=100 with neutral a*=b*=0 (white)
+// are the two points every plausible CIELAB->sRGB conversion must agree
+// on, making them a robust choice for a coarse-grained decode test (as
+// opposed to pinning exact intermediate-gray values, which would be
+// sensitive to exactly which of several defensible white-point/matrix
+// choices labToRGB makes - see that function's doc comment). a*/b* are
+// left neutral rather than at their extremes deliberately: an extreme
+// a*/b* paired with L*=0 is outside the real sRGB gamut and does not
+// convert back to pure black, which is a property of CIELAB itself, not
+// a bug in this conversion.
+func TestDecodeLabColorSpace(t *testing.T) {
 	dict := syntax.Dictionary{
-		"Width": syntax.Integer(1), "Height": syntax.Integer(1),
+		"Width": syntax.Integer(2), "Height": syntax.Integer(1),
 		"BitsPerComponent": syntax.Integer(8),
 		"ColorSpace":       syntax.Array{syntax.Name("Lab"), syntax.Dictionary{}},
 	}
+	// Default /Decode for /Lab is [0 100 -100 100 -100 100]; a raw byte
+	// of 128 decodes a*/b* to (approximately) 0, their neutral midpoint.
+	// Pixel 0: L*=0,a*=~0,b*=~0 (should be black). Pixel 1: L*=100,
+	// a*=~0,b*=~0 (should be white).
+	samples := []byte{0, 128, 128, 255, 128, 128}
+	img, err := Decode(dict, samples, Options{Resolver: &fakeResolver{}})
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	assertPixel(t, img, 0, 0, 0, 0, 0, 255)
+	r, g, b, a := img.At(1, 0)
+	if a != 1 {
+		t.Fatalf("pixel 1 alpha = %v, want 1", a)
+	}
+	for name, v := range map[string]float64{"r": r, "g": g, "b": b} {
+		if v < 0.95 {
+			t.Fatalf("pixel 1 (L*=100) channel %s = %v, want near-white (>=0.95)", name, v)
+		}
+	}
+}
+
+func TestDecodeLabMissingDictionaryIsMalformed(t *testing.T) {
+	dict := syntax.Dictionary{
+		"Width": syntax.Integer(1), "Height": syntax.Integer(1),
+		"BitsPerComponent": syntax.Integer(8),
+		"ColorSpace":       syntax.Array{syntax.Name("Lab")},
+	}
 	_, err := Decode(dict, []byte{0, 0, 0}, Options{Resolver: &fakeResolver{}})
-	if !errors.Is(err, pdferror.ErrUnsupported) {
-		t.Fatalf("Decode with a Lab color space: got %v, want an error wrapping ErrUnsupported", err)
+	if !errors.Is(err, pdferror.ErrMalformed) {
+		t.Fatalf("Decode with a /Lab array missing its dictionary: got %v, want an error wrapping ErrMalformed", err)
 	}
 }
 

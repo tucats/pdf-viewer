@@ -34,8 +34,22 @@
 // treated as DeviceGray/DeviceRGB (ignoring their white point and gamma
 // - another documented approximation, in the same spirit as this
 // project's existing DeviceCMYK conversion formula in internal/content).
-// /Lab, /Separation, /DeviceN, and /Pattern are not implemented and
-// return an error wrapping pdferror.ErrUnsupported.
+// /Lab is supported (Phase 5) via the standard CIELAB -> XYZ -> sRGB
+// conversion (colorspace.go's labToRGB), calibrated for the D65
+// illuminant regardless of the color space's own /WhitePoint - a
+// documented approximation, not full ICC-grade chromatic adaptation.
+// /Separation and /DeviceN are supported (Phase 5) by evaluating their
+// tint transform function (internal/function) and converting the result
+// through their alternate color space. /Pattern is not implemented as an
+// image's own /ColorSpace (it is only meaningful for "scn"/"SCN" fill/
+// stroke colors - see internal/content) and returns an error wrapping
+// pdferror.ErrUnsupported.
+//
+// public.go exports this same color-space resolution logic
+// (ResolveColorSpace/ColorSpace) for internal/content to reuse for
+// content-stream "cs"/"CS"/"sc"/"scn"/"SC"/"SCN" operators, so a named
+// Separation/DeviceN/Lab/Indexed color space resolves identically whether
+// it is painting an image or a vector fill.
 //
 // # Sample decoding (decode.go)
 //

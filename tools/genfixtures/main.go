@@ -97,6 +97,8 @@ func main() {
 		{"text-type0-identity.pdf", buildTextType0Identity()},
 		{"text-notdef-fallback.pdf", buildTextNotdefFallback()},
 		{"text-rotated-page.pdf", buildTextRotatedPage()},
+		{"separation-fill.pdf", buildSeparationFill()},
+		{"lab-fill.pdf", buildLabFill()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -604,6 +606,58 @@ func buildRotatedPage() []byte {
 	content := []byte("1 0 0 rg\n0 0 20 20 re\nf\n")
 	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
 
+	return b.finish(1)
+}
+
+// buildSeparationFill returns a single 100x100-point page whose
+// /Resources /ColorSpace declares one named color space, /CS0: a
+// [/Separation /Spot1 /DeviceRGB tintFn] color space whose tint
+// transform (an inline Type 2 exponential-interpolation function
+// dictionary - no separate indirect object needed, since a function
+// object may be written directly rather than referenced) maps tint 0 to
+// white and tint 1 to (0, 0.5, 1) - a distinctive blue-ish tone chosen so
+// a rendering test can tell "the tint transform actually ran" apart from
+// either endpoint of a plausible wrong guess (plain gray from a
+// component-count fallback, for instance). The content stream selects
+// /CS0 via "cs" and paints an 80x80 square at tint 1 via "scn" - the
+// Phase 5 counterpart to buildFilledRect for a resolved, non-Device
+// color space used directly as a fill color (as opposed to only as an
+// image's /ColorSpace, which internal/image already supported before
+// Phase 5 - see docs/capability-matrix.md).
+func buildSeparationFill() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /ColorSpace << /CS0 [/Separation /Spot1 /DeviceRGB "+
+		"<< /FunctionType 2 /Domain [0 1] /C0 [1 1 1] /C1 [0 0.5 1] /N 1 >> ] >> >> "+
+		"/Contents 4 0 R >>", nil)
+
+	content := []byte("/CS0 cs\n1 scn\n10 10 80 80 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
+}
+
+// buildLabFill returns a single 100x100-point page whose /Resources
+// /ColorSpace declares /CS0 as a [/Lab dict] color space with an empty
+// parameter dictionary (so resolveLab's documented defaults apply: a D65
+// /WhitePoint and a*/b* /Range of [-100 100 -100 100]). The content
+// stream selects /CS0 and paints two 50x100 bands: the left at
+// L*=0,a*=0,b*=0 (black) and the right at L*=100,a*=0,b*=0 (white) - the
+// two points every plausible CIELAB->sRGB conversion must agree on
+// exactly (see internal/image's TestDecodeLabColorSpace, which uses the
+// same two points for the same reason), making this a robust end-to-end
+// rendering check independent of exactly which documented approximation
+// labToRGB makes for a non-neutral color.
+func buildLabFill() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /ColorSpace << /CS0 [/Lab << >>] >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("/CS0 cs\n0 0 0 scn\n0 0 50 100 re\nf\n100 0 0 scn\n50 0 50 100 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
 	return b.finish(1)
 }
 

@@ -209,6 +209,10 @@ gaps - not full implementations - see those tables' notes).
 **Exit criteria:** the renderer handles a broad compatibility corpus and has
     benchmark results for single-page, multi-page, and thumbnail workloads.
 
+**Status: in progress**, landing in reviewable sub-phases (each complete
+    and independently tested) rather than as one change. See the
+    Progress Log for what has landed so far.
+
 ### Phase 6: API stabilization and viewer integration
 
 - Decide and document concurrency guarantees, cancellation behavior, password
@@ -1070,3 +1074,118 @@ phase's entry with a note about what changed.
     all remain unimplemented, as planned. Transparency, patterns,
     shadings, annotations, and everything else in Phase 5's scope are
     otherwise untouched by this phase.
+
+### Phase 5a: PDF functions and Separation/DeviceN/Lab color spaces (2026-09-08)
+
+- **`internal/function` (new package).** PDF Function object evaluation
+    (ISO 32000-1 7.10), needed by this sub-phase's color-space work and,
+    later in Phase 5, by shading patterns - both depend on "evaluate a
+    PDF function" as their shared primitive, per the README's original
+    Phase 5 bullet grouping them together.
+  - [type2.go](internal/function/type2.go): Type 2 (exponential
+        interpolation) functions - a single input, C0/C1/N, the common
+        case for a two-stop gradient or a simple tint transform.
+  - [type3.go](internal/function/type3.go): Type 3 (stitching)
+        functions - concatenates several subfunctions over disjoint
+        subdomains, the usual way a multi-stop gradient's function data
+        is expressed.
+  - [type0.go](internal/function/type0.go): Type 0 (sampled) functions -
+        a precomputed lookup table over a regular m-dimensional input
+        grid (`maxType0Inputs` bounds m at 8, capping the 2^m-corner
+        multilinear interpolation `Eval` performs per call), read as a
+        continuous (non-row-padded) bitstream at arbitrary
+        `/BitsPerSample` widths.
+  - Type 4 (PostScript calculator functions) is explicitly unsupported
+        (an error wrapping `ErrUnsupported`, not a misinterpretation) -
+        see the package doc comment for why.
+  - Every `Eval` clips inputs to `/Domain` and outputs to `/Range`
+        (matching 7.10.1) and sanitizes non-finite arithmetic
+        (`safeFloat` in [common.go](internal/function/common.go)) so a
+        malformed function can only ever produce a wrong-looking finite
+        number, never propagate a NaN into a rendered pixel. Covered by
+        [function_test.go](internal/function/function_test.go),
+        [type0_test.go](internal/function/type0_test.go),
+        [type2_test.go](internal/function/type2_test.go), and
+        [type3_test.go](internal/function/type3_test.go); no dedicated
+        fuzz target was added, matching the precedent set by
+        `internal/image` and `internal/graphics` (packages reached only
+        through already-resolved dictionaries, not raw file bytes, are
+        exercised by the fuzz targets further up the stack instead - see
+        `internal/content`'s `FuzzParseAndInterpret`).
+- **`internal/image`: Lab, Separation, DeviceN color spaces.** Extended
+    [colorspace.go](internal/image/colorspace.go), closing three of this
+    phase's originally-deferred "Color spaces" rows:
+  - `/Lab` (`resolveLab`/`labToRGB`): standard CIELAB -> CIEXYZ -> linear
+        sRGB -> gamma-encoded sRGB, using the color space's own
+        `/WhitePoint` (default D65) for the CIEXYZ step but the
+        D65-calibrated standard XYZ->sRGB matrix regardless - a
+        documented approximation in the same spirit as this project's
+        existing non-color-managed CMYK conversion and CalRGB/CalGray
+        handling. `/Lab`'s own default `/Decode` range (`L*` in
+        `[0 100]`, `a*`/`b*` in the color space's `/Range`) required
+        [decode.go](internal/image/decode.go)'s `decodeArray` to become
+        color-space-aware (`colorSpace.decodeDefault`) rather than always
+        defaulting to `[0 1]` per component.
+  - `/Separation` and `/DeviceN` (`resolveSeparationOrDeviceN`): evaluate
+        the color space's tint-transform function
+        (`internal/function.Parse`) and convert the result through the
+        alternate color space.
+  - [public.go](internal/image/public.go) (new file) exports this same
+        resolution logic as `ResolveColorSpace`/`ColorSpace`, specifically
+        so `internal/content` (below) can reuse it rather than
+        reimplementing color-space resolution for content-stream
+        operators.
+  - Covered by new cases in
+        [colorspace_test.go](internal/image/colorspace_test.go) and
+        [colorspace_separation_test.go](internal/image/colorspace_separation_test.go),
+        including a genuinely 2-input `/DeviceN` backed by a Type 0
+        function (a Type 2 function cannot express more than one tint
+        input) and the public `ResolveColorSpace`/`ColorSpace` API
+        directly. `TestDecodeLabColorSpaceIsUnsupported` (this sub-phase's
+        former "not implemented yet" regression test) was replaced with
+        `TestDecodeLabColorSpace`, and
+        `TestInterpretDoWithUnsupportedImageFeaturePropagatesError`
+        (`internal/content`) was repointed from `/Lab` to `/Pattern` as
+        its unsupported-image-color-space example, since `/Lab` itself is
+        no longer unsupported.
+- **`internal/content`: "cs"/"CS" are no longer a no-op.** Added
+    [colorspace.go](internal/content/colorspace.go): `setColorSpace`
+    resolves a named color space via `internal/image.ResolveColorSpace`
+    and stores it on `graphics.State` (which gained `FillColorSpace`/
+    `StrokeColorSpace any` fields in
+    [state.go](internal/graphics/state.go), typed `any` for the same
+    import-cycle reason as `Font`); `colorForOperandsWithSpace` then
+    prefers that resolved color space for `sc`/`scn`/`SC`/`SCN` when its
+    component count matches the given operands, falling back to the
+    existing `colorFromComponents` count-based guessing otherwise
+    (unchanged, including its pattern-name rejection). `cs`/`CS Pattern`
+    is recorded via a distinct marker type rather than resolved as an
+    ordinary color space, since pattern paint sources remain further
+    Phase 5 work. Covered by
+    [colorspace_test.go](internal/content/colorspace_test.go), including
+    independent fill/stroke color spaces painted by one `B` operator and
+    the component-count-mismatch and unresolvable-name fallback paths.
+- **Fixture corpus and end-to-end rendering tests.** Extended
+    [tools/genfixtures](tools/genfixtures/main.go) with
+    `separation-fill.pdf` (a named `/Separation` color space, over
+    `/DeviceRGB`, filled via `cs`/`scn`) and `lab-fill.pdf` (a named
+    `/Lab` color space painting its two unambiguous extremes, `L*=0` and
+    `L*=100`, as a black/white split) - see
+    [testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md).
+    [pdfviewer_color_test.go](pdfviewer_color_test.go) adds direct
+    pixel-sampling assertions for both, and both were added to
+    [pdfviewer_render_test.go](pdfviewer_render_test.go)'s
+    `TestRenderMatchesReferenceImages` for the same whole-image regression
+    coverage every earlier phase's fixtures already have.
+- **Capability matrix updated.** `docs/capability-matrix.md`'s "Color
+    spaces" table now marks Lab, Separation, and DeviceN "Done"; the
+    "Content streams and graphics" table's `sc`/`SC`/`scn`/`SCN` row
+    describes the new resolved-color-space path and its fallback.
+- **What's carried forward.** Everything else in Phase 5's original
+    scope - transparency groups, blend modes, soft masks (the
+    ExtGState-level kind; per-image `/SMask` was already done in Phase
+    3), tiling patterns, shading patterns (including the `sh` operator
+    and Pattern as a usable `scn`/`SCN` paint source), Form XObjects,
+    annotation/form appearance streams, and the allocation-profiling/
+    resource-caching/benchmark work - remains unimplemented, to land in
+    further Phase 5 sub-phases.

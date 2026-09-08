@@ -263,23 +263,22 @@ func (in *interpreter) exec(op Operator) error {
 		}
 		st.StrokeColor = cmykColor(vals[0], vals[1], vals[2], vals[3])
 
-	case "cs", "CS":
-		// Selects the current fill/stroke color space by name, looked up
-		// in the page's /Resources /ColorSpace dictionary for anything
-		// beyond the three Device families - this package does not
-		// resolve /Resources (see the package doc comment), so cs/CS
-		// itself is a no-op; sc/scn below instead infer DeviceGray/RGB/
-		// CMYK directly from how many numeric components are given,
-		// which handles the common case without needing the color space
-		// resource at all.
+	case "cs":
+		if err := in.setColorSpace(st, op.Operands, true); err != nil {
+			return err
+		}
+	case "CS":
+		if err := in.setColorSpace(st, op.Operands, false); err != nil {
+			return err
+		}
 	case "sc", "scn":
-		col, err := colorFromComponents(op.Operands)
+		col, err := colorForOperandsWithSpace(st.FillColorSpace, op.Operands)
 		if err != nil {
 			return err
 		}
 		st.FillColor = col
 	case "SC", "SCN":
-		col, err := colorFromComponents(op.Operands)
+		col, err := colorForOperandsWithSpace(st.StrokeColorSpace, op.Operands)
 		if err != nil {
 			return err
 		}
@@ -621,8 +620,11 @@ func clamp01(v float64) float64 {
 }
 
 // colorFromComponents implements sc/SC/scn/SCN's fallback behavior for
-// when the active color space has not been resolved (see the "cs"/"CS"
-// case in exec): it infers DeviceGray/DeviceRGB/DeviceCMYK directly from
+// when the active color space has not been resolved (see
+// colorspace.go's colorForOperandsWithSpace, which calls this whenever
+// "cs"/"CS" was never invoked, named something setColorSpace could not
+// resolve, or the resolved space's component count does not match
+// operands): it infers DeviceGray/DeviceRGB/DeviceCMYK directly from
 // how many numeric operands are given (1, 3, or 4, respectively) - the
 // number of components those three color spaces need is unambiguous, so
 // this works correctly whenever the content stream's /ColorSpace

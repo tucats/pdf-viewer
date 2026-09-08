@@ -48,10 +48,19 @@
 // than fill/invisible are all treated as fill; vertical writing mode
 // advances horizontally).
 //
-// Shading ("sh"), marked content, dash patterns, and ExtGState
-// parameters (transparency, blend modes) remain Phase 5 work and are
-// silently skipped (Interpret still renders whatever it does
-// understand) - see Interpret's doc comment and
-// docs/capability-matrix.md for the authoritative, up-to-date breakdown
-// of what is implemented versus merely tolerated.
+// Phase 5 begins by making "cs"/"CS" no longer a no-op: colorspace.go's
+// setColorSpace resolves a named color space (Separation, DeviceN, Lab,
+// Indexed, ICCBased, ...) via internal/image's exported color-space
+// resolution logic (the same code an image's own /ColorSpace entry
+// already used), storing it on graphics.State so "sc"/"scn"/"SC"/"SCN"
+// (colorForOperandsWithSpace) can convert their operands through it
+// instead of only ever guessing DeviceGray/RGB/CMYK by component count -
+// see colorspace.go's own doc comment. Form XObjects ("Do" naming a
+// /Form), shading ("sh"), patterns ("scn"/"SCN" with a pattern name),
+// marked content, dash patterns, and ExtGState parameters (transparency,
+// blend modes) remain further Phase 5 work and are silently skipped
+// (Interpret still renders whatever it does understand) - see
+// Interpret's doc comment and docs/capability-matrix.md for the
+// authoritative, up-to-date breakdown of what is implemented versus
+// merely tolerated.
 package content

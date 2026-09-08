@@ -174,6 +174,8 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"text-type0-identity.pdf",
 		"text-notdef-fallback.pdf",
 		"text-rotated-page.pdf",
+		"separation-fill.pdf",
+		"lab-fill.pdf",
 	}
 
 	if *update {

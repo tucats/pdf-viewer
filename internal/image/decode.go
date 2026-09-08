@@ -110,7 +110,7 @@ func decodeInternal(dict syntax.Dictionary, samples []byte, opts Options, depth 
 	isIndexed := cs.indexed != nil
 	rawComponents := rawComponentsPerPixel(bool(isMask), isIndexed, cs.components)
 
-	decodeArr, err := decodeArray(dict, bool(isMask), isIndexed, cs.components, bpc)
+	decodeArr, err := decodeArray(dict, bool(isMask), isIndexed, cs, bpc)
 	if err != nil {
 		return nil, err
 	}
@@ -221,17 +221,23 @@ func dimensions(dict syntax.Dictionary) (width, height int, err error) {
 // dictionary's own /Decode if present (validated against the expected
 // length), or the color space family's documented default range
 // otherwise (per the PDF specification: [0 1] repeated per component for
-// every continuous color space, [0 2^BitsPerComponent-1] for an /Indexed
-// color space's single index "component", and [0 1] for an /ImageMask's
-// single sample).
-func decodeArray(dict syntax.Dictionary, isMask, isIndexed bool, csComponents, bpc int) ([]float64, error) {
-	n := rawComponentsPerPixel(isMask, isIndexed, csComponents)
+// most continuous color spaces, [0 2^BitsPerComponent-1] for an /Indexed
+// color space's single index "component", [0 1] for an /ImageMask's
+// single sample, and - the one exception to the "[0 1] repeated"
+// continuous-space rule - whatever cs.decodeDefault gives for a color
+// space like /Lab whose components do not range over [0,1] at all; see
+// colorSpace.decodeDefault's own doc comment).
+func decodeArray(dict syntax.Dictionary, isMask, isIndexed bool, cs colorSpace, bpc int) ([]float64, error) {
+	n := rawComponentsPerPixel(isMask, isIndexed, cs.components)
 
-	def := make([]float64, 2*n)
+	var def []float64
 	switch {
 	case isIndexed:
-		def[0], def[1] = 0, float64((uint64(1)<<uint(bpc))-1)
+		def = []float64{0, float64((uint64(1) << uint(bpc)) - 1)}
+	case cs.decodeDefault != nil:
+		def = cs.decodeDefault
 	default:
+		def = make([]float64, 2*n)
 		for i := 0; i < n; i++ {
 			def[2*i], def[2*i+1] = 0, 1
 		}

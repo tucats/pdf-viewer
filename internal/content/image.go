@@ -18,15 +18,14 @@ import (
 // hand to internal/image.Decode.
 
 // doXObject implements "Do": it looks up operands[0] (which must be a
-// single Name) in in.resources's /XObject dictionary and, if the
-// resolved object is a stream whose /Subtype is /Image, decodes and
-// paints it. Any other outcome - the name is not found, /Resources or
-// /XObject is missing, or the XObject's /Subtype is /Form (or anything
-// else) - is silently tolerated rather than treated as an error: a
+// single Name) in in.resources's /XObject dictionary and, if found,
+// decodes and paints it (for /Subtype /Image, via paintImage) or
+// recursively interprets it (for /Subtype /Form, via doForm - see
+// form.go). Any other outcome - the name is not found, /Resources or
+// /XObject is missing, or the XObject's /Subtype is neither /Image nor
+// /Form - is silently tolerated rather than treated as an error: a
 // missing resource is already how this project treats an unresolvable
-// name elsewhere (see, for example, "cs"/"CS"), and a /Form XObject is a
-// feature this package does not implement yet at all (see the package
-// doc comment) rather than something detectably wrong with the content.
+// name elsewhere (see, for example, "cs"/"CS").
 func (in *interpreter) doXObject(st *graphics.State, operands []syntax.Object) error {
 	if in.resolver == nil {
 		// No resolver was supplied at all - there is structurally no way
@@ -58,18 +57,21 @@ func (in *interpreter) doXObject(st *graphics.State, operands []syntax.Object) e
 	if err != nil {
 		return err
 	}
-	if subtype, _ := dict["Subtype"].(syntax.Name); subtype != "Image" {
-		// Not an image (a /Form XObject, or a dictionary with no/wrong
-		// /Subtype) - unsupported, but not an error; see this function's
-		// doc comment.
+	subtype, _ := dict["Subtype"].(syntax.Name)
+	switch subtype {
+	case "Image":
+		samples, err := in.resolver.DecodeStream(stream)
+		if err != nil {
+			return err
+		}
+		return in.paintImage(st, dict, samples)
+	case "Form":
+		return in.doForm(st, dict, stream)
+	default:
+		// A dictionary with no/wrong /Subtype - unsupported, but not an
+		// error; see this function's doc comment.
 		return nil
 	}
-
-	samples, err := in.resolver.DecodeStream(stream)
-	if err != nil {
-		return err
-	}
-	return in.paintImage(st, dict, samples)
 }
 
 // lookupXObject resolves name within in.resources's /XObject dictionary,

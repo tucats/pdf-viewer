@@ -129,11 +129,12 @@ func TestInterpretDoPaintsReferencedImage(t *testing.T) {
 	}
 }
 
-// TestInterpretDoWithFormXObjectIsSkipped confirms a "Do" naming a
-// non-Image XObject (a Form, in this case) is silently skipped rather
-// than treated as an error - Form XObjects are not implemented yet; see
-// the package doc comment.
-func TestInterpretDoWithFormXObjectIsSkipped(t *testing.T) {
+// TestInterpretDoWithEmptyFormXObjectAddsNothing confirms a "Do" naming
+// a /Form XObject with no content bytes of its own contributes no
+// DrawOps (as opposed to erroring, or somehow producing an image
+// DrawOp) - see form_test.go for real (non-empty) Form XObject coverage,
+// now that Form XObjects are implemented (form.go's doForm).
+func TestInterpretDoWithEmptyFormXObjectAddsNothing(t *testing.T) {
 	formStream := syntax.Stream{Dict: syntax.Dictionary{"Subtype": syntax.Name("Form")}, Raw: nil}
 	resources := syntax.Dictionary{"XObject": syntax.Dictionary{"Fm0": formStream}}
 

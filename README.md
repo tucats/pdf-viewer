@@ -1292,3 +1292,78 @@ phase's entry with a note about what changed.
     annotation/form appearance streams, and the allocation-profiling/
     resource-caching/benchmark work all remain unimplemented, to land in
     further Phase 5 sub-phases.
+
+### Phase 5c: Form XObjects (2026-09-08)
+
+- **`internal/content`: "Do" with `/Subtype /Form` (new file,
+    form.go).** `image.go`'s `doXObject` now dispatches on the resolved
+    XObject's `/Subtype` (previously only ever `/Image` did anything;
+    every other value, including `/Form`, was silently skipped) to
+    `doForm`: it builds the form's own initial CTM (its `/Matrix`,
+    default identity, concatenated onto the CTM *active where "Do"
+    runs* - unlike a pattern's `/Matrix`, which is deliberately anchored
+    to the content stream's default coordinate system instead, per
+    8.10.1 versus 8.7.3.1 - see shading.go's `resolvePatternPaint` for
+    that contrast made explicit), maps its `/BBox` through that same CTM
+    into an additional clip, resolves its own `/Resources` (falling back
+    to the calling content stream's when the form specifies none, per
+    8.10.2's inheritance rule), and recursively interprets its content
+    stream. A form's own `DrawOp`s are flattened directly into the
+    caller's display list - clipped by both the outer content's active
+    clip and the form's own `/BBox` (`mergeClips`) - rather than
+    rendered to an intermediate offscreen buffer first: since every
+    `DrawOp` still only ever paints its own shape's coverage onto the
+    one, single, always-opaque page canvas, this is already fully
+    correct for a form whose content does not cover every pixel of its
+    own `/BBox` (the page shows through the gaps naturally), with no
+    alpha-compositing machinery needed at all - see form.go's own doc
+    comment for why this is *not* true of a tiling pattern (deferred; see
+    below).
+  - `Interpret` is now implemented in terms of a new, depth-parameterized
+        `interpretAtDepth` ([interpret.go](internal/content/interpret.go))
+        so `doForm` can recurse back into the same machinery while still
+        being counted against `maxFormDepth` (8 levels) - the guard
+        against a self-referential or cyclic Form XObject (Form A's
+        content names Form A again, directly or through an intermediate
+        B), which `internal/parser`'s own cyclic-reference guard cannot
+        catch (each object individually resolves fine; only replaying
+        through this package's own recursive interpretation would loop
+        forever) - the same shape of hazard, and the same style of bound,
+        as `internal/image`'s `maxMaskRecursionDepth`.
+  - Covered by [form_test.go](internal/content/form_test.go): nested
+        content painting, `/Matrix` composed with the *current* (not
+        initial) CTM, `/BBox` clipping alone and merged with an outer
+        clip, `/Resources` fallback and override, and a cyclic
+        self-reference test run with a timeout (matching
+        `internal/image`'s identically-motivated mask-recursion
+        regression test) so a future regression that breaks the depth
+        guard fails loudly rather than hanging the suite.
+        [image_test.go](internal/content/image_test.go)'s
+        `TestInterpretDoWithFormXObjectIsSkipped` was renamed and
+        re-scoped to `TestInterpretDoWithEmptyFormXObjectAddsNothing`,
+        since Form XObjects are no longer skipped in general - only an
+        empty one contributes nothing.
+- **Fixture corpus and end-to-end rendering test.** Extended
+    [tools/genfixtures](tools/genfixtures/main.go) with
+    `form-xobject.pdf`: a Form XObject translated by `(30,30)` via `cm`
+    whose content deliberately overflows its own `/BBox`, so only the
+    hand-derived intersection (a 40x40 red square centered on the page)
+    should actually render - see
+    [testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md).
+    [pdfviewer_form_test.go](pdfviewer_form_test.go) adds direct
+    pixel-sampling assertions, and the fixture was added to
+    [pdfviewer_render_test.go](pdfviewer_render_test.go)'s
+    `TestRenderMatchesReferenceImages`.
+- **Capability matrix updated.** `docs/capability-matrix.md`'s "Form
+    XObjects" row (previously grouped as "Phase 3/5, not yet scheduled
+    precisely") is now "Phase 5, Done".
+- **What's carried forward.** Tiling patterns (which, unlike Form
+    XObjects, need an offscreen, alpha-aware tile buffer to rasterize a
+    reusable repeating image - deferred until this sub-phase's Form
+    XObject work could establish that a form itself needs no such
+    buffer, clarifying exactly what tiling patterns still require),
+    annotation/form appearance streams (which can now reuse this
+    sub-phase's Form-execution machinery directly), transparency groups,
+    blend modes, ExtGState-level soft masks, and the allocation-
+    profiling/resource-caching/benchmark work all remain unimplemented,
+    to land in further Phase 5 sub-phases.

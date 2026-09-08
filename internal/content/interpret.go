@@ -33,23 +33,35 @@ import (
 // an XObject image in the first place, since there would be nothing for
 // "Do" to name).
 //
-// Interpret does not abort on an operator it does not recognize (Form
-// XObject painting via "Do", shading via "sh", marked content, and so on
-// - none of which is implemented yet; see the package doc comment) -
-// those are silently skipped, so a page mixing supported
-// content with unsupported features still renders whatever this package
-// can handle rather than failing the whole page. It does return an error
-// for content that is itself malformed (wrong operand count or type for
-// a recognized operator, or a malformed inline/referenced image) or that
-// names an explicitly unsupported feature this package can positively
-// detect (pattern color spaces, an image using an unsupported color
-// space or filter) rather than merely not recognizing.
+// Interpret does not abort on an operator it does not recognize (marked
+// content, dash patterns, ExtGState parameters, and so on - none of
+// which is implemented yet; see the package doc comment) - those are
+// silently skipped, so a page mixing supported content with unsupported
+// features still renders whatever this package can handle rather than
+// failing the whole page. It does return an error for content that is
+// itself malformed (wrong operand count or type for a recognized
+// operator, or a malformed inline/referenced image) or that names an
+// explicitly unsupported feature this package can positively detect
+// (pattern color spaces, an image using an unsupported color space or
+// filter, a tiling pattern, an unsupported shading type) rather than
+// merely not recognizing.
 func Interpret(ops []Operator, initialCTM graphics.Matrix, resources syntax.Dictionary, resolver pdfimage.Resolver) (graphics.DisplayList, error) {
+	return interpretAtDepth(ops, initialCTM, resources, resolver, 0)
+}
+
+// interpretAtDepth is Interpret's actual implementation, parameterized
+// by formDepth so a Form XObject's own content stream (doForm, in
+// form.go) can recursively call back into this same machinery while
+// still being counted against maxFormDepth - Interpret itself is just
+// this function called with formDepth 0, the only value a caller outside
+// this package could ever need.
+func interpretAtDepth(ops []Operator, initialCTM graphics.Matrix, resources syntax.Dictionary, resolver pdfimage.Resolver, formDepth int) (graphics.DisplayList, error) {
 	in := &interpreter{
 		stack:      graphics.NewStack(graphics.NewState(initialCTM)),
 		resources:  resources,
 		resolver:   resolver,
 		initialCTM: initialCTM,
+		formDepth:  formDepth,
 	}
 	for _, op := range ops {
 		if err := in.exec(op); err != nil {
@@ -96,6 +108,11 @@ type interpreter struct {
 	// resolvePatternPaint), which the live, mutable CTM on graphics.State
 	// cannot supply once any "cm" has run.
 	initialCTM graphics.Matrix
+
+	// formDepth counts how many Form XObjects deep this interpreter is
+	// nested (0 for the page's own top-level content) - see form.go's
+	// maxFormDepth and doForm for the recursion guard this backs.
+	formDepth int
 
 	// text holds Phase 4's text-object-local state (the text/line
 	// matrices and the font cache) - see textInterpreterState's doc

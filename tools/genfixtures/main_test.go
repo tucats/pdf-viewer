@@ -51,6 +51,7 @@ func TestGeneratedFixturesMatchCheckedInFiles(t *testing.T) {
 		"axial-shading.pdf":             buildAxialShading(),
 		"radial-shading.pdf":            buildRadialShading(),
 		"shading-pattern-fill.pdf":      buildShadingPatternFill(),
+		"form-xobject.pdf":              buildFormXObject(),
 	}
 
 	for name, want := range fixtures {
@@ -102,6 +103,7 @@ func TestFixtureSetIsComplete(t *testing.T) {
 		"axial-shading.pdf":             true,
 		"radial-shading.pdf":            true,
 		"shading-pattern-fill.pdf":      true,
+		"form-xobject.pdf":              true,
 	}
 
 	entries, err := os.ReadDir(outputDir)

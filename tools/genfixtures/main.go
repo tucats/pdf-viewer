@@ -102,6 +102,7 @@ func main() {
 		{"axial-shading.pdf", buildAxialShading()},
 		{"radial-shading.pdf", buildRadialShading()},
 		{"shading-pattern-fill.pdf", buildShadingPatternFill()},
+		{"form-xobject.pdf", buildFormXObject()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -733,6 +734,36 @@ func buildShadingPatternFill() []byte {
 
 	content := []byte("/Pattern cs\n/P0 scn\n10 10 80 80 re\nf\n")
 	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
+}
+
+// buildFormXObject returns a single 100x100-point page that invokes a
+// Form XObject ("Fm0") translated by (30,30) via "cm": the form's own
+// content deliberately fills the *entire* page red (`0 0 100 100 re f`),
+// overflowing its own declared /BBox ([0 0 40 40] in form space) - so
+// only the resulting device-space intersection of that BBox with the
+// translation actually ends up painted. Worked out by hand: form space
+// (0,0)-(40,40), translated by (30,30) in user space before the page's
+// own y-flip, lands at device (30,30)-(70,70) - a 40x40 red square
+// centered on the page, with the rest of the page left as the untouched
+// white background. This is the baseline Phase 5 fixture for Form
+// XObjects: it fails outright (painting the whole page red) if either
+// the form's /Matrix-then-current-CTM composition or its /BBox clipping
+// is wrong, rather than only partially.
+func buildFormXObject() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /XObject << /Fm0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n1 0 0 1 30 30 cm\n/Fm0 Do\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	formContent := []byte("1 0 0 rg\n0 0 100 100 re\nf\n")
+	formDict := fmt.Sprintf("<< /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Length %d >>", len(formContent))
+	b.addObject(5, 0, formDict, formContent)
+
 	return b.finish(1)
 }
 

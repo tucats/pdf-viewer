@@ -40,6 +40,11 @@ func FuzzParseAndInterpret(f *testing.F) {
 		// shading_test.go and internal/graphics/shading_test.go.
 		"/Sh1 sh",
 		"/Pattern cs /P1 scn 0 0 5 5 re f",
+		// Phase 5: Form XObjects - with resources nil, "Do" naming a Form
+		// always hits the "no /Resources" tolerance path (lookupXObject),
+		// never reaching form.go's real recursion/BBox/Matrix logic; that
+		// is instead covered directly by form_test.go.
+		"q 1 0 0 1 10 10 cm /Fm1 Do Q",
 		"(text) Tj BT ET",
 		"/Im1 Do",
 		"[[[[1]]]] op",

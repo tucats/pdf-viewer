@@ -179,6 +179,7 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"axial-shading.pdf",
 		"radial-shading.pdf",
 		"shading-pattern-fill.pdf",
+		"form-xobject.pdf",
 	}
 
 	if *update {

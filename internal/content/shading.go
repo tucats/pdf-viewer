@@ -233,98 +233,136 @@ func (in *interpreter) buildShading(dict syntax.Dictionary, shadingToDevice grap
 }
 
 // resolvePatternPaint resolves name within in.resources's /Pattern
-// dictionary and, if it names a shading pattern (/PatternType 2), builds
-// the graphics.Shading it should paint with - see colorspace.go's
-// setPaintColor, which calls this for a "sc"/"scn"/"SC"/"SCN" operand
-// ending in a Name.
+// dictionary and builds whichever paint source it names: a
+// graphics.Shading for a shading pattern (/PatternType 2 - the returned
+// *graphics.TilingPattern is nil), or a *graphics.TilingPattern for a
+// tiling pattern (/PatternType 1, built by buildTilingPattern below -
+// the returned *graphics.Shading is nil). Exactly one of the two return
+// values is non-nil on success; colorspace.go's setPaintColor (this
+// function's only caller, for a "sc"/"scn"/"SC"/"SCN" operand ending in
+// a Name) assigns whichever one to the matching graphics.State field.
 //
-// The returned Shading's ShadingToDevice combines the pattern's own
-// /Matrix (default identity) with in.initialCTM, *not* the current,
-// possibly-"cm"-mutated CTM: per the specification (8.7.3.1), "the
-// pattern matrix maps pattern space to the default (initial) coordinate
-// system of the pattern's parent content stream" - deliberately
-// independent of the graphics state in effect at the moment the pattern
-// is selected or later used to paint, which is what makes a pattern look
-// the same regardless of what transform happens to be active wherever it
-// is used.
+// Both pattern types share one rule this function applies once, up
+// front: the pattern's own /Matrix (default identity) is combined with
+// in.initialCTM, *not* the current, possibly-"cm"-mutated CTM - per the
+// specification (8.7.3.1), "the pattern matrix maps pattern space to the
+// default (initial) coordinate system of the pattern's parent content
+// stream", deliberately independent of the graphics state in effect at
+// the moment the pattern is selected or later used to paint, which is
+// what makes a pattern look the same regardless of what transform
+// happens to be active wherever it is used.
 //
 // Every failure mode - no /Resources, no /Pattern dictionary, no entry
-// under name, a tiling pattern (/PatternType 1, not yet implemented), or
-// an unsupported/malformed shading - returns an error wrapping
-// ErrUnsupported or ErrMalformed as appropriate, matching this
-// function's only caller's expectation that a pattern name it cannot
-// resolve to a paintable shading is a real error, not a silently
-// tolerated missing resource (see setPaintColor's doc comment).
-func (in *interpreter) resolvePatternPaint(name syntax.Name) (*graphics.Shading, error) {
+// under name, an unsupported pattern type, or a malformed/unsupported
+// shading or tiling pattern - returns an error wrapping ErrUnsupported
+// or ErrMalformed as appropriate, matching this function's only
+// caller's expectation that a pattern name it cannot resolve to a
+// paintable result is a real error, not a silently tolerated missing
+// resource (see setPaintColor's doc comment).
+func (in *interpreter) resolvePatternPaint(name syntax.Name) (*graphics.Shading, *graphics.TilingPattern, error) {
 	if in.resolver == nil || in.resources == nil {
-		return nil, pdferror.Unsupportedf("pattern color space (scn/SCN with a pattern name, but no /Resources)")
+		return nil, nil, pdferror.Unsupportedf("pattern color space (scn/SCN with a pattern name, but no /Resources)")
 	}
 	patEntry, ok := in.resources["Pattern"]
 	if !ok {
-		return nil, pdferror.Unsupportedf("pattern color space (scn/SCN with a pattern name, but /Resources has no /Pattern dictionary)")
+		return nil, nil, pdferror.Unsupportedf("pattern color space (scn/SCN with a pattern name, but /Resources has no /Pattern dictionary)")
 	}
 	resolvedPatRes, err := resolveIfRef(in.resolver, patEntry)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	patResDict, ok := resolvedPatRes.(syntax.Dictionary)
 	if !ok {
-		return nil, pdferror.Malformedf("/Resources /Pattern is not a dictionary (found %T)", resolvedPatRes)
+		return nil, nil, pdferror.Malformedf("/Resources /Pattern is not a dictionary (found %T)", resolvedPatRes)
 	}
 	entry, ok := patResDict[name]
 	if !ok {
-		return nil, pdferror.Unsupportedf("pattern resource /%s not found in /Resources /Pattern", name)
+		return nil, nil, pdferror.Unsupportedf("pattern resource /%s not found in /Resources /Pattern", name)
 	}
-	patternDict, found, err := in.dictionaryOrStreamDict(entry)
+	resolvedEntry, err := resolveIfRef(in.resolver, entry)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if !found {
-		return nil, pdferror.Malformedf("pattern resource /%s is neither a dictionary nor a stream", name)
+
+	// A pattern object is a dictionary for a shading pattern
+	// (/PatternType 2 - no sample data of its own beyond what its
+	// /Shading entry separately holds) but a *stream* for a tiling
+	// pattern (/PatternType 1 - the stream's own bytes are the
+	// pattern cell's content stream, which buildTilingPattern needs in
+	// addition to the dictionary) - both shapes are captured here so
+	// whichever branch below actually runs has what it needs, without
+	// this package's usual dictionaryOrStreamDict helper (which
+	// deliberately discards a stream's Raw bytes, useful for every
+	// other object this package looks up this way, but not for a
+	// tiling pattern specifically).
+	var patternDict syntax.Dictionary
+	var patternStream syntax.Stream
+	isStream := false
+	switch v := resolvedEntry.(type) {
+	case syntax.Dictionary:
+		patternDict = v
+	case syntax.Stream:
+		patternDict, patternStream, isStream = v.Dict, v, true
+	default:
+		return nil, nil, pdferror.Malformedf("pattern resource /%s is neither a dictionary nor a stream", name)
 	}
 
 	ptObj, ok := patternDict["PatternType"]
 	if !ok {
-		return nil, pdferror.Malformedf("pattern dictionary has no /PatternType")
+		return nil, nil, pdferror.Malformedf("pattern dictionary has no /PatternType")
 	}
 	resolvedPt, err := resolveIfRef(in.resolver, ptObj)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ptNum, ok := numberValue(resolvedPt)
 	if !ok {
-		return nil, pdferror.Malformedf("/PatternType is not a number (found %T)", resolvedPt)
-	}
-	if int(ptNum) != 2 {
-		return nil, pdferror.Unsupportedf("pattern type %d (only shading patterns [/PatternType 2] are supported; tiling patterns [/PatternType 1] remain unimplemented)", int(ptNum))
-	}
-
-	shadingObj, ok := patternDict["Shading"]
-	if !ok {
-		return nil, pdferror.Malformedf("shading pattern has no /Shading entry")
-	}
-	shadingDict, found, err := in.dictionaryOrStreamDict(shadingObj)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, pdferror.Malformedf("shading pattern's /Shading is neither a dictionary nor a stream")
+		return nil, nil, pdferror.Malformedf("/PatternType is not a number (found %T)", resolvedPt)
 	}
 
 	patternMatrix := graphics.Identity()
 	if matrixVals, found, err := floatArrayEntry(in.resolver, patternDict, "Matrix"); err != nil {
-		return nil, err
+		return nil, nil, err
 	} else if found {
 		if len(matrixVals) != 6 {
-			return nil, pdferror.Malformedf("pattern /Matrix must have 6 entries, has %d", len(matrixVals))
+			return nil, nil, pdferror.Malformedf("pattern /Matrix must have 6 entries, has %d", len(matrixVals))
 		}
 		patternMatrix = graphics.Matrix{
 			A: matrixVals[0], B: matrixVals[1], C: matrixVals[2],
 			D: matrixVals[3], E: matrixVals[4], F: matrixVals[5],
 		}
 	}
+	// Per the specification, a pattern's own /Matrix is always defined
+	// relative to the *default* coordinate system of the content stream
+	// that named it (in.initialCTM) - both pattern types share this
+	// exact rule; see buildShading's caller here and buildTilingPattern
+	// for where each uses it.
+	patternToDevice := patternMatrix.Mul(in.initialCTM)
 
-	return in.buildShading(shadingDict, patternMatrix.Mul(in.initialCTM))
+	switch int(ptNum) {
+	case 2:
+		shadingObj, ok := patternDict["Shading"]
+		if !ok {
+			return nil, nil, pdferror.Malformedf("shading pattern has no /Shading entry")
+		}
+		shadingDict, found, err := in.dictionaryOrStreamDict(shadingObj)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !found {
+			return nil, nil, pdferror.Malformedf("shading pattern's /Shading is neither a dictionary nor a stream")
+		}
+		sh, err := in.buildShading(shadingDict, patternToDevice)
+		return sh, nil, err
+	case 1:
+		if !isStream {
+			return nil, nil, pdferror.Malformedf("tiling pattern (/PatternType 1) is not a stream")
+		}
+		tiling, err := in.buildTilingPattern(patternDict, patternStream, patternToDevice)
+		return nil, tiling, err
+	default:
+		return nil, nil, pdferror.Unsupportedf("pattern type %d (only tiling [1] and shading [2] patterns are supported)", int(ptNum))
+	}
 }
 
 // floatArrayEntry resolves dict[key] (following a top-level reference,

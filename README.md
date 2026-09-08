@@ -1538,3 +1538,104 @@ phase's entry with a note about what changed.
     sub-phases that did not need an alpha-aware offscreen tile buffer;
     tiling patterns specifically await that buffer, which a future
     sub-phase will need to design as part of implementing them.
+
+### Phase 5f: Tiling patterns (2026-09-08)
+
+- **`internal/raster`: `RenderTransparent` (new file, tile.go).** The
+    alpha-aware offscreen buffer Phase 5e's own entry predicted tiling
+    patterns would need: unlike `Render` (which always starts from an
+    opaque background, since every other rendered result this project
+    produces is a flattened, standalone raster), `RenderTransparent`
+    composites a `DisplayList` onto a genuinely transparent buffer using
+    the standard "over" operator with a real, tracked per-pixel alpha
+    channel (`compositeOp`/`overComposite`), returning a
+    `graphics.Image`. This is deliberately separate machinery from
+    `Canvas.paint` (a small, documented duplication of its coverage-
+    rasterization loop) rather than a generalization of it, since the
+    two compositing targets - "replace, always opaque" versus "over,
+    with real alpha" - differ in essentially every line past computing
+    shape coverage. Blend modes are not honored while building a tile
+    (always treated as Normal - see the file's own doc comment for why
+    this was judged an acceptable, documented simplification rather than
+    implementing the specification's fuller non-isolated-group
+    compositing formula solely for this case). Covered by
+    [tile_test.go](internal/raster/tile_test.go), including that a
+    partial-alpha fill accumulates real (non-1) output alpha and that
+    two overlapping ops composite correctly.
+- **`internal/raster`: `Canvas.DrawImage` gains `repeat`.** A new
+    `repeat` parameter ([canvas.go](internal/raster/canvas.go)) makes an
+    out-of-`[0,1)` image-space coordinate wrap back into range (`wrap01`)
+    along each axis independently, rather than painting nothing - the
+    standard texture "tile" addressing mode, letting one small
+    pre-rendered pattern cell repeat correctly across however large a
+    shape it fills. `graphics.DrawOp` gained a matching `Repeat` field.
+- **`internal/graphics`: `TilingPattern` (shading.go) and `State`/
+    `DrawOp` support.** `TilingPattern` bundles a rendered cell (`*Image`)
+    with the matrix mapping its own unit square to one repetition in
+    device space - the tiling-pattern counterpart to `Shading`.
+    `graphics.State` gained `FillTiling`/`StrokeTiling *TilingPattern`,
+    exactly mirroring `FillShading`/`StrokeShading`; exactly one of a
+    State's four `Fill(Shading|Tiling)`/`Stroke(Shading|Tiling)` fields
+    (or neither, for an ordinary color) is ever non-nil at a time.
+- **`internal/content`: tiling pattern resolution (new file,
+    tilingpattern.go).** `shading.go`'s `resolvePatternPaint` was
+    generalized to return either a `*graphics.Shading` (unchanged,
+    `/PatternType 2`) or a `*graphics.TilingPattern` (new,
+    `/PatternType 1`, via `buildTilingPattern`), both built from the same
+    up-front `patternToDevice` (the pattern's own `/Matrix` combined with
+    the content stream's *default* coordinate system,
+    `in.initialCTM` - the rule both pattern types share, per the
+    specification). `buildTilingPattern` reads a tiling pattern's
+    `/BBox`, `/XStep`/`/YStep` (required, and must be positive - a
+    documented restriction; PDF technically permits a negative step,
+    which this project's tile-image approach does not attempt to
+    support), and `/PaintType` (only 1, "colored", is supported - see the
+    file's own doc comment for why 2, "uncolored", is out of scope: it
+    would need forcing an externally supplied color into every paint
+    operation inside the cell's content, a distinct interpretation mode
+    this package does not implement); chooses the tile image's pixel
+    size from the device-space length of one `XStep`/`YStep` repetition
+    under `patternToDevice` (bounded by the new
+    `maxPatternTileDimension`, 1024, against a degenerate or oversized
+    request); recursively interprets the pattern's own content stream
+    (via `interpretAtDepth`, bounded by the existing `maxFormDepth`
+    against a self-referential pattern, exactly like a Form XObject); and
+    renders the result via `raster.RenderTransparent`.
+    `colorspace.go`'s `setPaintColor` and `interpret.go`'s
+    `fillCurrentPath`/`strokeCurrentPath` were extended to check
+    `Fill/StrokeTiling` alongside `Fill/StrokeShading`, and every place
+    that already cleared a stale shading pattern (a plain "sc"/"scn"/
+    "SC"/"SCN" color, or the direct "g"/"rg"/"k"/"G"/"RG"/"K" operators)
+    now clears a stale tiling pattern the same way. Covered by
+    [tilingpattern_test.go](internal/content/tilingpattern_test.go)
+    (a rendered tile's transparent/opaque regions, the initial-vs-current
+    CTM distinction, `/BBox`/`/XStep` validation, and a pattern's own
+    `/Resources` resolving a nested "Do" independently of the caller's);
+    [shading_test.go](internal/content/shading_test.go)'s former
+    blanket "any /PatternType 1 is unsupported" test was replaced with
+    one specifically for `/PaintType 2` (still unsupported) and one for
+    a `/PatternType 1` pattern object that is a bare dictionary rather
+    than the required stream (now malformed, not unsupported, since a
+    tiling pattern is genuinely implemented).
+- **Fixture corpus and end-to-end rendering test.** Extended
+    [tools/genfixtures](tools/genfixtures/main.go) with
+    `tiling-pattern-fill.pdf`: a 20x20-unit cell painting a 10x10 red
+    square at its own origin, tiled across an 80x80 filled square - see
+    [testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md) for
+    the hand-derived expected geometry, confirmed by a new case in
+    [pdfviewer_render_test.go](pdfviewer_render_test.go) (both a cell's
+    red square and its transparent surroundings) and added to that
+    file's `TestRenderMatchesReferenceImages`.
+- **Capability matrix updated.** `docs/capability-matrix.md`'s "Tiling
+    patterns" row is now "Partial" (colored patterns done; uncolored are
+    not); "Pattern color space" in "Color spaces" is now "Done".
+- **What's carried forward.** Transparency groups (isolated/knockout
+    compositing semantics for a `/Group` Form XObject), ExtGState-level
+    soft masks, the four non-separable blend modes, uncolored
+    (`/PaintType 2`) tiling patterns, and the allocation-profiling/
+    resource-caching/benchmark work all remain unimplemented. This is
+    the last of the sub-phases addressing the README's original Phase 5
+    bullet list item by item; what remains is either a substantially
+    harder, lower-real-world-impact feature (true transparency-group
+    isolation) or the phase's closing exit-criteria work (benchmarks,
+    caching).

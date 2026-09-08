@@ -85,37 +85,38 @@ var patternColorSpaceSelected = patternColorSpaceMarker{}
 
 // setPaintColor implements the full "sc"/"scn" (fill=true) and "SC"/
 // "SCN" (fill=false) operand interpretation, added to on top of
-// colorForOperandsWithSpace once Phase 5's shading-pattern support (see
-// shading.go) gave a pattern name operand something real to do: if
-// operands ends in a Name (PDF's own encoding for "the fill/stroke paint
-// source is a pattern resource, named here" - see 8.7.3.3), that name is
-// resolved via resolvePatternPaint and, on success, becomes the
-// corresponding graphics.State.Fill/StrokeShading; otherwise operands are
+// colorForOperandsWithSpace once Phase 5's pattern support (see
+// shading.go and tilingpattern.go) gave a pattern name operand something
+// real to do: if operands ends in a Name (PDF's own encoding for "the
+// fill/stroke paint source is a pattern resource, named here" - see
+// 8.7.3.3), that name is resolved via resolvePatternPaint and, on
+// success, becomes the corresponding graphics.State.Fill/StrokeShading
+// (a shading pattern) or Fill/StrokeTiling (a tiling pattern) - exactly
+// one of the pair is set, the other cleared; otherwise operands are
 // interpreted as ordinary numeric color components exactly as before
-// (colorForOperandsWithSpace), and any previously selected shading
-// pattern for this side is cleared - selecting a plain color always
-// fully replaces whatever paint source was active before, pattern or
-// not.
+// (colorForOperandsWithSpace), and both are cleared for this side -
+// selecting a plain color always fully replaces whatever paint source
+// was active before, pattern or not.
 //
 // A pattern name that resolvePatternPaint cannot turn into a usable
-// Shading (unresolvable, a tiling pattern, or an unsupported shading
-// type) propagates as an error exactly like it always has (see
-// colorFromComponents' own, now largely superseded, pattern-name
-// rejection below) - a page using a pattern this project cannot yet
-// paint is treated the same as one using any other explicitly detected
-// unsupported feature (a Lab-in-Phase-3 image, once, or an unsupported
-// image filter now), not silently skipped.
+// paint source (unresolvable, an unsupported pattern type, or a
+// malformed/unsupported shading or tiling pattern) propagates as an
+// error exactly like it always has (see colorFromComponents' own, now
+// largely superseded, pattern-name rejection below) - a page using a
+// pattern this project cannot paint is treated the same as one using any
+// other explicitly detected unsupported feature (a Lab-in-Phase-3 image,
+// once, or an unsupported image filter now), not silently skipped.
 func (in *interpreter) setPaintColor(st *graphics.State, operands []syntax.Object, fill bool) error {
 	if len(operands) > 0 {
 		if name, isName := operands[len(operands)-1].(syntax.Name); isName {
-			sh, err := in.resolvePatternPaint(name)
+			sh, tiling, err := in.resolvePatternPaint(name)
 			if err != nil {
 				return err
 			}
 			if fill {
-				st.FillShading = sh
+				st.FillShading, st.FillTiling = sh, tiling
 			} else {
-				st.StrokeShading = sh
+				st.StrokeShading, st.StrokeTiling = sh, tiling
 			}
 			return nil
 		}
@@ -131,10 +132,10 @@ func (in *interpreter) setPaintColor(st *graphics.State, operands []syntax.Objec
 	}
 	if fill {
 		st.FillColor = col
-		st.FillShading = nil
+		st.FillShading, st.FillTiling = nil, nil
 	} else {
 		st.StrokeColor = col
-		st.StrokeShading = nil
+		st.StrokeShading, st.StrokeTiling = nil, nil
 	}
 	return nil
 }

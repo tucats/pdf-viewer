@@ -132,7 +132,7 @@ func TestDrawImageFillsCanvasWithCorrectQuadrant(t *testing.T) {
 	quad := rectPath(0, 0, 10, 10)
 	imageToDevice := graphics.Scale(10, 10)
 
-	c.DrawImage(quad, imageToDevice, img, 1, graphics.BlendNormal, nil)
+	c.DrawImage(quad, imageToDevice, img, false, 1, graphics.BlendNormal, nil)
 
 	if r, g, b, _ := c.Image().At(2, 2).RGBA(); r>>8 < 250 || g>>8 > 5 || b>>8 > 5 {
 		t.Errorf("top-left region = (%d,%d,%d), want ~red", r>>8, g>>8, b>>8)
@@ -155,7 +155,7 @@ func TestDrawImageRespectsAlpha(t *testing.T) {
 	c := NewCanvas(4, 4, graphics.Color{R: 1, G: 1, B: 1}) // white background
 	img := &graphics.Image{Width: 1, Height: 1, Pix: []byte{0, 0, 0, 128}}
 	quad := rectPath(0, 0, 4, 4)
-	c.DrawImage(quad, graphics.Scale(4, 4), img, 1, graphics.BlendNormal, nil)
+	c.DrawImage(quad, graphics.Scale(4, 4), img, false, 1, graphics.BlendNormal, nil)
 
 	r, _, _, _ := c.Image().At(2, 2).RGBA()
 	// Half-transparent black over white should land roughly in the middle.
@@ -173,7 +173,7 @@ func TestDrawImageWithClipRestrictsPaintedArea(t *testing.T) {
 	quad := rectPath(0, 0, 20, 20)
 	clip := rectPath(5, 5, 10, 10)
 
-	c.DrawImage(quad, graphics.Scale(20, 20), img, 1, graphics.BlendNormal, []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}})
+	c.DrawImage(quad, graphics.Scale(20, 20), img, false, 1, graphics.BlendNormal, []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}})
 
 	if r, g, b, _ := c.Image().At(7, 7).RGBA(); r>>8 > 2 || g>>8 > 2 || b>>8 > 2 {
 		t.Errorf("inside-clip pixel = (%d,%d,%d), want ~(0,0,0)", r>>8, g>>8, b>>8)
@@ -186,8 +186,8 @@ func TestDrawImageWithClipRestrictsPaintedArea(t *testing.T) {
 func TestDrawImageNilOrEmptyImageIsNoOp(t *testing.T) {
 	c := NewCanvas(4, 4, graphics.Color{R: 1, G: 1, B: 1})
 	quad := rectPath(0, 0, 4, 4)
-	c.DrawImage(quad, graphics.Scale(4, 4), nil, 1, graphics.BlendNormal, nil) // must not panic
-	c.DrawImage(quad, graphics.Scale(4, 4), &graphics.Image{}, 1, graphics.BlendNormal, nil)
+	c.DrawImage(quad, graphics.Scale(4, 4), nil, false, 1, graphics.BlendNormal, nil) // must not panic
+	c.DrawImage(quad, graphics.Scale(4, 4), &graphics.Image{}, false, 1, graphics.BlendNormal, nil)
 	r, g, b, _ := c.Image().At(1, 1).RGBA()
 	if r>>8 < 253 || g>>8 < 253 || b>>8 < 253 {
 		t.Errorf("pixel after drawing a nil/empty image = (%d,%d,%d), want unchanged white", r>>8, g>>8, b>>8)
@@ -199,7 +199,7 @@ func TestDrawImageDegenerateMatrixIsNoOp(t *testing.T) {
 	img := &graphics.Image{Width: 1, Height: 1, Pix: []byte{0, 0, 0, 255}}
 	quad := rectPath(0, 0, 4, 4)
 	degenerate := graphics.Matrix{} // all zero: not invertible
-	c.DrawImage(quad, degenerate, img, 1, graphics.BlendNormal, nil)
+	c.DrawImage(quad, degenerate, img, false, 1, graphics.BlendNormal, nil)
 	r, g, b, _ := c.Image().At(1, 1).RGBA()
 	if r>>8 < 253 || g>>8 < 253 || b>>8 < 253 {
 		t.Errorf("pixel after drawing with a degenerate matrix = (%d,%d,%d), want unchanged white", r>>8, g>>8, b>>8)

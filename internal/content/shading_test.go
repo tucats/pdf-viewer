@@ -162,10 +162,33 @@ func TestScnShadingPatternUsesInitialCTMNotCurrent(t *testing.T) {
 	}
 }
 
-func TestScnTilingPatternIsUnsupported(t *testing.T) {
+// TestScnUncoloredTilingPatternIsUnsupported confirms a /PaintType 2
+// ("uncolored") tiling pattern - the one tiling-pattern shape this
+// package does not implement, see tilingpattern.go's own doc comment -
+// is rejected as unsupported rather than silently mispainted. See
+// tilingpattern_test.go for coverage of an ordinary, supported
+// (/PaintType 1) tiling pattern.
+func TestScnUncoloredTilingPatternIsUnsupported(t *testing.T) {
+	patStream := syntax.Stream{Dict: syntax.Dictionary{
+		"PatternType": syntax.Integer(1), "PaintType": syntax.Integer(2),
+		"BBox":  syntax.Array{syntax.Real(0), syntax.Real(0), syntax.Real(10), syntax.Real(10)},
+		"XStep": syntax.Real(10), "YStep": syntax.Real(10),
+	}, Raw: []byte("")}
+	resources := syntax.Dictionary{"Pattern": syntax.Dictionary{"P0": patStream}}
+	ops, err := Parse([]byte("/Pattern cs /P0 scn 0 0 10 10 re f"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = Interpret(ops, graphics.Identity(), resources, &fakeResolver{})
+	if !errors.Is(err, pdferror.ErrUnsupported) {
+		t.Fatalf("Interpret with an uncolored tiling pattern: got %v, want an error wrapping ErrUnsupported", err)
+	}
+}
+
+func TestScnTilingPatternDictionaryNotStreamIsMalformed(t *testing.T) {
 	resources := syntax.Dictionary{
 		"Pattern": syntax.Dictionary{
-			"P0": syntax.Dictionary{"PatternType": syntax.Integer(1)},
+			"P0": syntax.Dictionary{"PatternType": syntax.Integer(1)}, // must be a stream, not a bare dictionary
 		},
 	}
 	ops, err := Parse([]byte("/Pattern cs /P0 scn 0 0 10 10 re f"))
@@ -173,8 +196,8 @@ func TestScnTilingPatternIsUnsupported(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	_, err = Interpret(ops, graphics.Identity(), resources, &fakeResolver{})
-	if !errors.Is(err, pdferror.ErrUnsupported) {
-		t.Fatalf("Interpret with a tiling pattern: got %v, want an error wrapping ErrUnsupported", err)
+	if !errors.Is(err, pdferror.ErrMalformed) {
+		t.Fatalf("Interpret with a dictionary (not stream) /PatternType 1: got %v, want an error wrapping ErrMalformed", err)
 	}
 }
 

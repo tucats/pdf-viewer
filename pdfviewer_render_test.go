@@ -150,6 +150,20 @@ func TestRenderFlateContentMatchesPlainContent(t *testing.T) {
 	compareImages(t, flate, plain)
 }
 
+// TestRenderTilingPatternFill exercises a tiling pattern used as a fill
+// paint source: tools/genfixtures/main.go's buildTilingPatternFill's own
+// doc comment works out, by hand, that the cell spanning pattern-space
+// (60,60)-(80,80) places its own 10x10 red square at device
+// (60,30)-(70,40), while a point elsewhere in that same cell (still
+// within the filled 80x80 square, but outside any cell's own red
+// square) must remain the untouched white background.
+func TestRenderTilingPatternFill(t *testing.T) {
+	img := renderFixture(t, "tiling-pattern-fill.pdf")
+	assertPixel(t, img, 65, 35, 255, 0, 0)     // inside a cell's red square
+	assertPixel(t, img, 78, 38, 255, 255, 255) // same cell, outside the red square
+	assertPixel(t, img, 5, 5, 255, 255, 255)   // outside the filled shape entirely
+}
+
 // TestRenderMatchesReferenceImages is Phase 2's "compare rendered output
 // against checked-in reference images with a documented tolerance" exit
 // criterion (see the repository README's Phase 2 entry): it re-renders
@@ -184,6 +198,7 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"annotation-hidden.pdf",
 		"alpha-fill.pdf",
 		"blend-multiply.pdf",
+		"tiling-pattern-fill.pdf",
 	}
 
 	if *update {

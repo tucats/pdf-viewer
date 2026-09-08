@@ -107,6 +107,7 @@ func main() {
 		{"annotation-hidden.pdf", buildAnnotationHidden()},
 		{"alpha-fill.pdf", buildAlphaFill()},
 		{"blend-multiply.pdf", buildBlendMultiply()},
+		{"tiling-pattern-fill.pdf", buildTilingPatternFill()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -867,6 +868,38 @@ func buildBlendMultiply() []byte {
 	content := []byte("0.5 0.5 0.5 rg\n0 0 100 100 re\nf\n" +
 		"/GS0 gs\n0.5 0.5 0.5 rg\n50 0 50 100 re\nf\n")
 	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
+}
+
+// buildTilingPatternFill returns a single 100x100-point page whose
+// content stream selects a colored tiling pattern (/PatternType 1: a
+// 20x20-unit cell, /BBox and /XStep/YStep all matching so cells tile
+// with no gaps or overlap, painting a 10x10 red square at the cell's
+// own origin and leaving the rest transparent) via "cs Pattern"/"scn",
+// then fills an 80x80 square with it - the baseline Phase 5 fixture for
+// tiling patterns, worked out by hand: the cell spanning pattern-space
+// (60,60)-(80,80) places its own red square at pattern-space
+// (60,60)-(70,70), which the page's standard y-flip (unrotated, scale 1)
+// maps to device (60,30)-(70,40) - and the *rest* of that same cell
+// (for example pattern-space (78,62), well inside the cell but outside
+// its 10x10 red square) must stay the untouched white page background,
+// confirming the pattern's own transparent regions are not painted as
+// solid color.
+func buildTilingPatternFill() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Pattern << /P0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("/Pattern cs\n/P0 scn\n10 10 80 80 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	patternContent := []byte("1 0 0 rg\n0 0 10 10 re\nf\n")
+	patternDict := fmt.Sprintf("<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 "+
+		"/BBox [0 0 20 20] /XStep 20 /YStep 20 /Resources << >> /Length %d >>", len(patternContent))
+	b.addObject(5, 0, patternDict, patternContent)
+
 	return b.finish(1)
 }
 

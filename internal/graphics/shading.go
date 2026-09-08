@@ -2,6 +2,24 @@ package graphics
 
 import "math"
 
+// TilingPattern is a resolved tiling pattern paint source (PDF's
+// /PatternType 1): a single pre-rendered repetition of the pattern
+// cell's own content, together with the matrix that maps that one
+// repetition's unit square [0,1]x[0,1] to exactly one XStep x YStep step
+// in device space. Painting with it is then just an ordinary image draw
+// with wraparound sampling (see DrawOp.Repeat and internal/raster's
+// Canvas.DrawImage) - the same "precompute once, sample many times"
+// shape as an ordinary image, which is why this type carries an *Image
+// rather than anything content-stream-specific: by the time a
+// TilingPattern exists, its cell has already been fully interpreted and
+// rasterized (see internal/content's tilingpattern.go and
+// internal/raster's RenderTransparent), exactly like any other
+// graphics.Image.
+type TilingPattern struct {
+	Tile          *Image
+	ImageToDevice Matrix
+}
+
 // ShadingKind identifies which of PDF's shading types (8.7.4.5) this
 // project implements directly: the two ("axial" and "radial") that
 // dominate real-world gradient content. The function-based (Type 1) and

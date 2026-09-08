@@ -56,6 +56,7 @@ func TestGeneratedFixturesMatchCheckedInFiles(t *testing.T) {
 		"annotation-hidden.pdf":         buildAnnotationHidden(),
 		"alpha-fill.pdf":                buildAlphaFill(),
 		"blend-multiply.pdf":            buildBlendMultiply(),
+		"tiling-pattern-fill.pdf":       buildTilingPatternFill(),
 	}
 
 	for name, want := range fixtures {
@@ -112,6 +113,7 @@ func TestFixtureSetIsComplete(t *testing.T) {
 		"annotation-hidden.pdf":         true,
 		"alpha-fill.pdf":                true,
 		"blend-multiply.pdf":            true,
+		"tiling-pattern-fill.pdf":       true,
 	}
 
 	entries, err := os.ReadDir(outputDir)

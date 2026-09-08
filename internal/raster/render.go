@@ -21,7 +21,7 @@ func Render(list graphics.DisplayList, width, height int, background graphics.Co
 			// Phase 3: an image ("Do" or an inline "BI" image) paints
 			// per-pixel sampled color/alpha rather than a single solid
 			// Color - see DrawOp's doc comment and Canvas.DrawImage.
-			canvas.DrawImage(op.Path, op.ImageToDevice, op.Image, op.Alpha, op.BlendMode, op.Clips)
+			canvas.DrawImage(op.Path, op.ImageToDevice, op.Image, op.Repeat, op.Alpha, op.BlendMode, op.Clips)
 		case op.Shading != nil && op.Path != nil:
 			// Phase 5: a shape filled or stroked with a shading pattern -
 			// see DrawOp.Shading's doc comment.

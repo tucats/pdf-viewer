@@ -267,6 +267,7 @@ func (in *interpreter) exec(op Operator) error {
 		}
 		st.FillColor = grayColor(vals[0])
 		st.FillShading = nil
+		st.FillTiling = nil
 	case "G":
 		vals, err := requireFloats(op.Operands, 1)
 		if err != nil {
@@ -274,6 +275,7 @@ func (in *interpreter) exec(op Operator) error {
 		}
 		st.StrokeColor = grayColor(vals[0])
 		st.StrokeShading = nil
+		st.StrokeTiling = nil
 	case "rg":
 		vals, err := requireFloats(op.Operands, 3)
 		if err != nil {
@@ -281,6 +283,7 @@ func (in *interpreter) exec(op Operator) error {
 		}
 		st.FillColor = graphics.Color{R: vals[0], G: vals[1], B: vals[2]}
 		st.FillShading = nil
+		st.FillTiling = nil
 	case "RG":
 		vals, err := requireFloats(op.Operands, 3)
 		if err != nil {
@@ -288,6 +291,7 @@ func (in *interpreter) exec(op Operator) error {
 		}
 		st.StrokeColor = graphics.Color{R: vals[0], G: vals[1], B: vals[2]}
 		st.StrokeShading = nil
+		st.StrokeTiling = nil
 	case "k":
 		vals, err := requireFloats(op.Operands, 4)
 		if err != nil {
@@ -295,6 +299,7 @@ func (in *interpreter) exec(op Operator) error {
 		}
 		st.FillColor = cmykColor(vals[0], vals[1], vals[2], vals[3])
 		st.FillShading = nil
+		st.FillTiling = nil
 	case "K":
 		vals, err := requireFloats(op.Operands, 4)
 		if err != nil {
@@ -302,6 +307,7 @@ func (in *interpreter) exec(op Operator) error {
 		}
 		st.StrokeColor = cmykColor(vals[0], vals[1], vals[2], vals[3])
 		st.StrokeShading = nil
+		st.StrokeTiling = nil
 
 	case "cs":
 		if err := in.setColorSpace(st, op.Operands, true); err != nil {
@@ -501,22 +507,28 @@ func (in *interpreter) appendRect(st *graphics.State, operands []syntax.Object) 
 	return nil
 }
 
-// fillCurrentPath appends a Fill (or, when a shading pattern is the
-// current fill paint - see graphics.State.FillShading's doc comment - a
-// Shading) DrawOp for the current path, if it is non-empty, under rule,
-// using st's current fill color/shading and clip stack. It does not
-// reset the current path - painting operators like "B" fill and stroke
-// the very same path, so resetting is endPath's job, called once after
-// every painting operator regardless of which combination of fill/stroke
-// it performed.
+// fillCurrentPath appends a DrawOp for the current path, if it is
+// non-empty, under rule: an ordinary solid-color Fill, or - when a
+// pattern is the current fill paint - a Shading (a shading pattern; see
+// graphics.State.FillShading's doc comment) or a repeating Image (a
+// tiling pattern; see FillTiling's doc comment). It does not reset the
+// current path - painting operators like "B" fill and stroke the very
+// same path, so resetting is endPath's job, called once after every
+// painting operator regardless of which combination of fill/stroke it
+// performed.
 func (in *interpreter) fillCurrentPath(st *graphics.State, rule graphics.FillRule) {
 	if len(in.path.Subpaths) == 0 {
 		return
 	}
 	op := graphics.DrawOp{Path: clonePath(&in.path), Rule: rule, Clips: st.Clips, Alpha: st.FillAlpha, BlendMode: st.BlendMode}
-	if st.FillShading != nil {
+	switch {
+	case st.FillShading != nil:
 		op.Shading = st.FillShading
-	} else {
+	case st.FillTiling != nil:
+		op.Image = st.FillTiling.Tile
+		op.ImageToDevice = st.FillTiling.ImageToDevice
+		op.Repeat = true
+	default:
 		op.Color = st.FillColor
 	}
 	in.list = append(in.list, op)
@@ -544,9 +556,14 @@ func (in *interpreter) strokeCurrentPath(st *graphics.State) {
 	deviceWidth := st.LineWidth * ctmScale(st.CTM)
 	outline := graphics.StrokeToFill(&in.path, deviceWidth, st.LineCap, st.LineJoin, st.MiterLimit)
 	op := graphics.DrawOp{Path: outline, Rule: graphics.NonZero, Clips: st.Clips, Alpha: st.StrokeAlpha, BlendMode: st.BlendMode}
-	if st.StrokeShading != nil {
+	switch {
+	case st.StrokeShading != nil:
 		op.Shading = st.StrokeShading
-	} else {
+	case st.StrokeTiling != nil:
+		op.Image = st.StrokeTiling.Tile
+		op.ImageToDevice = st.StrokeTiling.ImageToDevice
+		op.Repeat = true
+	default:
 		op.Color = st.StrokeColor
 	}
 	in.list = append(in.list, op)

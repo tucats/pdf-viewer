@@ -95,7 +95,14 @@ func (c *Canvas) Fill(path *graphics.Path, rule graphics.FillRule, color graphic
 // content, e.g. "0 0 0 0 0 0 cm" active when "Do" runs - simply paints
 // nothing, matching Fill's own "nothing to paint" handling for a path
 // with no area.
-func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, img *graphics.Image, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
+//
+// repeat, when true (only ever for a tiling pattern's DrawOp - see
+// graphics.DrawOp.Repeat's doc comment), wraps an out-of-[0,1)
+// image-space coordinate back into range along each axis independently,
+// rather than painting nothing - the standard "tile" texture-wrapping
+// mode, which is exactly what makes a single pre-rendered pattern cell
+// repeat correctly across however large a shape it fills.
+func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, img *graphics.Image, repeat bool, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
 	if img == nil || img.Width <= 0 || img.Height <= 0 {
 		return
 	}
@@ -109,7 +116,10 @@ func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, i
 		// integer corner, so a pixel is colored by whatever image sample
 		// its middle actually falls under.
 		ux, uy := deviceToImage.Apply(float64(col)+0.5, float64(row)+0.5)
-		if ux < 0 || ux >= 1 || uy < 0 || uy >= 1 {
+		if repeat {
+			ux = wrap01(ux)
+			uy = wrap01(uy)
+		} else if ux < 0 || ux >= 1 || uy < 0 || uy >= 1 {
 			// Outside the image's own unit square: this can happen for a
 			// pixel the shape coverage above still counted as partially
 			// covered, right at quad's anti-aliased edge. Painting
@@ -117,10 +127,22 @@ func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, i
 			// pixel) avoids smearing the image's edge pixels outward.
 			return 0, 0, 0, 0
 		}
-		ix := int(ux * float64(img.Width))
-		iy := int(uy * float64(img.Height))
+		ix := clampInt(int(ux*float64(img.Width)), 0, img.Width-1)
+		iy := clampInt(int(uy*float64(img.Height)), 0, img.Height-1)
 		return img.At(ix, iy)
 	})
+}
+
+// wrap01 reduces v to [0,1) as if the unit interval repeated
+// infinitely in both directions - math.Mod alone leaves a negative v
+// negative (Go's % and math.Mod both take the sign of the dividend), so
+// a second adjustment is needed to fold that case back into [0,1).
+func wrap01(v float64) float64 {
+	v = math.Mod(v, 1)
+	if v < 0 {
+		v += 1
+	}
+	return v
 }
 
 // FillShading rasterizes path under rule exactly like Fill, but instead

@@ -68,6 +68,7 @@ go run ./tools/genfixtures
 | `annotation-hidden.pdf` | One 100x100-point page with one annotation whose `/F` (flags) entry sets the Hidden bit and whose appearance would otherwise fill the entire page red - regression fixture confirming a Hidden annotation is never painted, unconditionally (distinct from `RenderOptions.HideAnnotations`, a caller's own opt-out). |
 | `alpha-fill.pdf` | One 100x100-point page that selects an ExtGState setting `/ca` (non-stroking constant alpha) to 0.5, then fills the entire page black - the result should be approximately 50% gray, not solid black. The baseline Phase 5 fixture for `gs`'s `/ca`. |
 | `blend-multiply.pdf` | One 100x100-point page filled entirely 50% gray, then - after selecting an ExtGState setting `/BM` to `/Multiply` - the right half filled with another 50% gray: `Multiply(0.5,0.5)=0.25`, visibly darker than the untouched left half, a result an ordinary replace could never produce. The baseline Phase 5 fixture for `gs`'s `/BM`. |
+| `tiling-pattern-fill.pdf` | One 100x100-point page whose content stream selects a colored tiling pattern (`/PatternType 1`: a 20x20-unit cell painting a 10x10 red square at its own origin, otherwise transparent) via `cs Pattern`/`scn`, then fills an 80x80 square with it - the baseline Phase 5 fixture for tiling patterns, exercising both the repeating placement of the pattern's own red squares and that its transparent regions correctly let the page background show through. |
 
 ## real-world/
 

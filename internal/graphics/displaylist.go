@@ -64,6 +64,19 @@ type DrawOp struct {
 	// Image's own doc comment says, with no caller-specific exception.
 	ImageToDevice Matrix
 
+	// Repeat, meaningful only when Image is non-nil, makes internal/
+	// raster's Canvas.DrawImage sample Image as an infinitely repeating
+	// tile (wrapping the image-space coordinate into [0,1) along each
+	// axis, rather than painting nothing outside the unit square) -
+	// used for a fill or stroke painted with a tiling pattern (see
+	// internal/content's tilingpattern.go), where Image holds one
+	// pre-rendered repetition of the pattern cell and ImageToDevice maps
+	// that one repetition's own unit square to exactly one XStep x YStep
+	// step in device space, so repeating the *sampling* naturally
+	// repeats the pattern across however large a shape it fills. An
+	// ordinary (non-pattern) image XObject leaves this false.
+	Repeat bool
+
 	// Shading, when non-nil, means this DrawOp paints a gradient
 	// (internal/content's "sh" operator, or a fill/stroke painted with a
 	// shading pattern selected via "scn"/"SCN" - see that package's

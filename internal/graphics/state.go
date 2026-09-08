@@ -112,6 +112,17 @@ type State struct {
 	// content stream can never leak into a later, ordinary-colored fill.
 	FillShading, StrokeShading *Shading
 
+	// FillTiling and StrokeTiling are FillShading/StrokeShading's tiling-
+	// pattern counterpart: non-nil when the current fill/stroke paint is
+	// a tiling pattern (a "scn"/"SCN" operand naming a /PatternType 1
+	// resource - see internal/content/tilingpattern.go) rather than the
+	// solid FillColor/StrokeColor or a shading. Exactly one of
+	// Fill(Shading|Tiling) is non-nil at a time - selecting a shading
+	// pattern clears any previously selected tiling pattern and vice
+	// versa, and selecting an ordinary color clears both - see
+	// internal/content's setPaintColor.
+	FillTiling, StrokeTiling *TilingPattern
+
 	// FillAlpha and StrokeAlpha are PDF's "ca" and "CA" ExtGState
 	// parameters respectively (11.6.4.3): a constant alpha, in [0,1],
 	// applied to every non-stroking (ca) or stroking (CA) paint

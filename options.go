@@ -14,15 +14,17 @@ import "image/color"
 // existing options struct is backward compatible in Go, but adding a
 // previously-absent parameter to an existing function is not.
 //
-// RenderOptions now carries the minimal set of fields Phase 2's Render
-// implementation (see page.go) actually uses: Scale and Background. Per
-// the README's Draft Public API notes, a fuller RenderOptions is
-// expected to also cover an explicit pixel size, page-box selection
-// beyond MediaBox (CropBox/BleedBox/TrimBox/ArtBox - Phase 2/3 per
+// RenderOptions carries the minimal set of fields Render's implementation
+// (see page.go) actually uses: Scale and Background. Per the README's
+// Draft Public API notes, a fuller RenderOptions is expected to also
+// cover an explicit pixel size, page-box selection beyond MediaBox
+// (CropBox/BleedBox/TrimBox/ArtBox - Phase 2/3 per
 // docs/capability-matrix.md), and color mode; those are not implemented
-// yet and are left for a later change now that there is a real Render
-// to extend. ThumbnailOptions remains empty, since Thumbnail itself is
-// Phase 3 work.
+// yet and are left for a later change now that there is a real Render to
+// extend. ThumbnailOptions (Phase 3) mirrors it with MaxDimension in
+// place of Scale, matching the README's own description of Thumbnail as
+// "a convenience for a bounded maximum dimension" sharing full
+// rendering's page interpretation.
 
 // OpenOption configures how Open or OpenFile parses a document. No
 // options are defined yet - this type exists as an extension point for
@@ -58,9 +60,19 @@ type RenderOptions struct {
 	Background color.Color
 }
 
-// ThumbnailOptions configures Page.Thumbnail. Per the README's Draft
-// Public API, once implemented (Phase 3) this is expected to be a
-// convenience for a bounded maximum dimension, sharing the same page
-// interpretation as full rendering - none of which exists yet, since
-// Thumbnail itself is not implemented yet; see page.go.
-type ThumbnailOptions struct{}
+// ThumbnailOptions configures Page.Thumbnail.
+type ThumbnailOptions struct {
+	// MaxDimension bounds the longer of the thumbnail's two pixel
+	// dimensions; the other dimension is scaled to preserve the page's
+	// own aspect ratio (after accounting for /Rotate - see
+	// pageImpl.thumbnailScale in page.go). The zero value means the
+	// default, 256 pixels (see defaultThumbnailMaxDimension in page.go).
+	MaxDimension int
+
+	// Background is exactly RenderOptions.Background: the solid color
+	// painted behind the page before any content is drawn. A nil
+	// Background means the default, opaque white - see RenderOptions.
+	// Background's doc comment for the full rationale, which applies
+	// here unchanged.
+	Background color.Color
+}

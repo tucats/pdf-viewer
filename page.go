@@ -4,6 +4,7 @@ import (
 	"context"
 	"image"
 	"image/color"
+	"math"
 
 	"github.com/tucats/pdf-viewer/internal/content"
 	"github.com/tucats/pdf-viewer/internal/graphics"
@@ -29,25 +30,29 @@ type Page interface {
 	// software pipeline with no CGO or native rendering dependency, per
 	// the README's "Dependency and safety policy".
 	//
-	// Only the vector graphics operators internal/content implements are
-	// actually painted - see its package doc comment and
+	// Vector graphics and (Phase 3) images are painted - see
+	// internal/content's package doc comment and
 	// docs/capability-matrix.md for the current, phase-by-phase
-	// breakdown (images are Phase 3, text is Phase 4, transparency and
-	// patterns are Phase 5). A page using only unsupported features
-	// still renders (as a blank page in its background color) rather
-	// than failing outright; Render only returns an error for content
-	// this package can positively detect as unsupported in a way that
-	// would otherwise silently produce a materially wrong image (an
-	// inline image, or a pattern color space - see internal/content) or
-	// for content that is malformed PDF syntax.
+	// breakdown (text is Phase 4, transparency and patterns are Phase 5).
+	// A page using only unsupported features still renders (as a blank
+	// page in its background color) rather than failing outright; Render
+	// only returns an error for content this package can positively
+	// detect as unsupported in a way that would otherwise silently
+	// produce a materially wrong image (a pattern color space, or an
+	// image using an unsupported color space or filter - see
+	// internal/content and internal/image) or for content that is
+	// malformed PDF syntax.
 	Render(ctx context.Context, opts RenderOptions) (image.Image, error)
 
-	// Thumbnail is Render's bounded-size counterpart. It is not
-	// implemented yet: per the README's Draft Public API, once
-	// implemented (Phase 3) it is expected to reuse the same page
-	// interpretation as Render rather than being a second, separate
-	// rendering path. It currently always returns an error wrapping
-	// ErrUnsupported.
+	// Thumbnail is Render's bounded-size counterpart, per opts (see
+	// ThumbnailOptions): it renders the same page content Render does -
+	// the exact same content-stream parse and interpret (internal/content)
+	// producing the exact same graphics.DisplayList, per the README's
+	// Draft Public API note that Thumbnail must not be "a second
+	// interpretation of the PDF" - just rasterized (internal/raster) at a
+	// smaller scale chosen so the longer of the page's two (possibly
+	// /Rotate-swapped) dimensions fits within
+	// ThumbnailOptions.MaxDimension, preserving aspect ratio.
 	Thumbnail(ctx context.Context, opts ThumbnailOptions) (image.Image, error)
 }
 
@@ -85,12 +90,53 @@ func (p *pageImpl) Render(ctx context.Context, opts RenderOptions) (image.Image,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
 	scale := opts.Scale
 	if scale <= 0 {
 		scale = 1
 	}
-	bg := opts.Background
+	return p.renderAtScale(ctx, scale, opts.Background)
+}
+
+// defaultThumbnailMaxDimension is the maximum dimension (in pixels)
+// Thumbnail uses when ThumbnailOptions.MaxDimension is not given (the
+// zero value). 256 matches a common "thumbnail" size used by desktop
+// file browsers and image galleries - large enough to recognize a page's
+// layout at a glance, small enough that generating many of them (e.g.
+// for a page-list sidebar) stays cheap.
+const defaultThumbnailMaxDimension = 256
+
+func (p *pageImpl) Thumbnail(ctx context.Context, opts ThumbnailOptions) (image.Image, error) {
+	if p.doc.closed {
+		return nil, ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	maxDimension := opts.MaxDimension
+	if maxDimension <= 0 {
+		maxDimension = defaultThumbnailMaxDimension
+	}
+	scale, err := p.thumbnailScale(maxDimension)
+	if err != nil {
+		return nil, err
+	}
+	return p.renderAtScale(ctx, scale, opts.Background)
+}
+
+// renderAtScale is the shared implementation behind both Render and
+// Thumbnail: the only difference between "render a page" and "render a
+// thumbnail of a page" is which scale (device pixels per PDF point) is
+// used, so both compute their own scale (Render's straight from
+// RenderOptions.Scale; Thumbnail's derived from ThumbnailOptions.
+// MaxDimension - see thumbnailScale) and then share every remaining
+// step: computing device geometry, checking the pixel-count bound,
+// reading and parsing the page's content stream, interpreting it into a
+// DisplayList, and rasterizing. This is what the README's Draft Public
+// API means by Thumbnail sharing "the same page interpretation as full
+// rendering" rather than being a second, separate implementation that
+// could drift out of sync with Render's own behavior.
+func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background color.Color) (image.Image, error) {
+	bg := background
 	if bg == nil {
 		bg = color.White
 	}
@@ -114,7 +160,7 @@ func (p *pageImpl) Render(ctx context.Context, opts RenderOptions) (image.Image,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	list, err := content.Interpret(ops, ctm)
+	list, err := content.Interpret(ops, ctm, p.page.RawResources, p.doc.model)
 	if err != nil {
 		return nil, err
 	}
@@ -126,14 +172,51 @@ func (p *pageImpl) Render(ctx context.Context, opts RenderOptions) (image.Image,
 	return img, nil
 }
 
-func (p *pageImpl) Thumbnail(ctx context.Context, _ ThumbnailOptions) (image.Image, error) {
-	if p.doc.closed {
-		return nil, ErrClosed
+// thumbnailScale computes the RenderOptions-style scale (device pixels
+// per PDF point) that makes the longer of the page's two rendered-pixel
+// dimensions equal to (at most) maxDimension, preserving its aspect
+// ratio - "rendered", here, already accounting for the page's own
+// /Rotate the same way pageDeviceGeometry does, since a 90-or-270-degree
+// rotated page's *visual* width and height are swapped from its
+// MediaBox's own width and height.
+//
+// The obvious formula - maxDimension divided by the longer point
+// dimension - is computed first as a starting estimate, then corrected
+// at most once by actually calling pageDeviceGeometry and checking its
+// result: floating-point rounding in that estimate could otherwise
+// occasionally push pageDeviceGeometry's own ceiling-rounded pixel
+// dimensions one pixel past maxDimension for a page size that lands
+// exactly (or almost exactly) on an integer boundary, which would be a
+// silent, easy-to-miss correctness bug for exactly the property
+// (thumbnails are bounded in size) Thumbnail exists to guarantee.
+func (p *pageImpl) thumbnailScale(maxDimension int) (float64, error) {
+	box := p.page.MediaBox
+	w := math.Abs(box.URX - box.LLX)
+	h := math.Abs(box.URY - box.LLY)
+	if p.page.Rotate == 90 || p.page.Rotate == 270 {
+		w, h = h, w
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if w <= 0 || h <= 0 {
+		return 0, MalformedErrorf("page has a degenerate MediaBox (%v x %v points)", w, h)
 	}
-	return nil, UnsupportedErrorf("Page.Thumbnail (thumbnails are planned for Phase 3 of the project's phased plan)")
+	longest := w
+	if h > longest {
+		longest = h
+	}
+	scale := float64(maxDimension) / longest
+
+	width, height, _, err := pageDeviceGeometry(p.page, scale)
+	if err != nil {
+		return 0, err
+	}
+	longestPixels := width
+	if height > longestPixels {
+		longestPixels = height
+	}
+	if longestPixels > maxDimension {
+		scale *= float64(maxDimension) / float64(longestPixels)
+	}
+	return scale, nil
 }
 
 // pageDeviceGeometry computes the pixel dimensions of page's rendered

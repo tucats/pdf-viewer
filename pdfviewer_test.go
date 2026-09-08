@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"image/color"
 	"os"
 	"path/filepath"
 	"testing"
@@ -195,11 +196,11 @@ func TestRenderProducesImage(t *testing.T) {
 	}
 }
 
-// TestThumbnailIsNotYetImplemented confirms the documented placeholder
-// behavior of Page.Thumbnail (see page.go): it must fail with
-// ErrUnsupported, since Thumbnail is Phase 3 work per the README's
-// phased plan.
-func TestThumbnailIsNotYetImplemented(t *testing.T) {
+// TestThumbnailDefaultMaxDimension confirms Thumbnail's default
+// MaxDimension (used when ThumbnailOptions.MaxDimension is zero) is
+// applied to a square page: minimal-blank-page.pdf's 200x200 MediaBox
+// scaled up to the default 256-pixel bound.
+func TestThumbnailDefaultMaxDimension(t *testing.T) {
 	doc, err := pdfviewer.OpenFile(fixturePath("minimal-blank-page.pdf"))
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
@@ -210,8 +211,125 @@ func TestThumbnailIsNotYetImplemented(t *testing.T) {
 		t.Fatalf("Page(0): %v", err)
 	}
 
-	if _, err := page.Thumbnail(context.Background(), pdfviewer.ThumbnailOptions{}); !errors.Is(err, pdfviewer.ErrUnsupported) {
-		t.Fatalf("Thumbnail error = %v, want ErrUnsupported", err)
+	img, err := page.Thumbnail(context.Background(), pdfviewer.ThumbnailOptions{})
+	if err != nil {
+		t.Fatalf("Thumbnail: %v", err)
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() != 256 || bounds.Dy() != 256 {
+		t.Errorf("Thumbnail() image size = %dx%d, want 256x256 (default MaxDimension, square page)", bounds.Dx(), bounds.Dy())
+	}
+}
+
+// TestThumbnailPreservesAspectRatioAndRespectsMaxDimension confirms a
+// non-square page (two-pages.pdf's first page is 100x200 points, a 1:2
+// aspect ratio) scales down to fit within a custom MaxDimension while
+// preserving that ratio, and that neither dimension exceeds
+// MaxDimension - the two properties the README's Draft Public API calls
+// for a thumbnail to guarantee.
+func TestThumbnailPreservesAspectRatioAndRespectsMaxDimension(t *testing.T) {
+	doc, err := pdfviewer.OpenFile(fixturePath("two-pages.pdf"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer doc.Close()
+	page, err := doc.Page(0) // 100x200 points
+	if err != nil {
+		t.Fatalf("Page(0): %v", err)
+	}
+
+	img, err := page.Thumbnail(context.Background(), pdfviewer.ThumbnailOptions{MaxDimension: 50})
+	if err != nil {
+		t.Fatalf("Thumbnail: %v", err)
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() > 50 || bounds.Dy() > 50 {
+		t.Fatalf("Thumbnail() image size = %dx%d, want both dimensions <= 50", bounds.Dx(), bounds.Dy())
+	}
+	if bounds.Dy() != 50 {
+		t.Errorf("Thumbnail() height = %d, want 50 (the longer axis should hit MaxDimension exactly)", bounds.Dy())
+	}
+	if bounds.Dx() != 25 {
+		t.Errorf("Thumbnail() width = %d, want 25 (100x200 preserves its 1:2 aspect ratio at height 50)", bounds.Dx())
+	}
+}
+
+// TestThumbnailRespectsBackground confirms ThumbnailOptions.Background
+// is honored exactly like RenderOptions.Background - Thumbnail shares
+// renderAtScale with Render, but this is worth its own regression test
+// since it is easy to imagine an implementation that forgets to thread
+// the option through.
+func TestThumbnailRespectsBackground(t *testing.T) {
+	doc, err := pdfviewer.OpenFile(fixturePath("minimal-blank-page.pdf"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer doc.Close()
+	page, err := doc.Page(0)
+	if err != nil {
+		t.Fatalf("Page(0): %v", err)
+	}
+
+	img, err := page.Thumbnail(context.Background(), pdfviewer.ThumbnailOptions{
+		MaxDimension: 20,
+		Background:   color.RGBA{R: 0, G: 255, B: 0, A: 255},
+	})
+	if err != nil {
+		t.Fatalf("Thumbnail: %v", err)
+	}
+	b := img.Bounds()
+	r, g, bl, _ := img.At(b.Dx()/2, b.Dy()/2).RGBA()
+	if r>>8 != 0 || g>>8 != 255 || bl>>8 != 0 {
+		t.Errorf("Thumbnail() with a green background, center pixel = (%d,%d,%d), want (0,255,0)", r>>8, g>>8, bl>>8)
+	}
+}
+
+// TestThumbnailExceedingPixelBoundIsUnsupported confirms an absurdly
+// large MaxDimension still hits Render's own maxRenderPixels bound
+// rather than being allowed to allocate an unbounded amount of memory -
+// Thumbnail's whole point is to be a *bounded*-size render, but its
+// bound is caller-controlled (MaxDimension), so this project's own
+// independent safety bound must still apply underneath it.
+func TestThumbnailExceedingPixelBoundIsUnsupported(t *testing.T) {
+	doc, err := pdfviewer.OpenFile(fixturePath("minimal-blank-page.pdf"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer doc.Close()
+	page, err := doc.Page(0)
+	if err != nil {
+		t.Fatalf("Page(0): %v", err)
+	}
+
+	_, err = page.Thumbnail(context.Background(), pdfviewer.ThumbnailOptions{MaxDimension: 100_000})
+	if !errors.Is(err, pdfviewer.ErrUnsupported) {
+		t.Fatalf("Thumbnail with an oversized MaxDimension: got %v, want an error wrapping ErrUnsupported", err)
+	}
+}
+
+// TestThumbnailRotatedPageSwapsAspectRatio confirms Thumbnail accounts
+// for /Rotate exactly like Render does: rotated-page.pdf's MediaBox is
+// 100x200 (portrait) but declares /Rotate 90, so its *rendered* aspect
+// ratio is landscape (2:1), and a thumbnail's dimensions must reflect
+// that rather than the raw, unrotated MediaBox.
+func TestThumbnailRotatedPageSwapsAspectRatio(t *testing.T) {
+	doc, err := pdfviewer.OpenFile(fixturePath("rotated-page.pdf"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+	defer doc.Close()
+	page, err := doc.Page(0)
+	if err != nil {
+		t.Fatalf("Page(0): %v", err)
+	}
+
+	img, err := page.Thumbnail(context.Background(), pdfviewer.ThumbnailOptions{MaxDimension: 40})
+	if err != nil {
+		t.Fatalf("Thumbnail: %v", err)
+	}
+	bounds := img.Bounds()
+	if bounds.Dx() != 40 || bounds.Dy() != 20 {
+		t.Errorf("Thumbnail() of a /Rotate 90 page = %dx%d, want 40x20 (landscape, matching the rotated display orientation)", bounds.Dx(), bounds.Dy())
 	}
 }
 

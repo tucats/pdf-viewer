@@ -25,8 +25,12 @@
 // or platform-specific rendering backends — see the "Dependency and
 // safety policy" section of the README.
 //
-// This is Phase 2 ("Content streams and a minimal raster backend") work
-// per the project's phased plan; image decoding is Phase 3,
-// text/glyph rendering is Phase 4, and transparency/pattern/shading
+// This package's core ("Content streams and a minimal raster backend")
+// is Phase 2 work per the project's phased plan. Phase 3 added
+// Canvas.DrawImage, painting a decoded internal/image.graphics.Image
+// (see that package) instead of a solid Color - sharing the exact same
+// coverage rasterization and clipping as an ordinary Fill (see
+// Canvas.paint) and adding only per-pixel image sampling on top.
+// Text/glyph rendering is Phase 4, and transparency/pattern/shading
 // support is Phase 5 - see docs/capability-matrix.md.
 package raster

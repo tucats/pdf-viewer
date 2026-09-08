@@ -107,6 +107,116 @@ func TestFillEmptyPathIsNoOp(t *testing.T) {
 	}
 }
 
+// checkerImage returns a 2x2 graphics.Image with a distinct opaque color
+// in each quadrant, for tests that need to confirm DrawImage samples the
+// right source pixel rather than always the same one.
+func checkerImage() *graphics.Image {
+	return &graphics.Image{
+		Width: 2, Height: 2,
+		Pix: []byte{
+			255, 0, 0, 255, 0, 255, 0, 255, // row 0: red, green
+			0, 0, 255, 255, 255, 255, 0, 255, // row 1: blue, yellow
+		},
+	}
+}
+
+// TestDrawImageFillsCanvasWithCorrectQuadrant confirms DrawImage maps
+// image space correctly onto a canvas covering the whole unit square: an
+// identity-mapped-to-[0,10]x[0,10] image should place image pixel (0,0)
+// (red) at the canvas's top-left and image pixel (1,1) (yellow) at its
+// bottom-right, matching image space's own top-left-origin convention
+// (see graphics.Image's doc comment).
+func TestDrawImageFillsCanvasWithCorrectQuadrant(t *testing.T) {
+	c := NewCanvas(10, 10, graphics.Color{R: 1, G: 1, B: 1})
+	img := checkerImage()
+	quad := rectPath(0, 0, 10, 10)
+	imageToDevice := graphics.Scale(10, 10)
+
+	c.DrawImage(quad, imageToDevice, img, nil)
+
+	if r, g, b, _ := c.Image().At(2, 2).RGBA(); r>>8 < 250 || g>>8 > 5 || b>>8 > 5 {
+		t.Errorf("top-left region = (%d,%d,%d), want ~red", r>>8, g>>8, b>>8)
+	}
+	if r, g, b, _ := c.Image().At(7, 2).RGBA(); r>>8 > 5 || g>>8 < 250 || b>>8 > 5 {
+		t.Errorf("top-right region = (%d,%d,%d), want ~green", r>>8, g>>8, b>>8)
+	}
+	if r, g, b, _ := c.Image().At(2, 7).RGBA(); r>>8 > 5 || g>>8 > 5 || b>>8 < 250 {
+		t.Errorf("bottom-left region = (%d,%d,%d), want ~blue", r>>8, g>>8, b>>8)
+	}
+	if r, g, b, _ := c.Image().At(7, 7).RGBA(); r>>8 < 250 || g>>8 < 250 || b>>8 > 5 {
+		t.Errorf("bottom-right region = (%d,%d,%d), want ~yellow", r>>8, g>>8, b>>8)
+	}
+}
+
+// TestDrawImageRespectsAlpha confirms a partially-transparent source
+// pixel blends with the canvas's existing background rather than
+// replacing it outright.
+func TestDrawImageRespectsAlpha(t *testing.T) {
+	c := NewCanvas(4, 4, graphics.Color{R: 1, G: 1, B: 1}) // white background
+	img := &graphics.Image{Width: 1, Height: 1, Pix: []byte{0, 0, 0, 128}}
+	quad := rectPath(0, 0, 4, 4)
+	c.DrawImage(quad, graphics.Scale(4, 4), img, nil)
+
+	r, _, _, _ := c.Image().At(2, 2).RGBA()
+	// Half-transparent black over white should land roughly in the middle.
+	if v := r >> 8; v < 100 || v > 160 {
+		t.Errorf("blended pixel red channel = %d, want roughly 128 (half-transparent black over white)", v)
+	}
+}
+
+// TestDrawImageWithClipRestrictsPaintedArea confirms DrawImage honors
+// clips exactly like Fill does, since both share the same underlying
+// coverage rasterization (paint) - see canvas.go.
+func TestDrawImageWithClipRestrictsPaintedArea(t *testing.T) {
+	c := NewCanvas(20, 20, graphics.Color{R: 1, G: 1, B: 1})
+	img := &graphics.Image{Width: 1, Height: 1, Pix: []byte{0, 0, 0, 255}}
+	quad := rectPath(0, 0, 20, 20)
+	clip := rectPath(5, 5, 10, 10)
+
+	c.DrawImage(quad, graphics.Scale(20, 20), img, []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}})
+
+	if r, g, b, _ := c.Image().At(7, 7).RGBA(); r>>8 > 2 || g>>8 > 2 || b>>8 > 2 {
+		t.Errorf("inside-clip pixel = (%d,%d,%d), want ~(0,0,0)", r>>8, g>>8, b>>8)
+	}
+	if r, g, b, _ := c.Image().At(15, 15).RGBA(); r>>8 < 253 || g>>8 < 253 || b>>8 < 253 {
+		t.Errorf("outside-clip pixel = (%d,%d,%d), want ~(255,255,255) (untouched)", r>>8, g>>8, b>>8)
+	}
+}
+
+func TestDrawImageNilOrEmptyImageIsNoOp(t *testing.T) {
+	c := NewCanvas(4, 4, graphics.Color{R: 1, G: 1, B: 1})
+	quad := rectPath(0, 0, 4, 4)
+	c.DrawImage(quad, graphics.Scale(4, 4), nil, nil) // must not panic
+	c.DrawImage(quad, graphics.Scale(4, 4), &graphics.Image{}, nil)
+	r, g, b, _ := c.Image().At(1, 1).RGBA()
+	if r>>8 < 253 || g>>8 < 253 || b>>8 < 253 {
+		t.Errorf("pixel after drawing a nil/empty image = (%d,%d,%d), want unchanged white", r>>8, g>>8, b>>8)
+	}
+}
+
+func TestDrawImageDegenerateMatrixIsNoOp(t *testing.T) {
+	c := NewCanvas(4, 4, graphics.Color{R: 1, G: 1, B: 1})
+	img := &graphics.Image{Width: 1, Height: 1, Pix: []byte{0, 0, 0, 255}}
+	quad := rectPath(0, 0, 4, 4)
+	degenerate := graphics.Matrix{} // all zero: not invertible
+	c.DrawImage(quad, degenerate, img, nil)
+	r, g, b, _ := c.Image().At(1, 1).RGBA()
+	if r>>8 < 253 || g>>8 < 253 || b>>8 < 253 {
+		t.Errorf("pixel after drawing with a degenerate matrix = (%d,%d,%d), want unchanged white", r>>8, g>>8, b>>8)
+	}
+}
+
+func TestRenderPaintsImageDrawOps(t *testing.T) {
+	img := &graphics.Image{Width: 1, Height: 1, Pix: []byte{0, 128, 255, 255}}
+	list := graphics.DisplayList{
+		{Path: rectPath(0, 0, 10, 10), Image: img, ImageToDevice: graphics.Scale(10, 10)},
+	}
+	out := Render(list, 10, 10, graphics.Color{R: 1, G: 1, B: 1})
+	if r, g, b, _ := out.At(5, 5).RGBA(); r>>8 > 2 || g>>8 < 120 || g>>8 > 136 || b>>8 < 253 {
+		t.Errorf("image DrawOp pixel = (%d,%d,%d), want ~(0,128,255)", r>>8, g>>8, b>>8)
+	}
+}
+
 func TestRenderPaintsInOrder(t *testing.T) {
 	list := graphics.DisplayList{
 		{Path: rectPath(0, 0, 10, 10), Rule: graphics.NonZero, Color: graphics.Color{R: 1}},

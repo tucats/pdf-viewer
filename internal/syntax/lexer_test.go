@@ -199,3 +199,90 @@ func TestLexerNeverHangsOnUnterminatedConstructs(t *testing.T) {
 		})
 	}
 }
+
+// --- Inline image support (Phase 3) ----------------------------------
+//
+// internal/content's inline-image parsing (BI/ID/EI) drives these three
+// Lexer methods directly, rather than through Next/ParseValue, because
+// an inline image's raw sample data is not PDF object-grammar syntax at
+// all - see each method's doc comment in lexer.go.
+
+func TestLexerReadRawBytes(t *testing.T) {
+	lex := NewLexer(strings.NewReader("HELLOtail"))
+	got, err := lex.ReadRawBytes(5)
+	if err != nil {
+		t.Fatalf("ReadRawBytes: %v", err)
+	}
+	if string(got) != "HELLO" {
+		t.Fatalf("ReadRawBytes = %q, want %q", got, "HELLO")
+	}
+	if lex.Pos() != 5 {
+		t.Fatalf("Pos() = %d, want 5", lex.Pos())
+	}
+	// The rest of the stream should still read normally afterward.
+	rest, err := lex.ReadRawBytes(4)
+	if err != nil || string(rest) != "tail" {
+		t.Fatalf("ReadRawBytes(remaining) = %q, %v, want %q, nil", rest, err, "tail")
+	}
+}
+
+func TestLexerReadRawBytesPastEOFIsMalformed(t *testing.T) {
+	lex := NewLexer(strings.NewReader("ab"))
+	if _, err := lex.ReadRawBytes(10); err == nil {
+		t.Fatal("ReadRawBytes past EOF: want error, got nil")
+	}
+}
+
+func TestLexerSkipOneWhitespaceByte(t *testing.T) {
+	lex := NewLexer(strings.NewReader(" X"))
+	if err := lex.SkipOneWhitespaceByte(); err != nil {
+		t.Fatalf("SkipOneWhitespaceByte: %v", err)
+	}
+	got, err := lex.ReadRawBytes(1)
+	if err != nil || string(got) != "X" {
+		t.Fatalf("after skip, ReadRawBytes(1) = %q, %v, want %q, nil", got, err, "X")
+	}
+
+	// A non-whitespace byte is left in place rather than consumed.
+	lex2 := NewLexer(strings.NewReader("Y"))
+	if err := lex2.SkipOneWhitespaceByte(); err != nil {
+		t.Fatalf("SkipOneWhitespaceByte: %v", err)
+	}
+	got2, err := lex2.ReadRawBytes(1)
+	if err != nil || string(got2) != "Y" {
+		t.Fatalf("after no-op skip, ReadRawBytes(1) = %q, %v, want %q, nil", got2, err, "Y")
+	}
+}
+
+func TestLexerScanForInlineImageEnd(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "simple", input: "rawbytes EI", want: "rawbytes"},
+		{name: "trailing delimiter after EI", input: "rawbytes EI/Next", want: "rawbytes"},
+		{name: "EI-like text inside data is not a false match without leading whitespace", input: "abcEIdef EI", want: "abcEIdef"},
+		{name: "empty data", input: " EI", want: ""},
+		{name: "unterminated", input: "no terminator here", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lex := NewLexer(strings.NewReader(tt.input))
+			got, err := lex.ScanForInlineImageEnd()
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ScanForInlineImageEnd(%q): want error, got none (result %q)", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ScanForInlineImageEnd(%q): %v", tt.input, err)
+			}
+			if string(got) != tt.want {
+				t.Fatalf("ScanForInlineImageEnd(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

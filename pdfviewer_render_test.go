@@ -16,8 +16,12 @@ import (
 // hand-authored vector fixtures added for Phase 2 (see
 // tools/genfixtures/main.go's buildFilledRect, buildStrokedLine,
 // buildClippedRect, and buildTransformedRect doc comments) - the whole
-// point of those fixtures existing at all. Two complementary styles of
-// check are used:
+// point of those fixtures existing at all. Phase 3's image fixtures
+// (buildImageRGB and friends) are exercised with their own direct
+// pixel-sampling tests in pdfviewer_image_test.go, but are included in
+// this file's TestRenderMatchesReferenceImages below so they get the
+// same whole-image regression coverage the vector fixtures do. Two
+// complementary styles of check are used:
 //
 //   - Direct pixel sampling: a handful of specific (x, y) points, each
 //     with a known expected color derived by hand from the fixture's own
@@ -159,6 +163,12 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"stroked-line.pdf",
 		"clipped-rect.pdf",
 		"transformed-rect.pdf",
+		"image-rgb.pdf",
+		"image-mask.pdf",
+		"image-smask.pdf",
+		"image-jpeg.pdf",
+		"inline-image.pdf",
+		"rotated-page.pdf",
 	}
 
 	if *update {

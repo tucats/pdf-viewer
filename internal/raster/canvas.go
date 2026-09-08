@@ -54,6 +54,80 @@ func (c *Canvas) Image() *image.RGBA {
 // stream operator or how much arithmetic produced the point; see
 // graphics.Path's clampPoint.
 func (c *Canvas) Fill(path *graphics.Path, rule graphics.FillRule, color graphics.Color, clips []graphics.ClipPath) {
+	r, g, b := color.R, color.G, color.B
+	c.paint(path, rule, clips, func(_, _ int) (float64, float64, float64, float64) {
+		return r, g, b, 1
+	})
+}
+
+// DrawImage rasterizes quad (an image's device-space quadrilateral -
+// image space's unit square [0,1]x[0,1] mapped through imageToDevice,
+// see graphics.DrawOp.ImageToDevice) exactly like Fill under the
+// NonZero rule, but instead of a single solid color, samples img once
+// per covered device pixel: imageToDevice is inverted (see
+// graphics.Matrix.Invert) to map each covered pixel's center back into
+// image space, which is then scaled by img's own dimensions to pick the
+// nearest source pixel.
+//
+// imageToDevice is expected to already map image space with the same
+// axis convention graphics.Image itself uses - (0,0) at its top-left
+// sample, both axes increasing the "normal" (screen-like) direction, no
+// further flip needed here - per DrawOp.ImageToDevice's own doc comment.
+// PDF's content-stream CTM does not natively have that convention (its
+// unit square is y-up, matching PDF user space generally); reconciling
+// the two is internal/content's job when it builds ImageToDevice from a
+// graphics state's CTM (see that package's imageSpaceToDevice), kept
+// deliberately out of this package so that internal/raster (per its own
+// package doc comment) carries no PDF-specific axis-convention knowledge
+// at all - only "map this unit square to device space, in whatever
+// convention the caller's matrix already establishes."
+//
+// Nearest-neighbor sampling (rather than bilinear or another smoother
+// resampling filter) is a deliberate simplification, consistent with
+// internal/image's own resampling of a mismatched-size /SMask or /Mask -
+// see that package's doc comment; a scaled-up image will show visibly
+// blocky pixels rather than a smooth gradient between samples. A
+// degenerate (non-invertible) imageToDevice - possible from malformed
+// content, e.g. "0 0 0 0 0 0 cm" active when "Do" runs - simply paints
+// nothing, matching Fill's own "nothing to paint" handling for a path
+// with no area.
+func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, img *graphics.Image, clips []graphics.ClipPath) {
+	if img == nil || img.Width <= 0 || img.Height <= 0 {
+		return
+	}
+	deviceToImage, ok := imageToDevice.Invert()
+	if !ok {
+		return
+	}
+
+	c.paint(quad, graphics.NonZero, clips, func(col, row int) (float64, float64, float64, float64) {
+		// Sample at the pixel's center (col+0.5, row+0.5), not its
+		// integer corner, so a pixel is colored by whatever image sample
+		// its middle actually falls under.
+		ux, uy := deviceToImage.Apply(float64(col)+0.5, float64(row)+0.5)
+		if ux < 0 || ux >= 1 || uy < 0 || uy >= 1 {
+			// Outside the image's own unit square: this can happen for a
+			// pixel the shape coverage above still counted as partially
+			// covered, right at quad's anti-aliased edge. Painting
+			// nothing here (rather than clamping to the nearest edge
+			// pixel) avoids smearing the image's edge pixels outward.
+			return 0, 0, 0, 0
+		}
+		ix := int(ux * float64(img.Width))
+		iy := int(uy * float64(img.Height))
+		return img.At(ix, iy)
+	})
+}
+
+// paint is the shared core of Fill and DrawImage: it rasterizes path's
+// coverage under rule (intersected with every clip in clips, exactly as
+// Fill's own doc comment describes), then for every pixel with nonzero
+// combined coverage calls sample to ask what color and alpha to
+// composite there - sample receives the pixel's own (col, row) device
+// coordinates so DrawImage's image-space mapping (or, for Fill, nothing
+// at all - a constant color) can be computed per pixel without paint
+// itself needing to know which case it is serving.
+func (c *Canvas) paint(path *graphics.Path, rule graphics.FillRule, clips []graphics.ClipPath, sample func(col, row int) (r, g, b, a float64)) {
 	minXf, minYf, maxXf, maxYf, ok := path.Bounds()
 	if !ok {
 		return
@@ -75,18 +149,25 @@ func (c *Canvas) Fill(path *graphics.Path, rule graphics.FillRule, color graphic
 	}
 
 	w := maxCol - minCol
-	r, g, b := color.R, color.G, color.B
 	for row := minRow; row < maxRow; row++ {
 		rowBuf := cov[(row-minRow)*w : (row-minRow)*w+w]
 		for col := minCol; col < maxCol; col++ {
-			a := rowBuf[col-minCol]
+			shapeCov := rowBuf[col-minCol]
+			if shapeCov <= 0 {
+				continue
+			}
+			if shapeCov > 1 {
+				shapeCov = 1
+			}
+			r, g, b, a := sample(col, row)
 			if a <= 0 {
 				continue
 			}
-			if a > 1 {
-				a = 1
+			alpha := float64(shapeCov) * a
+			if alpha > 1 {
+				alpha = 1
 			}
-			c.blend(col, row, r, g, b, float64(a))
+			c.blend(col, row, r, g, b, alpha)
 		}
 	}
 }

@@ -3,6 +3,8 @@ package syntax
 import (
 	"bufio"
 	"io"
+
+	"github.com/tucats/pdf-viewer/internal/pdferror"
 )
 
 // This file implements the Lexer, the lowest level of this package: it
@@ -610,6 +612,128 @@ func (l *Lexer) readKeyword(first byte) (Token, error) {
 		buf = append(buf, b)
 	}
 	return Token{Kind: KindKeyword, Text: string(buf)}, nil
+}
+
+// ReadRawBytes reads and returns exactly n raw bytes directly from the
+// underlying byte stream, with no tokenizing at all. internal/content
+// uses this to read an inline image's raw sample data - the bytes
+// between a "BI...ID" inline image's "ID" operator and its "EI"
+// terminator - which is not PDF object-grammar syntax (it is arbitrary
+// binary image data, possibly still filter-encoded) and so must never be
+// handed to the tokenizer. Bytes are read one at a time through readByte
+// so that Pos() keeps accurately reflecting how far the underlying
+// stream has been consumed, exactly like readExactly in value.go (which
+// this mirrors for use outside this package).
+func (l *Lexer) ReadRawBytes(n int64) ([]byte, error) {
+	buf := make([]byte, n)
+	for i := range buf {
+		b, err := l.readByte()
+		if err != nil {
+			return nil, pdferror.Malformedf("reading %d raw bytes: %v", n, err)
+		}
+		buf[i] = b
+	}
+	return buf, nil
+}
+
+// SkipOneWhitespaceByte consumes exactly one byte of raw input if it is
+// PDF whitespace, leaving the stream unconsumed if it is not.
+// internal/content uses this to skip the single whitespace byte the PDF
+// specification requires between an inline image's "ID" operator and the
+// start of its raw sample data (section 8.9.7): unlike the end-of-line
+// skipped after an ordinary stream's "stream" keyword (see skipOneEOL),
+// the specification only requires "a single white-space character" here,
+// not specifically a line ending, so any one whitespace byte qualifies.
+func (l *Lexer) SkipOneWhitespaceByte() error {
+	b, err := l.readByte()
+	if err != nil {
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
+	if isWhitespace(b) {
+		return nil
+	}
+	return l.unreadByte()
+}
+
+// maxInlineImageScan bounds how many raw bytes ScanForInlineImageEnd will
+// read while searching for an inline image's terminating "EI" - the same
+// "bounded work against hostile input" reasoning as maxStreamScanLength
+// in value.go, which this deliberately matches in size: an inline
+// image's raw data is realistically no larger than any other embedded
+// stream this project handles.
+const maxInlineImageScan = 64 << 20
+
+// ScanForInlineImageEnd reads raw bytes until it finds the two-byte
+// sequence "EI" preceded by whitespace and followed by whitespace, a PDF
+// delimiter, or end of input, returning everything read before that
+// preceding whitespace byte (the inline image's raw data) with the "EI"
+// itself and the whitespace immediately before it already consumed but
+// not included in the result.
+//
+// This heuristic - rather than an exact byte count - is what real-world
+// PDF consumers (this project included) fall back on when an inline
+// image's raw data is filter-encoded and no /L (length) key was given:
+// the exact decoded byte count cannot be known without first decoding
+// the data, and decoding it requires first knowing where it ends. PDF
+// producers are expected to avoid emitting the literal byte sequence "
+// EI " inside an inline image's own encoded data for exactly this
+// reason; a filtered stream containing that sequence by sheer
+// coincidence is not something this scan attempts to distinguish, the
+// same documented limitation readUntilEndstream (this function's
+// counterpart for ordinary streams) accepts for "endstream".
+func (l *Lexer) ScanForInlineImageEnd() ([]byte, error) {
+	var out []byte
+	for {
+		if len(out) > maxInlineImageScan {
+			return nil, pdferror.Malformedf("inline image exceeds %d bytes without an \"EI\" terminator", maxInlineImageScan)
+		}
+		b, err := l.readByte()
+		if err != nil {
+			return nil, pdferror.Malformedf("inline image has no \"EI\" terminator before end of input")
+		}
+		out = append(out, b)
+
+		// Check whether the bytes just appended complete a candidate
+		// "EI" marker: the two bytes are "E" then "I", and whatever comes
+		// immediately before "E" (if anything has been read yet) is
+		// whitespace, matching the specification's "<data> EI" layout.
+		n := len(out)
+		if b != 'I' || n < 2 || out[n-2] != 'E' {
+			continue
+		}
+		if n > 2 && !isWhitespace(out[n-3]) {
+			continue
+		}
+
+		next, nextErr := l.readByte()
+		if nextErr != nil && nextErr != io.EOF {
+			return nil, nextErr
+		}
+		terminates := nextErr == io.EOF || isWhitespace(next) || isDelimiter(next)
+		if !terminates {
+			if nextErr == nil {
+				if err := l.unreadByte(); err != nil {
+					return nil, err
+				}
+			}
+			continue
+		}
+		if nextErr == nil {
+			if err := l.unreadByte(); err != nil {
+				return nil, err
+			}
+		}
+		// Drop the "EI" itself, and the one whitespace byte that
+		// separates it from the image data (if any data precedes it).
+		end := n - 2
+		if end > 0 {
+			end--
+		}
+		return out[:end], nil
+	}
 }
 
 // --- PDF character classification -----------------------------------

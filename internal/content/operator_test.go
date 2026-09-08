@@ -64,10 +64,34 @@ func TestParseArrayAndDictOperands(t *testing.T) {
 	}
 }
 
-func TestParseInlineImageIsUnsupported(t *testing.T) {
-	_, err := Parse([]byte("q BI /W 1 /H 1 ID \x00 EI Q"))
-	if !errors.Is(err, pdferror.ErrUnsupported) {
-		t.Fatalf("Parse with BI: error = %v, want ErrUnsupported", err)
+// TestParseInlineImage confirms Parse produces a "BI" Operator carrying
+// a parsed InlineImage rather than treating "BI" as an ordinary
+// operator - see inlineimage_test.go for more thorough coverage of
+// parseInlineImage's own length-determination logic (explicit /L,
+// computed from dimensions, and the EI-scanning fallback).
+func TestParseInlineImage(t *testing.T) {
+	ops, err := Parse([]byte("q BI /W 1 /H 1 /BPC 8 /CS /G ID \x2a EI Q"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(ops) != 3 || ops[0].Name != "q" || ops[1].Name != "BI" || ops[2].Name != "Q" {
+		t.Fatalf("Parse = %#v, want [q, BI, Q]", ops)
+	}
+	img := ops[1].InlineImage
+	if img == nil {
+		t.Fatal("BI operator's InlineImage is nil")
+	}
+	if img.Dict["Width"] != syntax.Integer(1) || img.Dict["Height"] != syntax.Integer(1) {
+		t.Errorf("InlineImage.Dict = %#v, want normalized /Width and /Height", img.Dict)
+	}
+	if img.Dict["BitsPerComponent"] != syntax.Integer(8) {
+		t.Errorf("InlineImage.Dict[\"BitsPerComponent\"] (from /BPC) = %#v, want Integer(8)", img.Dict["BitsPerComponent"])
+	}
+	if img.Dict["ColorSpace"] != syntax.Name("G") {
+		t.Errorf("InlineImage.Dict[\"ColorSpace\"] (from /CS) = %#v, want Name(\"G\")", img.Dict["ColorSpace"])
+	}
+	if len(img.Raw) != 1 || img.Raw[0] != 0x2a {
+		t.Errorf("InlineImage.Raw = %v, want [0x2a]", img.Raw)
 	}
 }
 

@@ -50,7 +50,7 @@ and its Progress Log for what was actually built in each phase.
 | FlateDecode (with predictors) | Phase 2 | Done | Implemented in `internal/filter` (`flate.go`, `predictor.go`). Both PNG (predictor 10-15) and TIFF (predictor 2) predictors are supported for `/BitsPerComponent` 1, 2, 4, 8, and 16. |
 | RunLengthDecode | Phase 2 | Done | Implemented in `internal/filter` (`runlength.go`). |
 | LZWDecode | Phase 2 | Partial | Implemented in `internal/filter` (`lzw.go`) via the standard library's `compress/lzw`, whose `MSB` order is explicitly documented as PDF-compatible. "Partial" because only the default `/EarlyChange 1` is supported - `/EarlyChange 0` returns an error wrapping `ErrUnsupported`, since the standard library offers no way to select that variant. PNG/TIFF predictors are supported here too, sharing `predictor.go` with FlateDecode. |
-| DCTDecode (JPEG) | Phase 3 | Not started | Gated on standard-library `image/jpeg` sufficing; see README "Images, color, and thumbnails". |
+| DCTDecode (JPEG) | Phase 3 | Done | Implemented in `internal/filter` (`dct.go`) via the standard library's `image/jpeg`: baseline and progressive JPEG, grayscale/YCbCr/CMYK (Adobe) component layouts all supported since Go's decoder already handles each. Bounded via `jpeg.DecodeConfig` (reads only the header) before committing to a full decode, so a maliciously huge declared image size is rejected before an oversized allocation. |
 | CCITTFaxDecode | Not yet scheduled | Not started | Common in scanned/fax-derived PDFs; no standard-library decoder exists, so this needs its own design decision before scheduling. |
 | JBIG2Decode | Not scheduled | Not started | Encumbered, complex format with narrow real-world benefit relative to implementation cost; revisit only on concrete demand. |
 | JPXDecode (JPEG 2000) | Not scheduled | Not started | Same rationale as JBIG2Decode. |
@@ -68,7 +68,9 @@ and its Progress Log for what was actually built in each phase.
 | Clipping (`W`/`W*`) | Phase 2 | Partial | Implemented in `internal/graphics` (`state.go`'s `Clips`) and `internal/raster` (coverage-multiplication intersection). Multiple simultaneously active clips are supported, but combined via multiplying each clip's independently anti-aliased coverage rather than true polygon-boolean intersection - an approximation, exact for non-anti-aliased (opaque-interior) clip regions. |
 | Solid color: DeviceGray/RGB/CMYK (`g`/`G`/`rg`/`RG`/`k`/`K`) | Phase 2 | Done | Implemented in `internal/content` (`interpret.go`). CMYK uses the PDF specification's own baseline (non-color-managed) conversion formula. |
 | `sc`/`SC`/`scn`/`SCN` with a resolved `/ColorSpace` resource | Phase 2/3 | Partial | `internal/content` infers DeviceGray/RGB/CMYK directly from the operand count (1, 3, or 4 numeric components) without resolving `/Resources`/`/ColorSpace` at all; this covers the common case but not a named color space with a different component count. `cs`/`CS` are accepted and otherwise ignored. A pattern name operand (`scn`/`SCN` with `/Pattern`) is explicitly detected and rejected as unsupported (Phase 5). |
-| Form XObjects (`Do` with a `/Form` XObject) | Phase 3/5 (not yet scheduled precisely) | Not started | `Do` is currently silently skipped, along with every other unrecognized operator - see `internal/content`'s package doc comment. |
+| Image XObjects (`Do` with an `/Image` XObject) | Phase 3 | Done | Implemented in `internal/content` (`image.go`'s `doXObject`), decoding through `internal/image.Decode` and painting via `internal/raster`'s `Canvas.DrawImage` - see the "Images" section below for color-space/mask/decode-array coverage. |
+| Inline images (`BI`/`ID`/`EI` operators) | Phase 3 | Done | Implemented in `internal/content` (`operator.go`'s `Parse` calls `inlineimage.go`'s `parseInlineImage`; `image.go`'s `doInlineImage` decodes and paints, sharing all of `internal/image`'s color-space/mask logic with a referenced XObject image). An inline image's raw data length is read via a non-standard `/L` key when present, computed exactly from `/W`/`/H`/`/BPC`/`/CS` for an unfiltered image, or found by scanning for a whitespace-delimited `EI` otherwise - see `parseInlineImage`'s doc comment for the tradeoffs of each. |
+| Form XObjects (`Do` with a `/Form` XObject) | Phase 3/5 (not yet scheduled precisely) | Not started | A `Do` naming a non-`/Image` XObject is silently skipped, along with every other unrecognized operator - see `internal/content`'s package doc comment. |
 | Text showing/positioning operators | Phase 4 | Not started | Silently skipped; see the row above. |
 | Marked content (`BMC`/`BDC`/`EMC`/`MP`/`DP`) | Not scheduled | Not started | Silently skipped. No rendering-relevant effect for this project's scope (marked content is a metadata/structure mechanism, not a paint operation). |
 
@@ -76,10 +78,11 @@ and its Progress Log for what was actually built in each phase.
 
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
-| DeviceGray, DeviceRGB, DeviceCMYK | Phase 2–3 | Partial | Solid-color operators (`g`/`rg`/`k`, `sc`/`scn` by component count) are implemented - see "Content streams and graphics" above. Use as an image color space (decoding pixel samples) is Phase 3 work. |
-| Indexed | Phase 3 | Not started | |
-| CalGray, CalRGB, Lab | Phase 3 | Not started | |
-| ICCBased | Phase 3 | Not started | Target: use the ICC profile's declared alternate/component count for correct rendering without implementing a full color management engine. |
+| DeviceGray, DeviceRGB, DeviceCMYK | Phase 2–3 | Done | Solid-color operators (`g`/`rg`/`k`, `sc`/`scn` by component count) were Phase 2 - see "Content streams and graphics" above. Use as an image color space (decoding pixel samples, including the inline-image abbreviations `/G`/`/RGB`/`/CMYK`) is implemented in `internal/image` (`colorspace.go`). |
+| Indexed | Phase 3 | Done | Implemented in `internal/image` (`colorspace.go`'s `resolveIndexed`) over any supported base color space; the lookup table may be a string or a stream (filter-decoded via the same `Resolver.DecodeStream` path as any other stream). An `/Indexed` color space whose base is itself `/Indexed` is rejected as unsupported (not meaningful, and not something real producers emit). |
+| ICCBased | Phase 3 | Partial | Implemented in `internal/image` (`colorspace.go`'s `resolveICCBased`) by component count only (`/N` = 1, 3, or 4, aliased to DeviceGray/RGB/CMYK respectively) - this is the documented target behavior ("use the ICC profile's declared alternate/component count... without implementing a full color management engine"), so "Partial" reflects that no actual ICC profile is ever parsed or applied, by design. |
+| CalGray, CalRGB | Phase 3 | Partial | Implemented in `internal/image` (`colorspace.go`) as aliases for DeviceGray/DeviceRGB - white point, gamma, and (for CalRGB) matrix are not applied, matching this project's existing non-color-managed CMYK conversion precedent. |
+| Lab | Phase 3 | Not started | Deferred: needs its own CIE Lab -> sRGB conversion (with a configurable white point and `/Range`) rather than a simple Device-space alias; `internal/image.resolveColorSpace` returns an error wrapping `ErrUnsupported` naming it explicitly rather than silently misrendering it as some other space. |
 | Separation, DeviceN | Phase 5 | Not started | Needed for tint-transform-driven spot colors, grouped with Phase 5's shading/pattern work since they share the "evaluate a PDF function" dependency. |
 | Pattern color space (tiling and shading patterns) | Phase 5 | Not started | |
 
@@ -108,11 +111,16 @@ and its Progress Log for what was actually built in each phase.
 
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
-| Referenced XObject images | Phase 3 | Not started | |
-| Inline images (`BI`/`ID`/`EI` operators) | Phase 3 | Not started | |
-| Image masks (stencil masking, `/ImageMask true`) | Phase 3 | Not started | |
-| Soft masks on images (`/SMask`) | Phase 3 (basic), Phase 5 (full transparency interaction) | Not started | Basic per-image soft mask support targeted alongside other Phase 3 image work; full interaction with transparency groups is a Phase 5 concern. |
-| Decode arrays | Phase 3 | Not started | |
+| Referenced XObject images | Phase 3 | Done | See "Content streams and graphics" above (`Do` with an `/Image` XObject) and `internal/image`'s package doc comment. |
+| Inline images (`BI`/`ID`/`EI` operators) | Phase 3 | Done | See "Content streams and graphics" above. |
+| Image masks (stencil masking, `/ImageMask true`) | Phase 3 | Done | Implemented in `internal/image` (`decode.go`): paints using the current graphics-state fill color, honoring `/Decode` reversal (`[1 0]` swaps which sample value paints versus masks out). |
+| `/Mask` (stencil, referencing another `/ImageMask` image) | Phase 3 | Done | Implemented in `internal/image` (`mask.go`'s `maskAlphaOrColorKey`), decoded exactly like an ordinary `/ImageMask` image and resampled (nearest-neighbor) to the base image's dimensions if they differ. |
+| `/Mask` (color-key masking, an array of raw sample ranges) | Phase 3 | Done | Implemented in `internal/image` (`mask.go`'s `parseColorKeyRanges`/`colorKeyMasked`): a pixel is fully transparent only if every raw (pre-`/Decode`) component sample falls within its own named range. |
+| Soft masks on images (`/SMask`) | Phase 3 (basic), Phase 5 (full transparency interaction) | Partial | Basic per-image soft mask support is implemented in `internal/image` (`mask.go`'s `smaskAlphaFn`), including resampling a soft mask of different pixel dimensions than its base image; per the specification, `/SMask` takes priority over `/Mask` when both are present. "Partial" because full interaction with transparency groups and blend modes remains Phase 5. A malicious or malformed pair of images whose `/SMask` entries reference each other is rejected past a bounded recursion depth (`maxMaskRecursionDepth` in `internal/image/decode.go`) rather than recursing indefinitely. |
+| Decode arrays | Phase 3 | Done | Implemented in `internal/image` (`decode.go`'s `decodeArray`/`decodeSample`) for every supported color space, `/ImageMask`, and `/Indexed`'s index range, each with the specification's documented default when `/Decode` is absent. |
+| `/BitsPerComponent` 1, 2, 4, 8, 16 | Phase 3 | Done | Implemented in `internal/image` (`decode.go`'s `bitReader`): most-significant-bit-first packing, each image row starting on a fresh byte boundary, per the specification. |
+| DCTDecode (JPEG) images | Phase 3 | Done | See the Filters table above. |
+| CCITTFaxDecode / JBIG2Decode / JPXDecode images | Not yet scheduled | Not started | An image using one of these filters fails with an error wrapping `ErrUnsupported` (propagated from `internal/filter`) rather than being silently skipped or misrendered - see `internal/content`'s "Do"/"BI" handling. |
 
 ## Annotations and forms
 

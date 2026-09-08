@@ -169,6 +169,13 @@ not full implementations - see that table's notes).
 **Exit criteria:** image-heavy pages and thumbnails are correct, bounded, and
 	visibly consistent with full-page rendering.
 
+**Status: done.** See the Progress Log at the end of this document for
+what was actually built, and `docs/capability-matrix.md`'s "Content
+streams and graphics", "Color spaces", and "Images" sections for the
+detailed, row-by-row breakdown (Lab color space and true ICC color
+management are documented, deliberately deferred approximations - not
+full implementations - see that table's notes).
+
 ### Phase 4: Text and fonts
 
 - Parse text operators, text matrices, character mappings, widths, and font
@@ -638,3 +645,252 @@ phase's entry with a note about what changed.
 	remain unimplemented, as planned for Phase 3-5. `CropBox`,
 	`BleedBox`, `TrimBox`, and `ArtBox` (page-box selection beyond
 	`MediaBox`) also remain unimplemented.
+
+### Phase 3: Images, color, and thumbnails — done (2026-09-08)
+
+- **`internal/filter`: DCTDecode (JPEG).** Added
+	[dct.go](internal/filter/dct.go), reversing PDF's DCTDecode filter
+	via the standard library's `image/jpeg` - no separate JPEG decoder
+	was needed, matching how Phase 2's LZWDecode support reused
+	`compress/lzw`. `jpeg.DecodeConfig` reads only the JPEG header
+	(width/height) before a full decode is attempted, so a maliciously
+	tiny file claiming huge dimensions is rejected up front rather than
+	forcing an oversized allocation - the same "bounded decompression"
+	policy the package doc comment already documents for every other
+	filter. Grayscale, YCbCr (ordinary color JPEGs), and CMYK (the
+	"Adobe" 4-component variant, common in print-origin PDFs) all decode
+	correctly, since Go's decoder already reverses each one's own color
+	transform; this package only flattens the result into plain
+	interleaved bytes matching the component order
+	`internal/image` expects. Covered by
+	[dct_test.go](internal/filter/dct_test.go); the CMYK case is tested
+	against the pixel-conversion helper directly rather than a real
+	round-tripped JPEG, since Go's `image/jpeg` encoder has no way to
+	*produce* a 4-component JPEG (only to decode one) - see that test's
+	doc comment.
+- **`internal/graphics`: `Image` type, `Matrix.Invert`, extended
+	`DrawOp`.** Added [image.go](internal/graphics/image.go)'s `Image` -
+	a plain decoded-pixel grid (`Width`, `Height`, `Pix` in
+	`image.NRGBA`-compatible RGBA-non-premultiplied layout) that
+	`internal/image` (see below) produces and `internal/raster` paints,
+	carrying no PDF-specific knowledge itself. Added
+	[matrix.go](internal/graphics/matrix.go)'s `Matrix.Invert`, needed by
+	`internal/raster` to map a device pixel back into an image's own
+	coordinate space while painting it. Extended
+	[displaylist.go](internal/graphics/displaylist.go)'s `DrawOp` with
+	`Image` and `ImageToDevice` fields (meaningful only when `Image` is
+	non-nil) rather than adding a separate draw-operation type, so
+	`internal/raster` needs only one rasterization/clipping code path for
+	fills, strokes, and images alike. Covered by
+	[matrix_test.go](internal/graphics/matrix_test.go)'s new `Invert`
+	tests and [image_test.go](internal/graphics/image_test.go).
+- **`internal/parser`: `ResolveDictionary`.** Refactored
+	[resolve.go](internal/parser/resolve.go): the reference-resolving
+	loop `DecodeStream` already used internally is now the exported
+	`Document.ResolveDictionary`, letting `internal/image` resolve an
+	image XObject's own dictionary (`/ColorSpace`, `/SMask`, and so on -
+	all technically permitted to be indirect references) without
+	`internal/image` needing to import `internal/parser` for anything
+	beyond a small interface (see below). `DecodeStream` itself is
+	unchanged in behavior, just implemented in terms of the new method.
+	Covered by [resolve_test.go](internal/parser/resolve_test.go).
+- **`internal/image` (new package).** The PDF-image-specific decoding
+	layer this phase's README bullets call for, added as its own package
+	(the same pattern Phase 2 established for `internal/filter`) rather
+	than folded into `internal/content`, so its considerable color-space
+	and masking logic stays testable in isolation:
+	- [resolver.go](internal/image/resolver.go) declares `Resolver`, the
+		small slice of `*parser.Document`'s API this package needs
+		(`Resolve`, `ResolveDictionary`, `DecodeStream`) - `*parser.Document`
+		satisfies it automatically (Go's structural interfaces), and
+		`internal/content` declares no separate interface of its own,
+		instead accepting this same `image.Resolver` type directly.
+	- [colorspace.go](internal/image/colorspace.go) resolves a PDF color
+		space object into linear-RGB conversion logic: DeviceGray/RGB/CMYK
+		(and their inline-image abbreviations `/G`/`/RGB`/`/CMYK`),
+		`/ICCBased` (by component count only - `/N` aliased to the matching
+		Device space, this project's documented non-color-managed policy),
+		`/Indexed` (over any supported base space, its lookup table read
+		from a string or a filter-decoded stream), and `/CalGray`/`/CalRGB`
+		(aliased to DeviceGray/RGB, ignoring white point/gamma). `/Lab`,
+		`/Separation`, `/DeviceN`, and `/Pattern` are explicitly rejected as
+		unsupported rather than silently misinterpreted.
+	- [decode.go](internal/image/decode.go)'s `Decode` reads
+		`/BitsPerComponent`-sized samples (1, 2, 4, 8, or 16 bits) via a
+		small `bitReader` (most-significant-bit-first, each row starting on
+		a fresh byte boundary, per the specification), remaps them through
+		the image's `/Decode` array (or the color space's documented
+		default), and writes the result into a `graphics.Image`.
+		`/ImageMask true` images paint with a caller-supplied fill color
+		instead of decoding a color space at all. A `maxImagePixels` bound
+		(matching the root package's own `maxRenderPixels`) rejects an
+		absurdly large image before allocating it.
+	- [mask.go](internal/image/mask.go) implements `/SMask` (a separate
+		grayscale image contributing continuously variable per-pixel alpha,
+		resampled with nearest-neighbor sampling if its dimensions differ
+		from the base image's) and `/Mask` (either another image decoded
+		exactly like `/ImageMask` - a stencil - or an array of raw sample
+		ranges - "color-key" masking, transparent wherever every component
+		falls in its own named range), with `/SMask` taking priority over
+		`/Mask` when both are present, per the specification.
+		`maxMaskRecursionDepth` bounds how deeply a `/SMask`/`/Mask` chain
+		may nest, specifically to catch two distinct image objects whose
+		soft masks reference each other - `internal/parser.Resolve`'s own
+		cyclic-reference guard does not catch this (each object
+		individually resolves without error; only replaying through this
+		package's own recursive decoding call would loop forever), so this
+		package needed its own independent guard.
+	- Covered by [decode_test.go](internal/image/decode_test.go),
+		[colorspace_test.go](internal/image/colorspace_test.go), and
+		[mask_test.go](internal/image/mask_test.go) - including a
+		deliberately constructed pair of mutually-`/SMask`-referencing image
+		streams, run with a timeout, to regression-test the recursion-depth
+		guard actually terminates rather than hanging the test suite if that
+		guard were ever broken.
+- **`internal/raster`: `Canvas.DrawImage`.** Refactored
+	[canvas.go](internal/raster/canvas.go): `Canvas.Fill`'s coverage
+	rasterization and clip intersection were factored out into a shared
+	`paint` method parameterized by a per-pixel color/alpha callback, so
+	the new `Canvas.DrawImage` (image painting) and the existing `Fill`
+	(solid color painting) share one implementation of "figure out which
+	pixels are covered and how clipped they are" rather than duplicating
+	it. `DrawImage` inverts its `ImageToDevice` matrix (via the new
+	`Matrix.Invert`) to map each covered device pixel back to an image
+	coordinate, sampled with nearest-neighbor (not bilinear) selection -
+	a documented simplification in the same spirit as this package's
+	existing round-only stroke joins. [render.go](internal/raster/render.go)'s
+	`Render` now dispatches each `DrawOp` to `DrawImage` or `Fill`
+	depending on whether its `Image` field is set. Covered by new cases
+	in [canvas_test.go](internal/raster/canvas_test.go).
+- **`internal/content`: "Do" and inline images.** Added
+	[inlineimage.go](internal/content/inlineimage.go)'s
+	`parseInlineImage`, called from
+	[operator.go](internal/content/operator.go)'s `Parse` when it
+	encounters "BI" (previously rejected outright as unsupported - see
+	the Phase 2 entry above): it reads the inline image's dictionary
+	(normalizing every abbreviated key, e.g. `/BPC` to `/BitsPerComponent`,
+	so downstream code never needs to know inline and referenced images
+	use different key names) and then its raw sample data, preferring an
+	exact byte count - the non-standard but unambiguous `/L` key if given,
+	or one computed directly from `/W`/`/H`/`/BPC`/`/CS` when the image is
+	unfiltered - and falling back to scanning for a whitespace-delimited
+	"EI" only when neither is available (an encoded image's true length
+	cannot be known without decoding it first). The raw-byte-level reading
+	this requires (`Lexer.ReadRawBytes`, `SkipOneWhitespaceByte`,
+	`ScanForInlineImageEnd` - see below) cannot go through ordinary
+	tokenizing, since inline image data is not PDF object-grammar syntax
+	at all. Added [image.go](internal/content/image.go)'s `doXObject`
+	("Do": looks up a name in `/Resources /XObject`, decodes it if its
+	`/Subtype` is `/Image`, silently skips it otherwise - Form XObjects
+	remain unimplemented) and `doInlineImage` ("BI"), both converging on
+	`paintImage`, which calls `internal/image.Decode` and appends an image
+	`graphics.DrawOp`. `Interpret`'s signature gained `resources` and
+	`resolver` parameters for this. A nil resolver (only possible in tests
+	and fuzzing - the root package always supplies a real one) makes both
+	operators safe no-ops rather than reaching a nil-interface method call,
+	specifically because a fuzzer can construct an inline image dictionary
+	value that is itself a (specification-illegal, but syntactically
+	parseable) indirect reference. Covered by
+	[image_test.go](internal/content/image_test.go) and
+	[inlineimage_test.go](internal/content/inlineimage_test.go); the
+	existing `FuzzParseAndInterpret` fuzz target was extended with inline-
+	image seeds and switched from a nil resolver to a working (if
+	empty-backed) one specifically so fuzzer-mutated inline images now
+	flow all the way into `internal/image.Decode` instead of being
+	skipped, and ran clean across several million executions during
+	development.
+	- **A real bug this project's own development caught before it
+		shipped:** a content stream's coordinate convention is y-up (PDF
+		user space), but `graphics.Image`'s row storage is y-down (row 0 is
+		the image's top row, matching both PDF's own image sample order and
+		Go's standard image types) - so using a "Do" operator's current CTM
+		directly as `DrawOp.ImageToDevice` renders every image vertically
+		flipped. [image.go](internal/content/image.go)'s
+		`imageSpaceToDevice` composes the necessary vertical flip before the
+		CTM is used for image sampling; see its doc comment (and
+		`graphics.DrawOp.ImageToDevice`'s own updated doc comment) for the
+		full derivation, and `TestImageSpaceToDeviceFlipsRowOrder` in
+		[image_test.go](internal/content/image_test.go) for the regression
+		test. This is exactly the kind of subtlety the root package's own
+		end-to-end fixture tests (`image-rgb.pdf`, with a different color in
+		each quadrant - see below) exist to catch, since a bug like this is
+		invisible to a single-solid-color test image.
+- **`internal/syntax`: raw-byte-level Lexer methods for inline images.**
+	Added three exported methods to
+	[lexer.go](internal/syntax/lexer.go), used only by
+	`internal/content`'s inline-image parsing (see above):
+	`ReadRawBytes` (an exact byte count, position-tracked exactly like
+	the existing internal `readExactly`), `SkipOneWhitespaceByte` (the
+	single mandatory whitespace byte between "ID" and an inline image's
+	data), and `ScanForInlineImageEnd` (the whitespace-delimited "EI"
+	heuristic scan, bounded by `maxInlineImageScan` against unbounded
+	work on a hostile file with no real terminator). Covered by new cases
+	in [lexer_test.go](internal/syntax/lexer_test.go).
+- **`internal/model`: `Resolver` passthrough.** Added
+	[resolver.go](internal/model/resolver.go): three one-line methods
+	forwarding to the wrapped `*parser.Document`, so `model.Document`
+	itself satisfies `image.Resolver` without the root package needing to
+	reach past `internal/model` into `internal/parser` directly, and
+	without `internal/model` needing to import `internal/image` at all
+	(Go's structural interfaces make this automatic).
+- **Public API: `Page.Thumbnail` implemented.** [page.go](page.go)'s
+	`Render` and the new `Thumbnail` now share a `renderAtScale` helper -
+	the only difference between the two is which scale is used, so this
+	is what makes Thumbnail "the same page interpretation as full
+	rendering" (per the README's Draft Public API) rather than a second,
+	divergent implementation. `thumbnailScale` computes the scale that
+	fits the longer of the page's two (`/Rotate`-aware) dimensions within
+	`ThumbnailOptions.MaxDimension`, preserving aspect ratio; it corrects
+	its own initial floating-point estimate at most once (by actually
+	calling `pageDeviceGeometry` and checking the result) so that a page
+	size landing exactly on an integer pixel boundary can never round up
+	one pixel past the caller's requested bound. [options.go](options.go)'s
+	`ThumbnailOptions` gained `MaxDimension` (default 256, a common
+	thumbnail size) and `Background` (mirroring `RenderOptions`).
+	Covered by new tests in [pdfviewer_test.go](pdfviewer_test.go)
+	(default/custom `MaxDimension`, aspect-ratio preservation, background,
+	the pixel-count bound, and a rotated page).
+- **Fixture corpus.** Extended
+	[tools/genfixtures](tools/genfixtures/main.go) with six new generated
+	fixtures, documented in
+	[testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md):
+	`image-rgb.pdf` (a referenced 2x2 DeviceRGB image, one color per
+	quadrant - deliberately not a single solid color, since that is what
+	caught the vertical-flip bug described above), `image-mask.pdf` (a
+	referenced `/ImageMask` stencil painted with the current fill color),
+	`image-smask.pdf` (a referenced image with a separate `/SMask` object),
+	`image-jpeg.pdf` (a `/Filter /DCTDecode` image - the JPEG bytes
+	themselves are generated at fixture-build time with Go's own
+	`image/jpeg` encoder, keeping this fixture's provenance identical to
+	every other hand-authored one, though its exact bytes do depend on
+	the Go toolchain's JPEG encoder output - see the note in
+	FIXTURES.md), `inline-image.pdf` (a "BI"/"ID"/"EI" image with no
+	`/Resources /XObject` entry at all), and `rotated-page.pdf` (a
+	`/Rotate 90` page - filling a gap that existed since Phase 2, since
+	no fixture previously exercised page rotation end to end at all;
+	`buildRotatedPage`'s doc comment works out by hand exactly where its
+	test content should land after rotation).
+- **Rendering and Thumbnail tests.** Added
+	[pdfviewer_image_test.go](pdfviewer_image_test.go), direct
+	pixel-sampling assertions against each new image fixture (including
+	the JPEG one, with a generous tolerance for lossy compression), plus
+	a rotated-page render test. Every new image fixture (and
+	`rotated-page.pdf`) was also added to
+	[pdfviewer_render_test.go](pdfviewer_render_test.go)'s
+	`TestRenderMatchesReferenceImages` for the same whole-image
+	regression coverage the Phase 2 vector fixtures already had.
+- **Capability matrix updated.**
+	[docs/capability-matrix.md](docs/capability-matrix.md)'s "Content
+	streams and graphics" (image XObjects, inline images), "Color spaces"
+	(DeviceGray/RGB/CMYK as an image color space, Indexed, ICCBased,
+	CalGray/CalRGB), and "Images" (referenced/inline images, image masks,
+	both forms of `/Mask`, `/SMask`, decode arrays, bit depths, DCTDecode)
+	rows are now "Done" or "Partial" as described above; the Filters
+	table's DCTDecode row is now "Done".
+- **What's carried forward.** Lab color space, Separation/DeviceN,
+	Pattern color spaces, Form XObjects, CCITTFaxDecode/JBIG2Decode/
+	JPXDecode (and therefore images using any of those filters), true ICC
+	color management, and full transparency-group interaction for soft
+	masks all remain unimplemented, as planned for Phase 4/5. Text
+	rendering (Phase 4) and everything in Phase 5's scope are otherwise
+	untouched by this phase.

@@ -9,13 +9,13 @@
 //
 // # Supported filters
 //
-// ASCII85Decode, ASCIIHexDecode, RunLengthDecode, LZWDecode, and
-// FlateDecode (with PNG and TIFF predictors) are implemented. Any other
-// filter name - DCTDecode (JPEG, Phase 3), CCITTFaxDecode, JBIG2Decode,
-// JPXDecode, and Crypt - returns an error wrapping
-// pdferror.ErrUnsupported naming the filter, rather than being silently
-// skipped or misread; see docs/capability-matrix.md for the up-to-date
-// status of each.
+// ASCII85Decode, ASCIIHexDecode, RunLengthDecode, LZWDecode, FlateDecode
+// (with PNG and TIFF predictors), and DCTDecode (JPEG, via the standard
+// library's image/jpeg - see dct.go) are implemented. Any other filter
+// name - CCITTFaxDecode, JBIG2Decode, JPXDecode, and Crypt - returns an
+// error wrapping pdferror.ErrUnsupported naming the filter, rather than
+// being silently skipped or misread; see docs/capability-matrix.md for
+// the up-to-date status of each.
 //
 // # Filter chains
 //
@@ -186,6 +186,8 @@ func decodeOne(name syntax.Name, parms syntax.Dictionary, data []byte) ([]byte, 
 		return decodeLZW(data, parms)
 	case "FlateDecode", "Fl":
 		return decodeFlate(data, parms)
+	case "DCTDecode", "DCT":
+		return decodeDCT(data)
 	default:
 		return nil, pdferror.Unsupportedf("stream filter %q", name)
 	}

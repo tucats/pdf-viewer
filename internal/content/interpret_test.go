@@ -16,7 +16,10 @@ func mustInterpret(t *testing.T, src string) graphics.DisplayList {
 	if err != nil {
 		t.Fatalf("Parse(%q): %v", src, err)
 	}
-	list, err := Interpret(ops, graphics.Identity())
+	// nil resources and resolver: none of the tests driven through this
+	// helper exercise "Do" or "BI" (see image_test.go for those), so
+	// there is nothing for Interpret to resolve.
+	list, err := Interpret(ops, graphics.Identity(), nil, nil)
 	if err != nil {
 		t.Fatalf("Interpret(%q): %v", src, err)
 	}
@@ -182,7 +185,7 @@ func TestInterpretScnPatternNameIsUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	_, err = Interpret(ops, graphics.Identity())
+	_, err = Interpret(ops, graphics.Identity(), nil, nil)
 	if !errors.Is(err, pdferror.ErrUnsupported) {
 		t.Fatalf("Interpret with pattern scn: error = %v, want ErrUnsupported", err)
 	}
@@ -203,7 +206,7 @@ func TestInterpretWrongOperandCountIsMalformed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if _, err := Interpret(ops, graphics.Identity()); !errors.Is(err, pdferror.ErrMalformed) {
+	if _, err := Interpret(ops, graphics.Identity(), nil, nil); !errors.Is(err, pdferror.ErrMalformed) {
 		t.Fatalf("Interpret: error = %v, want ErrMalformed", err)
 	}
 }

@@ -22,9 +22,32 @@ import (
 // Operator is one content stream operator together with the operands
 // that preceded it - e.g. "10 10 80 80 re" becomes
 // Operator{Name: "re", Operands: []syntax.Object{Integer(10), ...}}.
+//
+// InlineImage is non-nil only for an operator named "BI": an inline
+// image has no ordinary numeric/name operands at all (see Parse's doc
+// comment), so its data is carried in this separate field instead of
+// Operands.
 type Operator struct {
-	Name     string
-	Operands []syntax.Object
+	Name        string
+	Operands    []syntax.Object
+	InlineImage *InlineImage
+}
+
+// InlineImage is the parsed form of a "BI...ID...EI" inline image: Dict
+// is its image dictionary (with every abbreviated key - see
+// inlineKeyAliases - normalized to the corresponding full name an
+// ordinary XObject image dictionary would use, e.g. "BPC" becomes
+// "BitsPerComponent"; this normalization is exactly what lets
+// internal/content's "Do" and "BI" handling in interpret.go, and
+// internal/image's Decode beneath it, share a single code path instead
+// of two nearly-identical ones), and Raw is the inline image's raw
+// sample data exactly as it appeared in the content stream, still
+// encoded by whatever filter (if any) Dict's /Filter entry names - the
+// same "not yet filter-decoded" contract syntax.Stream.Raw documents for
+// an ordinary stream object.
+type InlineImage struct {
+	Dict syntax.Dictionary
+	Raw  []byte
 }
 
 // maxOperandsPerOperator bounds how many operands Parse will accumulate
@@ -45,11 +68,13 @@ const maxOperandsPerOperator = 64
 // "operands then keyword" forms:
 //
 //   - "BI" (begin inline image) introduces inline image data with its
-//     own dictionary-like key/value syntax followed by raw, filter-encoded
-//     image bytes terminated by "EI" - none of which is valid content
-//     stream *operator* syntax, so it cannot be parsed by this function at
-//     all. Inline images are Phase 3 work (see docs/capability-matrix.md);
-//     encountering "BI" here returns an error wrapping ErrUnsupported.
+//     own dictionary-like key/value syntax followed by raw, still
+//     filter-encoded image bytes terminated by "EI" - none of which is
+//     valid content stream *operator* syntax, so it cannot be parsed the
+//     way every other operator is. parseInlineImage (below) handles this
+//     directly against the Lexer, producing an InlineImage carried on the
+//     resulting Operator instead of ordinary Operands; see Interpret for
+//     how it is actually decoded and painted (Phase 3).
 //   - "true"/"false"/"null" are valid operand values (via
 //     syntax.ParseValue), not operators, even though a bare content
 //     stream keyword otherwise means "this is an operator": Parse relies
@@ -82,7 +107,13 @@ func Parse(data []byte) ([]Operator, error) {
 				operands = append(operands, syntax.Null{})
 				continue
 			case "BI":
-				return nil, pdferror.Unsupportedf("inline images (\"BI\"/\"ID\"/\"EI\" operators)")
+				img, err := parseInlineImage(lex)
+				if err != nil {
+					return nil, err
+				}
+				ops = append(ops, Operator{Name: "BI", InlineImage: img})
+				operands = nil
+				continue
 			default:
 				ops = append(ops, Operator{Name: tok.Text, Operands: operands})
 				operands = nil

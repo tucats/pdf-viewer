@@ -35,6 +35,15 @@ func FuzzParseAndInterpret(f *testing.F) {
 		"(text) Tj BT ET",
 		"/Im1 Do",
 		"[[[[1]]]] op",
+		// Phase 3: inline images, including a dictionary value that is
+		// itself an (illegal, but syntactically parseable) indirect
+		// reference - a nil resolver (this fuzz target never supplies
+		// one; see the Interpret call below) must handle this without a
+		// nil-interface method call panic.
+		"BI /W 4 /H 4 /BPC 8 /CS /RGB ID \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00 EI",
+		"BI /W 1 /H 1 /IM true ID \x00 EI",
+		"BI /W 1 /H 1 /CS 5 0 R ID \x00 EI",
+		"BI /W 1 /H 1 /F /Fl ID notreallyflatedata EI",
 	}
 	for _, s := range seeds {
 		f.Add([]byte(s))
@@ -45,6 +54,17 @@ func FuzzParseAndInterpret(f *testing.F) {
 		if err != nil {
 			return
 		}
-		_, _ = Interpret(ops, graphics.Identity())
+		// A real (if empty-backed) resolver, rather than nil, is used
+		// here specifically so a fuzzer-mutated inline image ("BI") -
+		// which needs no /Resources dictionary to be reachable, unlike
+		// "Do" - actually flows all the way into internal/image.Decode
+		// instead of being skipped by the nil-resolver guard in
+		// doInlineImage; see TestInterpretDoAndInlineImageWithNilResolverDoesNotPanic
+		// in image_test.go for the dedicated (non-fuzz) coverage of that
+		// guard itself. resources stays nil, since a fuzzer mutating raw
+		// bytes has no realistic way to construct a matching /XObject
+		// entry for "Do" to find - "Do" is covered by the unit tests in
+		// image_test.go instead.
+		_, _ = Interpret(ops, graphics.Identity(), nil, &fakeResolver{})
 	})
 }

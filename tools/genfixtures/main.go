@@ -36,6 +36,9 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -83,6 +86,12 @@ func main() {
 		{"clipped-rect.pdf", buildClippedRect()},
 		{"transformed-rect.pdf", buildTransformedRect()},
 		{"flate-content-rect.pdf", buildFlateContentRect()},
+		{"image-rgb.pdf", buildImageRGB()},
+		{"image-mask.pdf", buildImageMask()},
+		{"image-smask.pdf", buildImageSMask()},
+		{"image-jpeg.pdf", buildImageJPEG()},
+		{"inline-image.pdf", buildInlineImage()},
+		{"rotated-page.pdf", buildRotatedPage()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -405,6 +414,191 @@ func buildFlateContentRect() []byte {
 	content := deflate([]byte("1 0 0 rg\n10 10 80 80 re\nf\n"))
 	dict := fmt.Sprintf("<< /Length %d /Filter /FlateDecode >>", len(content))
 	b.addObject(4, 0, dict, content)
+	return b.finish(1)
+}
+
+// buildImageRGB returns a single 100x100-point page whose content stream
+// paints a referenced image XObject ("Do") across the entire page: a 2x2
+// DeviceRGB image (red, green / blue, yellow, one solid color per
+// quadrant), uncompressed. This is the baseline Phase 3 rendering
+// fixture for referenced images - exercising /Resources /XObject
+// lookup, image dictionary resolution, and DeviceRGB sample decoding -
+// the image counterpart to buildFilledRect's role for Phase 2's vector
+// fills.
+func buildImageRGB() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n100 0 0 100 0 0 cm\n/Im0 Do\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	pixels := []byte{
+		255, 0, 0, 0, 255, 0, // row 0: red, green
+		0, 0, 255, 255, 255, 0, // row 1: blue, yellow
+	}
+	imgDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 2 /Height 2 "+
+		"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Length %d >>", len(pixels))
+	b.addObject(5, 0, imgDict, pixels)
+
+	return b.finish(1)
+}
+
+// buildImageMask returns a single 100x100-point page that sets the fill
+// color to red and then paints a referenced /ImageMask stencil image
+// across the entire page: a 2x1, 1-bit-per-pixel mask whose left pixel
+// is painted (sample 0) and whose right pixel is masked out (sample 1),
+// per the default /Decode for image masks (see internal/image's package
+// doc comment). The rendered result should be a red left half and a
+// white (background, left untouched) right half - exercising
+// /ImageMask's "paint using the current fill color" behavior end to end,
+// including internal/content threading the graphics state's FillColor
+// through to internal/image.Decode.
+func buildImageMask() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("1 0 0 rg\nq\n100 0 0 100 0 0 cm\n/Im0 Do\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	// Two 1-bit samples packed high-bit-first into a single byte:
+	// 0 (paint), then 1 (mask out), then six padding bits - 0b01000000.
+	maskData := []byte{0x40}
+	maskDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 2 /Height 1 "+
+		"/ImageMask true /Length %d >>", len(maskData))
+	b.addObject(5, 0, maskDict, maskData)
+
+	return b.finish(1)
+}
+
+// buildImageSMask returns a single 100x100-point page that paints a 1x1
+// solid red image XObject with an /SMask giving it 50% alpha, across the
+// entire page - exercising resolving and decoding a *second* image
+// object (the soft mask) referenced from within the first one's own
+// dictionary, and internal/image's per-pixel alpha blending. Over this
+// project's opaque white page background, the expected rendered color is
+// (approximately) red blended at ~50% opacity onto white: full red
+// channel (already 255 in both layers), green and blue roughly halved
+// from white toward the mask's own gray value.
+func buildImageSMask() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n100 0 0 100 0 0 cm\n/Im0 Do\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	smaskData := []byte{128}
+	smaskDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 "+
+		"/ColorSpace /DeviceGray /BitsPerComponent 8 /Length %d >>", len(smaskData))
+	b.addObject(6, 0, smaskDict, smaskData)
+
+	imgData := []byte{255, 0, 0}
+	imgDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 1 /Height 1 "+
+		"/ColorSpace /DeviceRGB /BitsPerComponent 8 /SMask 6 0 R /Length %d >>", len(imgData))
+	b.addObject(5, 0, imgDict, imgData)
+
+	return b.finish(1)
+}
+
+// buildImageJPEG returns a single 100x100-point page that paints a
+// referenced image XObject encoded with DCTDecode (JPEG) - a small,
+// solid dark-blue 4x4 image, generated at fixture-build time with the
+// standard library's own image/jpeg encoder (quality 100, to keep lossy
+// compression artifacts on a flat color small enough for an exact-match
+// pixel test with a modest tolerance) rather than any externally sourced
+// JPEG file, keeping this fixture's provenance identical to every other
+// hand-authored one in this package (see FIXTURES.md). This exercises
+// internal/filter's DCTDecode support end to end, through the real
+// cross-reference/object-resolution pipeline rather than only
+// internal/filter's own unit tests.
+func buildImageJPEG() []byte {
+	src := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			src.Set(x, y, color.RGBA{R: 20, G: 40, B: 200, A: 255})
+		}
+	}
+	var jpegBuf bytes.Buffer
+	if err := jpeg.Encode(&jpegBuf, src, &jpeg.Options{Quality: 100}); err != nil {
+		panic(fmt.Sprintf("genfixtures: encoding test JPEG: %v", err))
+	}
+	jpegData := jpegBuf.Bytes()
+
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n100 0 0 100 0 0 cm\n/Im0 Do\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	imgDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 4 /Height 4 "+
+		"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>", len(jpegData))
+	b.addObject(5, 0, imgDict, jpegData)
+
+	return b.finish(1)
+}
+
+// buildInlineImage returns a single 100x100-point page whose content
+// stream paints an inline ("BI"/"ID"/"EI") image directly, with no
+// /Resources /XObject entry at all: a 2x1 DeviceRGB image (red, green),
+// uncompressed, scaled to cover the whole page. This is the Phase 3
+// counterpart to buildImageRGB for the *other* way a PDF can embed image
+// data - exercising internal/content's inline-image parsing
+// (operator.go/inlineimage.go) end to end, including its computed-exact-
+// length read path (this image has no /Filter, so its raw byte count is
+// computed from /W, /H, /BPC, and /CS rather than needing an /L key or a
+// scan for "EI" - see inlineimage.go's readInlineImageData).
+func buildInlineImage() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>", nil)
+
+	var content bytes.Buffer
+	content.WriteString("q\n100 0 0 100 0 0 cm\nBI /W 2 /H 1 /BPC 8 /CS /RGB ID ")
+	content.Write([]byte{255, 0, 0, 0, 255, 0}) // red, green
+	content.WriteString(" EI\nQ\n")
+
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", content.Len()), content.Bytes())
+	return b.finish(1)
+}
+
+// buildRotatedPage returns a page whose MediaBox is 100 (wide) x 200
+// (tall) points but which declares /Rotate 90, with a 20x20-point red
+// square filled at the origin of its own (unrotated) user space - the
+// Phase 3 regression fixture for Page.Render's and Page.Thumbnail's
+// /Rotate handling, which previously had no end-to-end rendering test at
+// all (only internal/model's inheritance/normalization logic was
+// covered - see model_test.go's TestRotateIsInheritedAndNormalized).
+//
+// Working through pageDeviceGeometry's own math (root package page.go)
+// by hand: a 90-degree rotation swaps the rendered image's pixel
+// dimensions to 200x100, and maps this fixture's user-space square
+// (0,0)-(20,20) to device rectangle (0,0)-(20,20) in the *rotated*
+// canvas - i.e. the red square should land at the top-left corner of a
+// 200x100 rendered image. A test asserting exactly that (rather than
+// only checking the output's pixel dimensions) catches a rotation
+// direction or sign error that a dimensions-only check would miss.
+func buildRotatedPage() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 200] /Rotate 90 "+
+		"/Resources << >> /Contents 4 0 R >>", nil)
+
+	content := []byte("1 0 0 rg\n0 0 20 20 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
 	return b.finish(1)
 }
 

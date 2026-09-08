@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/tucats/pdf-viewer/internal/graphics"
+	pdfimage "github.com/tucats/pdf-viewer/internal/image"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
 	"github.com/tucats/pdf-viewer/internal/syntax"
 )
@@ -17,22 +18,38 @@ import (
 // initialCTM - the mapping from the page's default user space to device
 // (pixel) space, established by the caller before any content stream
 // operator runs (see the root package's Page.Render) - and returns the
-// resulting DisplayList: every fill and stroke the content actually
-// painted, already flattened into device-space geometry with resolved
-// colors and clips.
+// resulting DisplayList: every fill, stroke, and (Phase 3) image the
+// content actually painted, already flattened into device-space
+// geometry with resolved colors and clips.
+//
+// resources is the page's (or, once forms are supported, a form
+// XObject's) /Resources dictionary, consulted only by "Do" (to look up a
+// named XObject) and, beneath it, internal/image (to resolve a named
+// /ColorSpace) - it may be nil for content that uses neither. resolver
+// reaches back into the document for anything an image needs beyond its
+// own dictionary and raw bytes (see pdfimage.Resolver); it may be nil
+// only if resources is also nil (a nil resolver used for image work
+// would panic, but a page with no /Resources at all cannot legally paint
+// an XObject image in the first place, since there would be nothing for
+// "Do" to name).
 //
 // Interpret does not abort on an operator it does not recognize (text
-// showing, XObject painting via "Do", shading via "sh", marked content,
-// and so on - none of which is implemented yet; see the package doc
-// comment) - those are silently skipped, so a page mixing supported
-// vector content with unsupported features still renders whatever this
-// package can handle rather than failing the whole page. It does return
-// an error for content that is itself malformed (wrong operand count or
-// type for a recognized operator) or that names an explicitly
-// unsupported feature this package can positively detect (inline images,
-// pattern color spaces) rather than merely not recognizing.
-func Interpret(ops []Operator, initialCTM graphics.Matrix) (graphics.DisplayList, error) {
-	in := &interpreter{stack: graphics.NewStack(graphics.NewState(initialCTM))}
+// showing, Form XObject painting via "Do", shading via "sh", marked
+// content, and so on - none of which is implemented yet; see the package
+// doc comment) - those are silently skipped, so a page mixing supported
+// content with unsupported features still renders whatever this package
+// can handle rather than failing the whole page. It does return an error
+// for content that is itself malformed (wrong operand count or type for
+// a recognized operator, or a malformed inline/referenced image) or that
+// names an explicitly unsupported feature this package can positively
+// detect (pattern color spaces, an image using an unsupported color
+// space or filter) rather than merely not recognizing.
+func Interpret(ops []Operator, initialCTM graphics.Matrix, resources syntax.Dictionary, resolver pdfimage.Resolver) (graphics.DisplayList, error) {
+	in := &interpreter{
+		stack:     graphics.NewStack(graphics.NewState(initialCTM)),
+		resources: resources,
+		resolver:  resolver,
+	}
 	for _, op := range ops {
 		if err := in.exec(op); err != nil {
 			return nil, err
@@ -59,6 +76,11 @@ type interpreter struct {
 	pendingClip     *graphics.Path
 	pendingClipRule graphics.FillRule
 	hasPendingClip  bool
+
+	// resources and resolver back "Do" (referenced XObject images) and
+	// "BI" (inline images) - see Interpret's doc comment.
+	resources syntax.Dictionary
+	resolver  pdfimage.Resolver
 
 	list graphics.DisplayList
 }
@@ -256,9 +278,15 @@ func (in *interpreter) exec(op Operator) error {
 		}
 		st.StrokeColor = col
 
+	case "Do":
+		return in.doXObject(st, op.Operands)
+	case "BI":
+		return in.doInlineImage(st, op.InlineImage)
+
 	default:
 		// Every other operator - text showing/positioning ("Tj", "TJ",
-		// "Td", ...), XObject painting ("Do"), shading ("sh"), marked
+		// "Td", ...), Form XObject painting (a "Do" naming a /Form rather
+		// than an /Image XObject - see doXObject), shading ("sh"), marked
 		// content ("BMC"/"BDC"/"EMC"/"MP"/"DP"), and anything else this
 		// package does not recognize - is silently skipped; see
 		// Interpret's doc comment for why.

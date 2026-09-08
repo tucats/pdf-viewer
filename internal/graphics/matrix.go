@@ -66,3 +66,43 @@ func (m Matrix) Apply(x, y float64) (float64, float64) {
 func (m Matrix) ApplyVector(dx, dy float64) (float64, float64) {
 	return m.A*dx + m.C*dy, m.B*dx + m.D*dy
 }
+
+// Invert returns the matrix that undoes m's mapping - the unique n such
+// that m.Mul(n) and n.Mul(m) both equal Identity - together with
+// whether m was invertible at all (ok is false only when m's linear part
+// is degenerate, i.e. it collapses the plane onto a line or a point, as
+// "0 0 0 0 tx ty cm" would; a determinant of exactly zero is the
+// standard test for this).
+//
+// internal/raster needs this for image painting (Phase 3): a "Do"
+// operator paints an image across the unit square [0,1]x[0,1] mapped by
+// the CTM into device space (see graphics.DrawOp.ImageToDevice), but
+// rasterizing works pixel-by-pixel in device space, so for every device
+// pixel the rasterizer needs the *reverse* mapping - "which point in the
+// image's own [0,1]x[0,1] space landed here" - which is exactly m
+// applied in reverse, i.e. Invert()'s result applied to that device
+// pixel.
+//
+// If you are new to linear algebra: inverting a 2D affine transform
+// (represented here as a 3x3 matrix with a fixed right-hand column - see
+// this type's own doc comment) reduces to inverting its top-left 2x2
+// "linear part" [[A B] [C D]] using the standard 2x2 inverse formula
+// (swap the diagonal, negate the off-diagonal, divide by the
+// determinant AD-BC) and then working out the translation (E, F) that
+// makes the whole thing cancel out m's own translation.
+func (m Matrix) Invert() (Matrix, bool) {
+	det := m.A*m.D - m.B*m.C
+	if det == 0 {
+		return Matrix{}, false
+	}
+	invDet := 1 / det
+	a := m.D * invDet
+	b := -m.B * invDet
+	c := -m.C * invDet
+	d := m.A * invDet
+	return Matrix{
+		A: a, B: b, C: c, D: d,
+		E: -(m.E*a + m.F*c),
+		F: -(m.E*b + m.F*d),
+	}, true
+}

@@ -194,22 +194,43 @@ func (d *Document) resolveIfReference(obj syntax.Object) (syntax.Object, error) 
 	return d.Resolve(ref.Number)
 }
 
-// DecodeStream returns s's fully-decoded bytes: it resolves s.Dict's
-// /Filter and /DecodeParms entries (which are, in the vast majority of
-// real files, direct values already - but PDF technically permits them
-// to be indirect references too) and hands the result to
-// internal/filter.Decode. Only the stream dictionary's top-level entries
-// are resolved this way, not values nested inside a /DecodeParms array
-// or dictionary; see internal/filter's package doc comment for why that
-// is a reasonable, documented limitation rather than an oversight.
-func (d *Document) DecodeStream(s syntax.Stream) ([]byte, error) {
-	dict := make(syntax.Dictionary, len(s.Dict))
-	for k, v := range s.Dict {
+// ResolveDictionary returns a copy of dict with every top-level value
+// that is a syntax.Reference resolved to what it actually points at -
+// PDF permits essentially any dictionary entry to be given either
+// directly or as an indirect reference to the same kind of value, and
+// callers needing a concrete value (rather than "possibly another layer
+// of indirection") use this rather than resolving each entry themselves.
+// Only top-level entries are resolved, not values nested inside an
+// array or a nested dictionary - see DecodeStream's doc comment, which
+// documents this same limitation for the /Filter-decoding use it was
+// originally written for.
+//
+// internal/image (Phase 3) also uses this: an image XObject's own
+// dictionary entries (/Width, /Height, /ColorSpace, /SMask, and so on)
+// are, in practice, essentially always direct values, but PDF does not
+// require that, and internal/image has no cross-reference table of its
+// own to resolve one with - see internal/image's package doc comment.
+func (d *Document) ResolveDictionary(dict syntax.Dictionary) (syntax.Dictionary, error) {
+	out := make(syntax.Dictionary, len(dict))
+	for k, v := range dict {
 		rv, err := d.resolveIfReference(v)
 		if err != nil {
 			return nil, fmt.Errorf("resolving /%s: %w", k, err)
 		}
-		dict[k] = rv
+		out[k] = rv
+	}
+	return out, nil
+}
+
+// DecodeStream returns s's fully-decoded bytes: it resolves s.Dict via
+// ResolveDictionary (its /Filter and /DecodeParms entries are, in the
+// vast majority of real files, direct values already - but PDF
+// technically permits them to be indirect references too) and hands the
+// result to internal/filter.Decode.
+func (d *Document) DecodeStream(s syntax.Stream) ([]byte, error) {
+	dict, err := d.ResolveDictionary(s.Dict)
+	if err != nil {
+		return nil, err
 	}
 	return filter.Decode(dict, s.Raw)
 }

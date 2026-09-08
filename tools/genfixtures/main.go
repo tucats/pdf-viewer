@@ -103,6 +103,8 @@ func main() {
 		{"radial-shading.pdf", buildRadialShading()},
 		{"shading-pattern-fill.pdf", buildShadingPatternFill()},
 		{"form-xobject.pdf", buildFormXObject()},
+		{"annotation-appearance.pdf", buildAnnotationAppearance()},
+		{"annotation-hidden.pdf", buildAnnotationHidden()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -763,6 +765,64 @@ func buildFormXObject() []byte {
 	formContent := []byte("1 0 0 rg\n0 0 100 100 re\nf\n")
 	formDict := fmt.Sprintf("<< /Type /XObject /Subtype /Form /BBox [0 0 40 40] /Length %d >>", len(formContent))
 	b.addObject(5, 0, formDict, formContent)
+
+	return b.finish(1)
+}
+
+// buildAnnotationAppearance returns a single 100x100-point page with no
+// content of its own, but one annotation (/Rect [20 20 80 80]) whose
+// normal appearance (/AP /N) is a Form XObject filling its own
+// [0 0 60 60] /BBox solid green - since the appearance's /BBox is
+// already exactly the same size as /Rect (60x60), the resulting
+// appearance-to-Rect mapping (internal/annotation's Appearance.Matrix)
+// is a pure translation, landing the green square at device
+// (20,20)-(80,80) after the page's own y-flip (worked out by hand: PDF
+// y in [20,80] maps to device y in [20,80] too, since 100-80=20 and
+// 100-20=80 - a happy symmetry of this particular Rect, not a general
+// property of the mapping). The baseline Phase 5 fixture for annotation
+// appearance streams.
+func buildAnnotationAppearance() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << >> /Contents 4 0 R /Annots [5 0 R] >>", nil)
+	b.addObject(4, 0, "<< /Length 0 >>", []byte{})
+
+	apContent := []byte("0 1 0 rg\n0 0 60 60 re\nf\n")
+	apDict := fmt.Sprintf("<< /Type /XObject /Subtype /Form /BBox [0 0 60 60] /Length %d >>", len(apContent))
+	b.addObject(6, 0, apDict, apContent)
+
+	b.addObject(5, 0, "<< /Type /Annot /Subtype /Square /Rect [20 20 80 80] "+
+		"/AP << /N 6 0 R >> >>", nil)
+
+	return b.finish(1)
+}
+
+// buildAnnotationHidden returns a single 100x100-point page with no
+// content of its own and one annotation whose /F (flags) entry sets bit
+// 2 (Hidden, value 2): its appearance - a Form XObject filling the
+// entire page red - must never be painted, by default or otherwise
+// (unlike RenderOptions.HideAnnotations, which is a caller's opt-out;
+// /F Hidden is the file's own, unconditional instruction that this
+// annotation must never be displayed at all). Distinct from
+// buildAnnotationAppearance so a rendering test can confirm the *page
+// stays blank* rather than merely that some other appearance still
+// renders correctly.
+func buildAnnotationHidden() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << >> /Contents 4 0 R /Annots [5 0 R] >>", nil)
+	b.addObject(4, 0, "<< /Length 0 >>", []byte{})
+
+	apContent := []byte("1 0 0 rg\n0 0 100 100 re\nf\n")
+	apDict := fmt.Sprintf("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length %d >>", len(apContent))
+	b.addObject(6, 0, apDict, apContent)
+
+	b.addObject(5, 0, "<< /Type /Annot /Subtype /Square /Rect [0 0 100 100] /F 2 "+
+		"/AP << /N 6 0 R >> >>", nil)
 
 	return b.finish(1)
 }

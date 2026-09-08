@@ -1367,3 +1367,80 @@ phase's entry with a note about what changed.
     blend modes, ExtGState-level soft masks, and the allocation-
     profiling/resource-caching/benchmark work all remain unimplemented,
     to land in further Phase 5 sub-phases.
+
+### Phase 5d: Annotation appearance streams (2026-09-08)
+
+- **`internal/annotation` (new package).** Resolves a page's `/Annots`
+    array into the appearances that should actually be painted:
+  - `Resolve` walks `/Annots`, skipping (never erroring - see the
+        package doc comment's "annotations are optional, decorative
+        content" rationale) any entry that is Hidden or NoView (`/F`,
+        12.5.3's flag bits), has no `/AP`, or whose `/AP` `/N` cannot be
+        resolved to one appearance stream - either directly (a plain
+        stream) or via the annotation's own `/AS` selecting one state out
+        of an `/AP` `/N` subdictionary (a checkbox's "On"/"Off", for
+        example; a subdictionary with no matching `/AS` is skipped, per
+        the specification requiring `/AS` whenever `/N` takes that form).
+  - For each surviving annotation, `resolveOne` implements 12.5.5's
+        appearance-to-`/Rect` mapping algorithm: the appearance's own
+        `/BBox` is transformed by its own `/Matrix` and reduced to the
+        smallest enclosing upright rectangle ("BBox′"), then a matrix `A`
+        is computed that translates and independently scales x/y to map
+        BBox′ exactly onto the (order-normalized, matching
+        `internal/model.Rect`'s tolerance) annotation `/Rect`. `A` is
+        returned as `Appearance.Matrix` - deliberately *not* pre-composed
+        with the appearance's own `/Matrix` (still applied later, only
+        once, by `internal/content`'s existing Form XObject handling -
+        see below), and its own doc comment spells out exactly what a
+        caller needs to compose it with.
+  - Covered by
+        [annotation_test.go](internal/annotation/annotation_test.go):
+        identity and scaling/translation mappings, a 90-degree
+        appearance `/Matrix` changing BBox′'s own aspect ratio before the
+        Rect mapping is computed, `/AS`-selected multi-state appearances,
+        every skip condition (Hidden, NoView, no `/AP`, malformed
+        `/Rect`, missing appearance `/BBox`, an unresolvable multi-state
+        selection), that one bad annotation does not prevent the rest of
+        the array from resolving (with order preserved), and indirect
+        references at every level `/Annots`/`/AP`/`/AP` `/N` can appear.
+- **Root package: painting resolved appearances (new file,
+    annotations.go).** `annotationDrawOps` reuses `internal/content`'s
+    existing Form XObject execution (form.go's `doForm`, from Phase 5c)
+    rather than adding any annotation-specific interpretation logic at
+    all: an annotation's appearance stream already *is* a Form XObject
+    (same `/BBox`/`/Matrix`/`/Resources`/content-stream shape), so a
+    fixed, one-operator synthetic content stream ("/A Do") naming a
+    synthetic `/Resources /XObject` entry that *is* the appearance stream
+    is interpreted with an initial CTM of
+    `Appearance.Matrix.Mul(pageCTM)` - composing exactly as
+    `Appearance.Matrix`'s doc comment describes, and letting `doForm`
+    apply the appearance's own `/Matrix` and `/BBox` clip on top, exactly
+    as it already does for an ordinary Form XObject. `page.go`'s
+    `renderAtScale` calls this after interpreting the page's own content
+    (so annotations paint on top, matching real-world viewer behavior)
+    and appends the result to the page's own `DisplayList`.
+    `RenderOptions`/`ThumbnailOptions` gained `HideAnnotations`
+    ([options.go](options.go)), a caller opt-out defaulting to false
+    (annotations shown), threaded through the shared `renderAtScale`.
+    Covered by
+    [pdfviewer_annotation_test.go](pdfviewer_annotation_test.go).
+- **Fixture corpus and end-to-end rendering tests.** Extended
+    [tools/genfixtures](tools/genfixtures/main.go) with
+    `annotation-appearance.pdf` (a green square appearance whose `/BBox`
+    exactly matches its annotation's `/Rect` size) and
+    `annotation-hidden.pdf` (an annotation with `/F` Hidden whose
+    appearance would otherwise fill the whole page red - a regression
+    fixture confirming Hidden is unconditional, distinct from the new
+    `HideAnnotations` option) - see
+    [testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md). Both
+    were added to
+    [pdfviewer_render_test.go](pdfviewer_render_test.go)'s
+    `TestRenderMatchesReferenceImages`.
+- **Capability matrix updated.** `docs/capability-matrix.md`'s
+    "Annotation appearance streams" row is now "Done"; "AcroForm field
+    rendering" is now "Partial" (a field widget's *existing* appearance
+    renders; this project never regenerates one from a field's value).
+- **What's carried forward.** Tiling patterns, transparency groups,
+    blend modes, ExtGState-level soft masks, and the allocation-
+    profiling/resource-caching/benchmark work all remain unimplemented,
+    to land in further Phase 5 sub-phases.

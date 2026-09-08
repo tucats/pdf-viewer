@@ -58,6 +58,19 @@ type RenderOptions struct {
 	// yet track a page's transparency beyond what is opaquely painted
 	// (see docs/capability-matrix.md's transparency row).
 	Background color.Color
+
+	// HideAnnotations, when true, suppresses painting annotation
+	// appearance streams (a page's /Annots - see internal/annotation)
+	// that Render would otherwise paint on top of the page's own
+	// content. The zero value (false) matches how most real-world PDF
+	// viewers render a page by default: form field widgets, highlights,
+	// stamps, and similar existing visual appearances are shown, not
+	// just the page's own content stream. This only ever paints an
+	// annotation's already-existing appearance exactly as recorded in
+	// the file - it never generates one from a field's value or
+	// otherwise interprets form/annotation *interactivity* (see the
+	// README's non-goals).
+	HideAnnotations bool
 }
 
 // ThumbnailOptions configures Page.Thumbnail.
@@ -75,4 +88,9 @@ type ThumbnailOptions struct {
 	// Background's doc comment for the full rationale, which applies
 	// here unchanged.
 	Background color.Color
+
+	// HideAnnotations is exactly RenderOptions.HideAnnotations, applied
+	// to a thumbnail's rendering the same way it applies to a full
+	// render - see that field's doc comment.
+	HideAnnotations bool
 }

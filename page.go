@@ -94,7 +94,7 @@ func (p *pageImpl) Render(ctx context.Context, opts RenderOptions) (image.Image,
 	if scale <= 0 {
 		scale = 1
 	}
-	return p.renderAtScale(ctx, scale, opts.Background)
+	return p.renderAtScale(ctx, scale, opts.Background, opts.HideAnnotations)
 }
 
 // defaultThumbnailMaxDimension is the maximum dimension (in pixels)
@@ -120,7 +120,7 @@ func (p *pageImpl) Thumbnail(ctx context.Context, opts ThumbnailOptions) (image.
 	if err != nil {
 		return nil, err
 	}
-	return p.renderAtScale(ctx, scale, opts.Background)
+	return p.renderAtScale(ctx, scale, opts.Background, opts.HideAnnotations)
 }
 
 // renderAtScale is the shared implementation behind both Render and
@@ -135,7 +135,7 @@ func (p *pageImpl) Thumbnail(ctx context.Context, opts ThumbnailOptions) (image.
 // API means by Thumbnail sharing "the same page interpretation as full
 // rendering" rather than being a second, separate implementation that
 // could drift out of sync with Render's own behavior.
-func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background color.Color) (image.Image, error) {
+func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background color.Color, hideAnnotations bool) (image.Image, error) {
 	bg := background
 	if bg == nil {
 		bg = color.White
@@ -163,6 +163,17 @@ func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background 
 	list, err := content.Interpret(ops, ctm, p.page.RawResources, p.doc.model)
 	if err != nil {
 		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	if !hideAnnotations {
+		// Painted after the page's own content, matching how real-world
+		// PDF viewers layer an annotation's appearance on top of
+		// whatever the page itself already drew - see annotations.go.
+		annotOps := annotationDrawOps(p.doc.model, p.page.Dict(), ctm)
+		list = append(list, annotOps...)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

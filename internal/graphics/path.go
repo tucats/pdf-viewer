@@ -172,6 +172,44 @@ func cubicBezierPoint(p0, p1, p2, p3 Point, t float64) Point {
 	}
 }
 
+// QuadTo appends a quadratic Bézier curve from the current point through
+// control point c1 to end point c2, flattened into bezierSegments
+// straight line segments - the same fixed-segment-count, deterministic
+// approach CurveTo uses for cubic curves (see its doc comment for why a
+// fixed count matters for this project specifically). If no current
+// point is set yet, c1 doubles as an implicit starting MoveTo, matching
+// CurveTo's tolerance for a missing leading "m".
+//
+// This exists for internal/fonts (Phase 4): TrueType glyph outlines are
+// built from quadratic (not cubic) Bézier curves - see the "glyf" table
+// format - so a glyph's outline needs this method instead of CurveTo.
+// Nothing produced by internal/content's content-stream interpretation
+// (PDF's own curve operators, "c"/"v"/"y", are always cubic) calls this;
+// it is a second entry point into the same flattening approach, not a
+// replacement for CurveTo.
+func (p *Path) QuadTo(c1, c2 Point) {
+	c0, ok := p.Current()
+	if !ok {
+		p.MoveTo(c1)
+		c0 = c1
+	}
+	for i := 1; i <= bezierSegments; i++ {
+		t := float64(i) / float64(bezierSegments)
+		p.LineTo(quadraticBezierPoint(c0, c1, c2, t))
+	}
+}
+
+func quadraticBezierPoint(p0, p1, p2 Point, t float64) Point {
+	mt := 1 - t
+	a := mt * mt
+	b := 2 * mt * t
+	c := t * t
+	return Point{
+		X: a*p0.X + b*p1.X + c*p2.X,
+		Y: a*p0.Y + b*p1.Y + c*p2.Y,
+	}
+}
+
 // AppendRect appends a complete, already-closed 4-point rectangular
 // Subpath with corners (x,y), (x+w,y), (x+w,y+h), (x,y+h), matching
 // PDF's "re" operator - which, per the specification, "append[s] a

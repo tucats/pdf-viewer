@@ -189,6 +189,14 @@ full implementations - see that table's notes).
 **Exit criteria:** representative Latin text renders with embedded fonts and
 	predictable fallback; text positioning tests cover rotation and scaling.
 
+**Status: done.** See the Progress Log at the end of this document for
+what was actually built, and `docs/capability-matrix.md`'s "Fonts" and
+"Content streams and graphics" sections for the detailed, row-by-row
+breakdown (embedded TrueType outlines and Identity-H/V CID fonts are
+fully implemented; Type 1/CFF outline extraction, non-Identity CID
+encodings, Type 3 fonts, and text extraction are documented, deliberate
+gaps - not full implementations - see those tables' notes).
+
 ### Phase 5: Transparency, patterns, shadings, and advanced graphics
 
 - Add transparency groups, blend modes, soft masks, tiling patterns, shading
@@ -894,3 +902,171 @@ phase's entry with a note about what changed.
 	masks all remain unimplemented, as planned for Phase 4/5. Text
 	rendering (Phase 4) and everything in Phase 5's scope are otherwise
 	untouched by this phase.
+
+### Phase 4: Text and fonts — done (2026-09-08)
+
+- **`internal/fonts` (new package; previously a Phase 0 stub).** The
+	font decoding layer this phase's README bullets call for, structured
+	the same way Phase 2/3 introduced `internal/filter` and
+	`internal/image`: a small `Resolver` interface (`resolver.go`, the
+	same three-method shape as `internal/image.Resolver`, so a caller
+	already holding one can pass it straight through with no adapter),
+	and a single public entry point, `Load`, that turns a font
+	dictionary into a `Font` regardless of which of PDF's several font
+	flavors it came from. `Font.Width`/`Font.Glyph` never fail once a
+	`Font` exists - see the next few bullets for the fallback policy that
+	guarantees this.
+	- [encoding.go](internal/fonts/encoding.go): PDF's three predefined
+		simple-font encodings (StandardEncoding, WinAnsiEncoding,
+		MacRomanEncoding - transcribed as 256-entry code-to-Unicode-rune
+		tables) and `/Differences` array resolution, via a subset of the
+		Adobe Glyph List (`glyphNameToRune`) covering common Latin
+		punctuation and accented characters, plus the `uniXXXX` naming
+		convention. StandardEncoding's own upper (non-ASCII) range is a
+		documented gap (that legacy table is rarely used by modern
+		producers, who prefer WinAnsiEncoding or an explicit
+		`/Differences` array for anything beyond ASCII) rather than a
+		transcription attempt at higher risk of a subtle error.
+	- [truetype.go](internal/fonts/truetype.go) and
+		[cmap.go](internal/fonts/cmap.go): a from-scratch, minimal sfnt
+		(TrueType) font program reader - table directory, `head`/`maxp`
+		validation, `loca` (both short and long formats), `glyf` (both
+		simple glyphs, with the on-curve/off-curve quadratic outline
+		reconstruction the format uses - see `buildContourPath`'s doc
+		comment for the two-pass algorithm - and composite glyphs, bounded
+		against self-referential nesting by `maxCompositeDepth`), and
+		`cmap` (subtable formats 0, 4, and 6; format 4's "idRangeOffset"
+		self-relative-pointer indirection - the format's one genuinely
+		confusing piece - is documented inline where it is dereferenced).
+		Every parsing function fails closed (`ok=false`) on truncated or
+		malformed input rather than panicking, verified by
+		[fuzz_test.go](internal/fonts/fuzz_test.go)'s `FuzzParseSfnt`
+		(several million clean executions during development, exercising
+		every glyph index and several cmap lookups a successful parse
+		unlocks). `internal/graphics`'s `Path` gained a `QuadTo` method
+		([path.go](internal/graphics/path.go)) alongside its existing
+		`CurveTo`, specifically for TrueType's quadratic (rather than
+		PDF's own cubic) curves, using the same fixed-segment-count
+		deterministic flattening `CurveTo` already established.
+	- [simple.go](internal/fonts/simple.go): "simple" (one byte per
+		character code) fonts - `/Widths`/`/FirstChar`/`/LastChar` and
+		`/FontDescriptor /MissingWidth`, and glyph lookup through an
+		embedded `/FontFile2` TrueType program's cmap, tried either
+		code-first or Unicode-rune-first depending on the font
+		descriptor's `/Flags` symbolic bit (trying the other order too, as
+		a harmless fallback, since real-world `/Flags` is not always
+		accurate).
+	- [cid.go](internal/fonts/cid.go): "composite" (`/Type0`) fonts,
+		restricted to `Identity-H`/`Identity-V` encoding (see that file's
+		doc comment for the scope rationale) - `/DescendantFonts`, `/W`
+		array parsing (both of its packed-width shapes), `/DW`, and
+		`/CIDToGIDMap` (`/Identity`, the default, or an explicit
+		CID-to-glyph-index stream).
+	- [font.go](internal/fonts/font.go): the shared `Font` type both
+		loaders converge on, and `notdefGlyph` - this package's fallback
+		for a glyph it cannot resolve a real outline for (no embedded
+		program, an unsupported program format such as Type 1 or CFF, or a
+		lookup miss): a small hollow rectangle (two oppositely-wound
+		rectangles, relying on `internal/raster`'s existing nonzero-winding
+		cancellation - the same mechanism its stroke-outline tests already
+		exercise), painted at the glyph's own advance width so it never
+		overlaps a neighbor, except for a code this package can positively
+		identify as whitespace, which paints nothing instead. This
+		project's "Dependency and safety policy" (no system font service)
+		makes this fallback a hard requirement, not a convenience - see
+		the package doc comment.
+	- Covered by
+		[encoding_test.go](internal/fonts/encoding_test.go),
+		[truetype_test.go](internal/fonts/truetype_test.go),
+		[quadratic_test.go](internal/fonts/quadratic_test.go),
+		[cmap_test.go](internal/fonts/cmap_test.go), and
+		[font_test.go](internal/fonts/font_test.go) - including a
+		composite-glyph self-reference test that would hang (rather than
+		merely fail) if `maxCompositeDepth` were ever broken.
+- **`internal/content`: text operators.** Added
+	[text.go](internal/content/text.go), implementing "BT"/"ET",
+	the text-state operators ("Tc"/"Tw"/"Tz"/"TL"/"Tf"/"Tr"/"Ts"), the
+	text-positioning operators ("Td"/"TD"/"Tm"/"T*"), and the
+	text-showing operators ("Tj"/"TJ"/"'"/"\""), wired into
+	[interpret.go](internal/content/interpret.go)'s `exec` switch. "Tf"
+	resolves and caches a font resource via `internal/fonts.Load`
+	(`textInterpreterState.fontCache`); each glyph a text-showing
+	operator paints becomes an ordinary Fill `graphics.DrawOp`
+	(`showGlyph`), sharing `internal/raster`'s one rasterization path
+	with every vector fill this project already produces - text needed
+	no changes to `internal/raster` at all. Text rendering mode ("Tr") is
+	simplified to two cases (invisible/clip-only paint nothing; every
+	other mode paints filled), and only horizontal writing is
+	implemented (a vertical-mode Type0 font still advances using the
+	horizontal formula) - both documented simplifications, not silent
+	misrenders.
+	- **A design decision surfaced by this phase:** the text and line
+		matrices (Tm/Tlm) are *not* part of the graphics state a "q" saves
+		and a "Q" restores (per the specification, they live only within
+		one "BT"/"ET" text object and reset to identity on "BT"), but the
+		seven text-state parameters (character/word spacing, horizontal
+		scaling, leading, font, size, rise, and render mode) *are* part of
+		the graphics state and persist across "BT"/"ET". This meant
+		`graphics.State` (Phase 2) gained those seven fields directly
+		([state.go](internal/graphics/state.go)) - including a `Font any`
+		field rather than `*fonts.Font`, since `internal/graphics` cannot
+		import `internal/fonts` (which itself needs `graphics.Path` for
+		glyph outlines) without an import cycle - while Tm/Tlm stay
+		interpreter-local fields in `internal/content`, exactly like the
+		in-progress path Phase 2 already keeps off `graphics.State` for
+		the same "not part of the saved graphics state" reason.
+	- Covered by [text_test.go](internal/content/text_test.go), including
+		direct tests of `textRenderingMatrix`'s formula under horizontal
+		scaling, rise, and a 90-degree-rotated CTM (this phase's "text
+		positioning tests cover rotation and scaling" exit criterion,
+		verified at the matrix-math level, independent of any particular
+		glyph's shape), and the existing `FuzzParseAndInterpret` fuzz
+		target was extended with text-operator seeds.
+- **Fixture corpus.** Extended
+	[tools/genfixtures](tools/genfixtures/main.go) with a new
+	[truetype.go](tools/genfixtures/truetype.go) hand-building a minimal,
+	entirely synthetic TrueType font program (one visible glyph - a
+	square - reachable both by glyph index and via a format-0 cmap entry
+	for 'A') the same way every other fixture is hand-built rather than
+	sourced externally (see that file's doc comment), and a new
+	[text.go](tools/genfixtures/text.go) with five fixtures documented in
+	[testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md):
+	`text-simple-truetype.pdf` (the baseline embedded-TrueType-font
+	fixture), `text-scaled.pdf` (two glyphs at two different font sizes,
+	testing scaling and text positioning together), `text-type0-identity.pdf`
+	(the same glyph reached through a Type0/Identity-H composite font
+	instead, expected to render pixel-identically), `text-notdef-fallback.pdf`
+	(a non-embedded `/BaseFont /Helvetica` font, exercising the
+	`notdefGlyph` hollow-box fallback), and `text-rotated-page.pdf` (the
+	same embedded font on a `/Rotate 90` page, confirming text composes
+	correctly with page rotation). Every fixture's expected device-space
+	pixel geometry is derived by hand in its generator function's doc
+	comment, the same rigor `buildRotatedPage` established in Phase 3.
+- **Rendering tests.** Added
+	[pdfviewer_text_test.go](pdfviewer_text_test.go): pixel-sampling
+	assertions against each new fixture (including a same-pixels
+	assertion between the simple-font and Type0 fixtures, and an exact
+	assertion on the rotated fixture - not merely "some ink landed
+	somewhere" - since the test glyph's own symmetry makes the rotated
+	result independently computable by hand). All five new fixtures were
+	also added to
+	[pdfviewer_render_test.go](pdfviewer_render_test.go)'s
+	`TestRenderMatchesReferenceImages` for the same whole-image regression
+	coverage every earlier phase's fixtures already had.
+- **Capability matrix updated.**
+	[docs/capability-matrix.md](docs/capability-matrix.md) gained
+	detailed "Fonts" rows (simple TrueType and Identity-H/V CID fonts:
+	"Done"; simple Type 1, OpenType/CFF, and non-Identity CID encodings:
+	documented fallback behavior rather than "Not started", since a
+	`Font` is always usable, just without a real outline; Type 3 and
+	text extraction: explicitly deferred) and the "Content streams and
+	graphics" table's text-operator row is now "Done", describing this
+	phase's render-mode and vertical-writing simplifications.
+- **What's carried forward.** Type 1 and CFF/OpenType glyph outline
+	extraction (`/FontFile`, `/FontFile3`), non-Identity Type 0 encodings
+	(predefined CJK encodings and embedded CMap streams), Type 3 fonts,
+	and text extraction (recovering Unicode text from a page, deliberately
+	kept separate from text painting per this phase's own README bullet)
+	all remain unimplemented, as planned. Transparency, patterns,
+	shadings, annotations, and everything else in Phase 5's scope are
+	otherwise untouched by this phase.

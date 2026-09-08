@@ -1,21 +1,58 @@
-// Package fonts will implement PDF font decoding: reading embedded font
-// programs (Type 1, TrueType, and Type 0/CID composite fonts, added
-// incrementally), character encodings and code-to-glyph mappings, glyph
-// widths, and this project's fallback policy for missing glyphs or fonts
-// that are referenced but not embedded.
+// Package fonts implements PDF font decoding: turning a font dictionary
+// (and, where present, its embedded font program) into a Font -
+// character encodings and code-to-glyph mappings, glyph widths, glyph
+// outlines, and this project's documented fallback policy for a glyph
+// or font program this package cannot resolve. internal/content's
+// text-showing operators (Phase 4, "Tj"/"TJ"/"'"/"\"" and friends - see
+// that package's text.go) are the only consumer of this package.
 //
-// A hard constraint carried over from the "Dependency and safety policy"
-// section of the README applies specifically to this package: it must
-// not assume a system font is available and must never silently invoke
-// a platform font service (fontconfig, Core Text, DirectWrite, and so
-// on), because doing so would make rendering output depend on what
-// happens to be installed on the machine running the code — exactly the
-// kind of non-portable, hard-to-reproduce behavior this project exists
-// to avoid. Any fallback must be an explicit, documented, in-package
-// decision.
+// # What this package supports
 //
-// This package is planned for Phase 4 ("Text and fonts") of the
-// project's phased plan. It intentionally contains no code yet —
-// Phase 0 only establishes the package skeleton and its place in the
-// pipeline described in the README's "Proposed Internal Layout" section.
+// Load (font.go) dispatches a font dictionary's /Subtype to one of two
+// loaders, both converging on the same Font type:
+//
+//   - simple.go: "simple" fonts (/Type1, /TrueType, /MMType1, /Type3 -
+//     one byte per character code). Character encoding is resolved per
+//     the specification's own rules for /Encoding (a predefined name,
+//     or a dictionary with a /BaseEncoding and a /Differences array -
+//     see encoding.go).
+//   - cid.go: "composite" (/Type0) fonts, restricted to the
+//     "Identity-H"/"Identity-V" encodings (two bytes per character code,
+//     numerically equal to the glyph's CID - see cid.go's doc comment
+//     for the full rationale on this scope decision).
+//
+// Real glyph *outlines* are extracted only from an embedded TrueType
+// program (/FontFile2 on a simple font's own /FontDescriptor, or on a
+// Type0 font's descendant CIDFontType2's /FontDescriptor - see
+// truetype.go and cmap.go). Type 1 programs (/FontFile), bare CFF/
+// OpenType programs (/FontFile3), and any non-embedded font (no
+// /FontFile* entry at all - there being no system font service this
+// package is permitted to query, see below) all still produce a fully
+// usable Font, just one whose Glyph method paints a small placeholder
+// box (notdefGlyph, in font.go) instead of a real outline - see Font's
+// own doc comment for the complete missing-glyph policy, and
+// docs/capability-matrix.md for the authoritative, up-to-date support
+// matrix.
+//
+// # A hard constraint: no system font service
+//
+// This package must never assume a system font is available and must
+// never silently invoke a platform font service (fontconfig, Core Text,
+// DirectWrite, and so on), because doing so would make rendering output
+// depend on what happens to be installed on the machine running the
+// code - exactly the kind of non-portable, hard-to-reproduce behavior
+// the repository README's "Dependency and safety policy" section exists
+// to prevent. Every fallback in this package (see Font's doc comment) is
+// an explicit, in-package, documented decision instead.
+//
+// # Text extraction is a separate, later capability
+//
+// Per the repository README's Phase 4 plan, "text extraction" (getting
+// the Unicode *text* a page contains back out, as opposed to painting
+// its glyphs) is deliberately kept separate from this package and from
+// internal/content's text-painting code, so it can be added later
+// without changing how page rendering itself works. This package parses
+// no /ToUnicode CMap and exposes no rune-level API; it only ever answers
+// "what outline and advance width does character code X have", which is
+// everything painting needs.
 package fonts

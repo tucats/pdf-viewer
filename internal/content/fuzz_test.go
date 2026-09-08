@@ -44,6 +44,21 @@ func FuzzParseAndInterpret(f *testing.F) {
 		"BI /W 1 /H 1 /IM true ID \x00 EI",
 		"BI /W 1 /H 1 /CS 5 0 R ID \x00 EI",
 		"BI /W 1 /H 1 /F /Fl ID notreallyflatedata EI",
+		// Phase 4: text operators, including malformed/edge-case shapes
+		// (an unresolvable font name, a text-showing operator before any
+		// "Tf", mismatched operand counts, a deeply nested TJ array
+		// element) - a nil-resources content stream can never reach a
+		// real internal/fonts.Font (see this fuzz target's own doc
+		// comment on why "Do"/"Tf" stay unresolvable here), so this
+		// mainly steers the fuzzer toward this package's own operand
+		// parsing and text-matrix bookkeeping robustness, not
+		// internal/fonts itself (which has its own FuzzParseSfnt).
+		"BT /F1 12 Tf 0 0 Td (Hello, world!) Tj ET",
+		"BT 10 TL 2 Tc 3 Tw 50 Tz 1 Ts 2 Tr /F1 12 Tf (A) ' 0 0 (B) \" ET",
+		"BT /F1 12 Tf [(A) -100 (B) 200 (C)] TJ ET",
+		"(no BT) Tj",
+		"BT Tj TJ Tf Td TD Tm T* ET",
+		"BT /F1 Tf ET",
 	}
 	for _, s := range seeds {
 		f.Add([]byte(s))

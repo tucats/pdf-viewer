@@ -92,6 +92,11 @@ func main() {
 		{"image-jpeg.pdf", buildImageJPEG()},
 		{"inline-image.pdf", buildInlineImage()},
 		{"rotated-page.pdf", buildRotatedPage()},
+		{"text-simple-truetype.pdf", buildTextSimpleTrueType()},
+		{"text-scaled.pdf", buildTextScaled()},
+		{"text-type0-identity.pdf", buildTextType0Identity()},
+		{"text-notdef-fallback.pdf", buildTextNotdefFallback()},
+		{"text-rotated-page.pdf", buildTextRotatedPage()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {

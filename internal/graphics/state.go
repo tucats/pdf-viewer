@@ -22,6 +22,58 @@ type State struct {
 	LineJoin   LineJoin
 	MiterLimit float64
 
+	// --- Text state (Phase 4) -----------------------------------------
+	//
+	// PDF's specification (9.3, "Text State Parameters and Operators")
+	// places these seven parameters in the graphics state itself, not in
+	// the separate text-object-local state (the text and line matrices,
+	// Tm/Tlm) that only exists between a "BT" and its matching "ET" - so
+	// unlike Tm/Tlm (which internal/content's interpreter keeps as its
+	// own fields, reset on every "BT"), these belong here: a "q" saves
+	// them and a "Q" restores them exactly like FillColor or LineWidth
+	// above, and they persist unchanged across a "BT"/"ET" pair.
+	//
+	// CharSpace ("Tc"), WordSpace ("Tw"), and FontSize ("Tf"'s second
+	// operand) are all already in unscaled text space units (which happen
+	// to equal user space units for CharSpace/WordSpace, since neither is
+	// itself scaled by FontSize); Hscale ("Tz") is a percentage (100 =
+	// no change, matching the operator's own units) rather than the
+	// 0-1 fraction its formula effectively needs - see
+	// internal/content's text.go for where that /100 conversion happens.
+	CharSpace, WordSpace, Hscale, Leading, FontSize, Rise float64
+
+	// RenderMode is PDF's "Tr" text rendering mode (0-7): 0 is "fill"
+	// (the default), 3 is "invisible" (used for an OCR text layer placed
+	// over a scanned image, painted nowhere but still advancing the text
+	// position), and the rest select stroking, clipping, or a combination
+	// - see internal/content's text.go for exactly which of the eight
+	// modes this project distinguishes versus treats as an alias of
+	// another (a documented simplification, like this package's
+	// round-only stroke joins).
+	RenderMode int
+
+	// Font holds the currently selected font (set by "Tf"), typed as
+	// `any` rather than a concrete type so that this low-level package -
+	// which knows about matrices, paths, and colors, but nothing about
+	// PDF font dictionaries or embedded font programs - does not need to
+	// import internal/fonts. internal/fonts itself already needs to
+	// import this package (a font's glyph outlines are graphics.Path
+	// values), so the reverse import would be a cycle; see internal/
+	// content's text.go, which is the only code that ever writes to this
+	// field or reads it back out (via a type assertion to *fonts.Font). A
+	// nil Font means no font has been selected yet - showing text with no
+	// font selected paints nothing, the same "missing resource" tolerance
+	// this project applies elsewhere (see, for example, "Do" with an
+	// unresolvable XObject name).
+	//
+	// Font is copied by Clone as a plain field, exactly like every other
+	// State field: this is safe because a *fonts.Font, once built by
+	// "Tf", is never mutated in place (see internal/fonts.Font's own doc
+	// comment) - two States sharing the same Font pointer after a Clone
+	// can never observe each other's changes, because there are none to
+	// observe.
+	Font any
+
 	// Clips holds every currently-active clipping path, most recently
 	// intersected last, together with the fill rule each was intersected
 	// under. The *effective* clip region is the intersection of all of
@@ -58,6 +110,11 @@ func NewState(initialCTM Matrix) *State {
 		LineWidth:   1,
 		LineJoin:    MiterJoin,
 		MiterLimit:  10,
+		// Hscale's initial value is 100 (percent, i.e. "no horizontal
+		// scaling") per the specification - the zero value would mean
+		// "scale every glyph to zero width", which is not what a fresh
+		// graphics state (before any "Tz" operator) means.
+		Hscale: 100,
 	}
 }
 

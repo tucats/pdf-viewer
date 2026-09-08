@@ -33,10 +33,10 @@ import (
 // an XObject image in the first place, since there would be nothing for
 // "Do" to name).
 //
-// Interpret does not abort on an operator it does not recognize (text
-// showing, Form XObject painting via "Do", shading via "sh", marked
-// content, and so on - none of which is implemented yet; see the package
-// doc comment) - those are silently skipped, so a page mixing supported
+// Interpret does not abort on an operator it does not recognize (Form
+// XObject painting via "Do", shading via "sh", marked content, and so on
+// - none of which is implemented yet; see the package doc comment) -
+// those are silently skipped, so a page mixing supported
 // content with unsupported features still renders whatever this package
 // can handle rather than failing the whole page. It does return an error
 // for content that is itself malformed (wrong operand count or type for
@@ -77,10 +77,17 @@ type interpreter struct {
 	pendingClipRule graphics.FillRule
 	hasPendingClip  bool
 
-	// resources and resolver back "Do" (referenced XObject images) and
-	// "BI" (inline images) - see Interpret's doc comment.
+	// resources and resolver back "Do" (referenced XObject images), "BI"
+	// (inline images), and (Phase 4) "Tf" (looking up and loading a named
+	// font) - see Interpret's doc comment.
 	resources syntax.Dictionary
 	resolver  pdfimage.Resolver
+
+	// text holds Phase 4's text-object-local state (the text/line
+	// matrices and the font cache) - see textInterpreterState's doc
+	// comment in text.go for why these live here rather than on
+	// graphics.State.
+	text textInterpreterState
 
 	list graphics.DisplayList
 }
@@ -283,13 +290,126 @@ func (in *interpreter) exec(op Operator) error {
 	case "BI":
 		return in.doInlineImage(st, op.InlineImage)
 
+	// --- Text (Phase 4) -------------------------------------------
+	case "BT":
+		in.beginText()
+	case "ET":
+		// Nothing to do: text state parameters live on graphics.State
+		// (restored, if at all, only by a "Q" - see graphics.State's doc
+		// comment), and the text/line matrices are simply left as they
+		// are until the next "BT" resets them - the specification does
+		// not require "ET" to do anything to either.
+	case "Tc":
+		vals, err := requireFloats(op.Operands, 1)
+		if err != nil {
+			return err
+		}
+		st.CharSpace = vals[0]
+	case "Tw":
+		vals, err := requireFloats(op.Operands, 1)
+		if err != nil {
+			return err
+		}
+		st.WordSpace = vals[0]
+	case "Tz":
+		vals, err := requireFloats(op.Operands, 1)
+		if err != nil {
+			return err
+		}
+		st.Hscale = vals[0]
+	case "TL":
+		vals, err := requireFloats(op.Operands, 1)
+		if err != nil {
+			return err
+		}
+		st.Leading = vals[0]
+	case "Ts":
+		vals, err := requireFloats(op.Operands, 1)
+		if err != nil {
+			return err
+		}
+		st.Rise = vals[0]
+	case "Tr":
+		vals, err := requireFloats(op.Operands, 1)
+		if err != nil {
+			return err
+		}
+		st.RenderMode = int(vals[0])
+	case "Tf":
+		return in.setFont(st, op.Operands)
+	case "Td":
+		vals, err := requireFloats(op.Operands, 2)
+		if err != nil {
+			return err
+		}
+		in.moveTextLine(vals[0], vals[1])
+	case "TD":
+		vals, err := requireFloats(op.Operands, 2)
+		if err != nil {
+			return err
+		}
+		st.Leading = -vals[1]
+		in.moveTextLine(vals[0], vals[1])
+	case "Tm":
+		vals, err := requireFloats(op.Operands, 6)
+		if err != nil {
+			return err
+		}
+		m := graphics.Matrix{A: vals[0], B: vals[1], C: vals[2], D: vals[3], E: vals[4], F: vals[5]}
+		in.text.tm = m
+		in.text.tlm = m
+	case "T*":
+		in.nextLine(st)
+	case "Tj":
+		s, err := requireString(op.Operands)
+		if err != nil {
+			return err
+		}
+		in.showText(st, s)
+	case "'":
+		s, err := requireString(op.Operands)
+		if err != nil {
+			return err
+		}
+		in.nextLine(st)
+		in.showText(st, s)
+	case "\"":
+		if len(op.Operands) != 3 {
+			return pdferror.Malformedf("\"\\\"\" expects 3 operands, got %d", len(op.Operands))
+		}
+		vals, err := requireFloats(op.Operands[:2], 2)
+		if err != nil {
+			return err
+		}
+		s, ok := op.Operands[2].(syntax.String)
+		if !ok {
+			return pdferror.Malformedf("\"\\\"\" third operand must be a string, found %T", op.Operands[2])
+		}
+		st.WordSpace, st.CharSpace = vals[0], vals[1]
+		in.nextLine(st)
+		in.showText(st, []byte(s))
+	case "TJ":
+		arr, ok := singleArrayOperand(op.Operands)
+		if !ok {
+			return pdferror.Malformedf("\"TJ\" expects a single array operand, got %v", op.Operands)
+		}
+		for _, elem := range arr {
+			switch v := elem.(type) {
+			case syntax.String:
+				in.showText(st, []byte(v))
+			case syntax.Integer:
+				in.showAdjustment(st, float64(v))
+			case syntax.Real:
+				in.showAdjustment(st, float64(v))
+			}
+		}
+
 	default:
-		// Every other operator - text showing/positioning ("Tj", "TJ",
-		// "Td", ...), Form XObject painting (a "Do" naming a /Form rather
-		// than an /Image XObject - see doXObject), shading ("sh"), marked
-		// content ("BMC"/"BDC"/"EMC"/"MP"/"DP"), and anything else this
-		// package does not recognize - is silently skipped; see
-		// Interpret's doc comment for why.
+		// Every other operator - Form XObject painting (a "Do" naming a
+		// /Form rather than an /Image XObject - see doXObject), shading
+		// ("sh"), marked content ("BMC"/"BDC"/"EMC"/"MP"/"DP"), and
+		// anything else this package does not recognize - is silently
+		// skipped; see Interpret's doc comment for why.
 	}
 	return nil
 }

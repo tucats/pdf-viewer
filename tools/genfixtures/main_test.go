@@ -41,6 +41,11 @@ func TestGeneratedFixturesMatchCheckedInFiles(t *testing.T) {
 		"image-jpeg.pdf":                buildImageJPEG(),
 		"inline-image.pdf":              buildInlineImage(),
 		"rotated-page.pdf":              buildRotatedPage(),
+		"text-simple-truetype.pdf":      buildTextSimpleTrueType(),
+		"text-scaled.pdf":               buildTextScaled(),
+		"text-type0-identity.pdf":       buildTextType0Identity(),
+		"text-notdef-fallback.pdf":      buildTextNotdefFallback(),
+		"text-rotated-page.pdf":         buildTextRotatedPage(),
 	}
 
 	for name, want := range fixtures {
@@ -82,6 +87,11 @@ func TestFixtureSetIsComplete(t *testing.T) {
 		"image-jpeg.pdf":                true,
 		"inline-image.pdf":              true,
 		"rotated-page.pdf":              true,
+		"text-simple-truetype.pdf":      true,
+		"text-scaled.pdf":               true,
+		"text-type0-identity.pdf":       true,
+		"text-notdef-fallback.pdf":      true,
+		"text-rotated-page.pdf":         true,
 	}
 
 	entries, err := os.ReadDir(outputDir)

@@ -169,6 +169,11 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"image-jpeg.pdf",
 		"inline-image.pdf",
 		"rotated-page.pdf",
+		"text-simple-truetype.pdf",
+		"text-scaled.pdf",
+		"text-type0-identity.pdf",
+		"text-notdef-fallback.pdf",
+		"text-rotated-page.pdf",
 	}
 
 	if *update {

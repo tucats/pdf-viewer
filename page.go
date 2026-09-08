@@ -30,10 +30,10 @@ type Page interface {
 	// software pipeline with no CGO or native rendering dependency, per
 	// the README's "Dependency and safety policy".
 	//
-	// Vector graphics and (Phase 3) images are painted - see
-	// internal/content's package doc comment and
+	// Vector graphics, (Phase 3) images, and (Phase 4) text are painted -
+	// see internal/content's package doc comment and
 	// docs/capability-matrix.md for the current, phase-by-phase
-	// breakdown (text is Phase 4, transparency and patterns are Phase 5).
+	// breakdown (transparency and patterns are Phase 5).
 	// A page using only unsupported features still renders (as a blank
 	// page in its background color) rather than failing outright; Render
 	// only returns an error for content this package can positively

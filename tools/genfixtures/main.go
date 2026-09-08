@@ -79,6 +79,7 @@ func main() {
 		{"incremental-update.pdf", buildIncrementalUpdate()},
 		{"malformed-bad-xref-offset.pdf", buildMalformedBadXrefOffset()},
 		{"truncated.pdf", buildTruncated()},
+		{"encrypted.pdf", buildEncrypted()},
 		{"xref-stream.pdf", buildXrefStream()},
 		{"object-stream.pdf", buildObjectStream()},
 		{"filled-rect.pdf", buildFilledRect()},
@@ -228,6 +229,30 @@ func buildMalformedBadXrefOffset() []byte {
 // or a copy that was interrupted mid-write. A reader must report this as
 // ErrMalformed rather than panicking or blocking forever waiting for
 // bytes that will never arrive.
+// buildEncrypted returns a file that is structurally identical to
+// buildMinimalBlankPage, except its trailer declares an /Encrypt entry
+// pointing at a (fake, never actually used to decrypt anything) Standard
+// security handler dictionary. This exercises Phase 6's "password
+// handling" decision: internal/parser.Open must reject any file whose
+// trailer names an /Encrypt dictionary at open time, with a clear error
+// wrapping pdfviewer.ErrEncrypted, rather than only failing later and
+// confusingly (as a garbled filter or syntax error) the first time some
+// still-encrypted stream or string is actually read. The /Encrypt
+// dictionary's contents are deliberately not a byte-accurate Standard
+// security handler encoding (real /O and /U entries are 32-byte binary
+// hashes, not readable placeholder text) - this fixture only needs the
+// *trailer* to name an /Encrypt entry, since that is all Open inspects.
+func buildEncrypted() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R >>", nil)
+	b.addObject(4, 0, "<< /Length 0 >>", []byte{})
+	b.addObject(5, 0, "<< /Filter /Standard /V 1 /R 2 /O (placeholder-owner-hash) /U (placeholder-user-hash) /P -3904 >>", nil)
+	b.writeXrefAndTrailer(1, " /Encrypt 5 0 R")
+	return b.buf.Bytes()
+}
+
 func buildTruncated() []byte {
 	full := buildMinimalBlankPage()
 

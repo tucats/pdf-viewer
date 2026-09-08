@@ -19,6 +19,40 @@ import (
 // A Document must be closed with Close when the caller is done with it.
 // Pages obtained from a Document (via Page) must not be used after the
 // Document is closed - see Close's doc comment.
+//
+// # Concurrency (Phase 6 decision)
+//
+// A *Document, and any Page obtained from it, is NOT safe for
+// concurrent use by multiple goroutines. Every internal cache this
+// package's layers build up as a document is read - internal/parser's
+// resolved-object cache, internal/parser's decoded-object-stream cache,
+// and this package's own per-Document font cache (see
+// docs/capability-matrix.md and the Progress Log's Phase 6 entry) - is
+// an ordinary Go map with no locking, and internal/parser's
+// cross-reference recovery scan (see that package's doc comment)
+// mutates the document's cross-reference table itself in place. Calling
+// any method on the same Document (Page, PageCount, Page.Render,
+// Page.Thumbnail, or Close) from more than one goroutine at a time,
+// without the caller's own synchronization, is a data race.
+//
+// This is a deliberate choice, not an oversight: internal/parser's
+// reference-cycle detection (see its Document.resolving field) is
+// scoped to a single, possibly-reentrant call chain within one
+// goroutine, which is what actually shapes this decision - correctly
+// generalizing it to detect a cycle across concurrent goroutines would
+// need a substantially different design for a benefit (parallel
+// rendering *of the same open Document*) this project's own test corpus
+// and use cases have not yet demonstrated a pressing need for, the same
+// standard applied to every other deferred feature in this project.
+//
+// A program that wants to render many pages (or many documents) in
+// parallel remains free to do so: open a separate *Document per
+// goroutine (via Open or OpenFile - each call parses independently and
+// the resulting Documents share no state at all with each other), or
+// serialize all access to one shared Document with its own mutex. See
+// pdfviewer_concurrency_test.go for a regression test covering the
+// supported ("separate Document per goroutine") pattern under the race
+// detector, and cmd/pdfthumbnails for a worked example.
 type Document struct {
 	model *model.Document
 

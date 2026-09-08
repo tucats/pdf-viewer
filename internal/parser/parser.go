@@ -162,6 +162,18 @@ func Open(src *source.Reader) (*Document, error) {
 	if d.Trailer == nil {
 		return nil, pdferror.Malformedf("no trailer dictionary found")
 	}
+	if _, ok := d.Trailer["Encrypt"]; ok {
+		// This project's Phase 6 "password handling" decision: no PDF
+		// security handler (Standard or public-key) is implemented, so an
+		// encrypted document is rejected up front, at Open, with a clear
+		// and specific error - rather than being allowed to proceed only
+		// to fail confusingly later, wherever its first still-encrypted
+		// stream or string happened to be read (as garbled filter/syntax
+		// errors that would look like file corruption, not "this needs a
+		// password"). See the root package's errors.go for the
+		// ErrEncrypted sentinel this wraps and its full rationale.
+		return nil, pdferror.Encryptedf("document trailer declares an /Encrypt dictionary")
+	}
 	return d, nil
 }
 

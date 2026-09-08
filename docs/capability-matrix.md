@@ -30,16 +30,17 @@ and its Progress Log for what was actually built in each phase.
 | --- | --- | --- | --- |
 | PDF 1.4–1.7 core structure (classic xref tables, classic trailers, incremental updates via /Prev, recovery scan for a corrupted xref table) | Phase 1 | Partial | Implemented in `internal/parser`; see its package doc comment. "Partial" because broader real-world compatibility is still growing, not because the mechanism itself is incomplete. |
 | PDF 1.5+ cross-reference streams and object streams | Phase 2 (moved from Phase 1) | Done | Implemented in `internal/parser` (`xrefstream.go`, `objstream.go`), now that Flate decoding exists (`internal/filter`). A document may freely mix classic and stream-based cross-reference sections across its `/Prev` chain. Hybrid-reference files (a classic table plus a supplementary `/XRefStm` for stream-unaware readers) are not specially handled - objects only reachable via `/XRefStm` are not found - but this is rare in practice and does not cause an error, only a missing object (resolved as null). |
-| PDF 2.0 (ISO 32000-2) structural changes | Phase 6 | Not started | Revisited during API stabilization once the 1.x corpus is solid. |
+| PDF 2.0 (ISO 32000-2) structural changes | Phase 6 | Not started | Phase 6 decision (see the README's "Supported PDF versions" section): this project's supported range for its initial release is PDF 1.4-1.7. PDF 2.0 is largely a clarified superset of 1.7 for the structural/content features this project implements, so most 1.7-targeting code is expected to already handle a 2.0 file's shared structure correctly - but this has not been verified against a real 2.0 corpus, and PDF 2.0-specific additions (e.g. new encryption revisions, `/AF` associated files) are unimplemented. Revisit once a 2.0 test corpus exists. |
 | Linearized ("fast web view") files | Not scheduled | Not started | Linearization is an optimization hint or convention layered on top of standard structure, not the file's ground truth; a linearized file must still be readable using vanilla xref/trailer parsing, so this project treats it as automatically handled rather than as a scheduled feature. |
 
 ## Encryption
 
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
-| Unencrypted documents | Phase 1 | Not started | Baseline. |
-| Standard security handler, empty user password ("owner-password-only" protected files) | Not yet scheduled | Not started | Common in practice (permissions-only protection); revisit once Phase 1-3 are solid. |
-| Standard security handler, non-empty user password | Not yet scheduled | Not started | Requires a password-input API decision; see the README's Draft Public API open questions. |
+| Unencrypted documents | Phase 1 | Done | Baseline; every fixture and real-world file this project has been tested against is unencrypted. |
+| Detecting and rejecting any encrypted document | Phase 6 | Done | Implemented in `internal/parser` (`Open`): a trailer declaring `/Encrypt` is rejected immediately with an error wrapping the new `ErrEncrypted` sentinel (itself wrapping `ErrUnsupported`) - see the root package's errors.go and the README's "Password handling" decision. This is a clear, immediate failure in place of the confusing garbled-data errors that would otherwise surface later, the first time some still-encrypted stream or string was read. |
+| Standard security handler, empty user password ("owner-password-only" protected files) | Not yet scheduled | Not started | Common in practice (permissions-only protection); would need real RC4/AES decryption and the Standard security handler's key-derivation algorithm implemented from scratch (no CGO per the "Dependency and safety policy" - Go's standard library has no PDF-specific crypto helper). Revisit only on concrete demand; today such a file fails with `ErrEncrypted` like any other encrypted document. |
+| Standard security handler, non-empty user password | Not yet scheduled | Not started | Same as above, plus a password-input API decision (see the README's Draft Public API open questions) - `Open`/`OpenFile` currently take no password of any kind. |
 | Public-key security handler | Not scheduled | Not started | No known demand driving this; revisit only if a real use case appears. |
 
 ## Filters (stream and string decoding)

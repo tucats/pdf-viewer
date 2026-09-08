@@ -103,6 +103,23 @@ func TestOpenFileTruncatedIsMalformed(t *testing.T) {
 	}
 }
 
+// TestOpenFileEncryptedIsRejected is the public-API-level regression
+// test for Phase 6's "password handling" decision (see errors.go's
+// ErrEncrypted doc comment and README): this package implements no PDF
+// security handler, so opening a document whose trailer declares an
+// /Encrypt dictionary must fail clearly and immediately, rather than
+// appearing to succeed and then failing confusingly the first time some
+// still-encrypted stream or string is actually read.
+func TestOpenFileEncryptedIsRejected(t *testing.T) {
+	_, err := pdfviewer.OpenFile(fixturePath("encrypted.pdf"))
+	if !errors.Is(err, pdfviewer.ErrEncrypted) {
+		t.Fatalf("error = %v, want ErrEncrypted", err)
+	}
+	if !errors.Is(err, pdfviewer.ErrUnsupported) {
+		t.Fatalf("error = %v, want it to also satisfy ErrUnsupported", err)
+	}
+}
+
 func TestPageIndexOutOfRange(t *testing.T) {
 	doc, err := pdfviewer.OpenFile(fixturePath("minimal-blank-page.pdf"))
 	if err != nil {

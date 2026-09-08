@@ -46,3 +46,25 @@ func TestErrMalformedAndErrUnsupportedAreDistinct(t *testing.T) {
 		t.Fatal("ErrMalformed and ErrUnsupported compare equal, want distinct sentinel values")
 	}
 }
+
+func TestEncryptedfWrapsErrEncryptedAndErrUnsupported(t *testing.T) {
+	err := Encryptedf("document trailer declares an /Encrypt dictionary")
+
+	if !errors.Is(err, ErrEncrypted) {
+		t.Fatalf("errors.Is(err, ErrEncrypted) = false, want true (err = %v)", err)
+	}
+	// ErrEncrypted is deliberately a specific case of ErrUnsupported (see
+	// ErrEncrypted's doc comment), so an Encryptedf error must satisfy
+	// both checks - a caller that only knows about the general
+	// ErrUnsupported sentinel must not be broken by this more specific
+	// one being introduced.
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("errors.Is(err, ErrUnsupported) = false, want true (err = %v)", err)
+	}
+	if errors.Is(err, ErrMalformed) {
+		t.Fatalf("errors.Is(err, ErrMalformed) = true, want false (err = %v)", err)
+	}
+	if want := "declares an /Encrypt dictionary"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error message %q does not contain %q", err.Error(), want)
+	}
+}

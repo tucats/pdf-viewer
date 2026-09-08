@@ -203,6 +203,23 @@ func TestOpenTruncatedFileIsMalformed(t *testing.T) {
 	}
 }
 
+// TestOpenEncryptedDocumentIsRejected is this package's regression test
+// for Phase 6's "password handling" decision: a document whose trailer
+// names an /Encrypt dictionary must fail at Open, with a clear error
+// wrapping both ErrEncrypted (the specific case) and ErrUnsupported (the
+// general one - see pdferror.ErrEncrypted's doc comment), rather than
+// being allowed to proceed only to fail confusingly later wherever its
+// first still-encrypted stream or string happens to be read.
+func TestOpenEncryptedDocumentIsRejected(t *testing.T) {
+	_, err := openFixtureErr(t, "encrypted.pdf")
+	if !errors.Is(err, pdferror.ErrEncrypted) {
+		t.Fatalf("Open(encrypted.pdf) error = %v, want ErrEncrypted", err)
+	}
+	if !errors.Is(err, pdferror.ErrUnsupported) {
+		t.Fatalf("Open(encrypted.pdf) error = %v, want it to also satisfy ErrUnsupported", err)
+	}
+}
+
 // TestResolveNonexistentObjectYieldsNull confirms the PDF specification
 // rule that Resolve implements for a reference to an object number the
 // cross-reference table has no entry for: it behaves like a reference to

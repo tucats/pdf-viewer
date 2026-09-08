@@ -35,6 +35,25 @@ var (
 	// ErrUnsupported indicates that the input is structurally valid PDF
 	// but uses a feature this module does not implement (yet, or ever).
 	ErrUnsupported = errors.New("pdfviewer: unsupported PDF feature")
+
+	// ErrEncrypted indicates that a document's trailer declares an
+	// /Encrypt dictionary - i.e. the file uses one of PDF's security
+	// handlers (Standard or public-key) to encrypt some or all of its
+	// contents. This project implements no security handler at all (see
+	// the root package's doc comment for the "Password handling"
+	// decision and rationale), so opening such a file always fails.
+	//
+	// ErrEncrypted is built by wrapping ErrUnsupported directly (see its
+	// declaration below), not by declaring an independent error value:
+	// an encrypted document is a specific, common case of "structurally
+	// valid PDF, unsupported feature", so any caller already checking
+	// errors.Is(err, ErrUnsupported) keeps working unchanged after this
+	// error was introduced, while a caller that wants to react
+	// specifically to "this file needs a password we cannot supply"
+	// (for example, to show a distinct "password required" message
+	// rather than a generic "unsupported PDF feature" one) can check
+	// errors.Is(err, ErrEncrypted) instead.
+	ErrEncrypted = fmt.Errorf("pdfviewer: encrypted PDF documents are not supported: %w", ErrUnsupported)
 )
 
 // Malformedf builds an error wrapping ErrMalformed with a formatted
@@ -49,4 +68,12 @@ func Malformedf(format string, args ...any) error {
 // function backs, for the full rationale and a usage example.
 func Unsupportedf(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", ErrUnsupported, fmt.Sprintf(format, args...))
+}
+
+// Encryptedf builds an error wrapping ErrEncrypted (and, transitively,
+// ErrUnsupported - see ErrEncrypted's doc comment) with a formatted
+// detail message. Used by internal/parser when a document's trailer
+// declares an /Encrypt dictionary.
+func Encryptedf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrEncrypted, fmt.Sprintf(format, args...))
 }

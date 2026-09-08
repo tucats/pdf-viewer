@@ -22,16 +22,50 @@ import (
 // sentinel errors (e.g. "was this ErrMalformed?"). See the Go standard
 // library "errors" package documentation for more detail.
 //
-// ErrMalformed and ErrUnsupported are declared in the internal
-// internal/pdferror package, not here, and simply re-exported by the two
-// variables below. That indirection exists so that internal packages
-// (which cannot import this root package without creating an import
-// cycle, since this package imports them) can still produce errors that
-// wrap the exact same sentinel values a caller checks against here — see
-// the comment on internal/pdferror for the full explanation. From the
-// perspective of anyone importing pdfviewer, ErrMalformed and
-// ErrUnsupported behave exactly as if they had been declared directly in
-// this file.
+// ErrMalformed, ErrUnsupported, and ErrEncrypted are declared in the
+// internal internal/pdferror package, not here, and simply re-exported
+// by the variables below. That indirection exists so that internal
+// packages (which cannot import this root package without creating an
+// import cycle, since this package imports them) can still produce
+// errors that wrap the exact same sentinel values a caller checks
+// against here — see the comment on internal/pdferror for the full
+// explanation. From the perspective of anyone importing pdfviewer,
+// these behave exactly as if they had been declared directly in this
+// file.
+//
+// # Error taxonomy (Phase 6 decision)
+//
+// Every error this package can return classifies into exactly one of
+// four sentinels, checked with errors.Is:
+//
+//   - ErrMalformed: the input is not a well-formed PDF construct (a bad
+//     cross-reference table, a truncated stream, an operand of the
+//     wrong type for its operator, ...). This is a property of the
+//     bytes given to this package, never of what this package happens
+//     to implement.
+//   - ErrUnsupported: the input is well-formed but uses a PDF feature
+//     this package does not implement (a filter, color space, font
+//     program format, or shading type it does not decode; see
+//     docs/capability-matrix.md for the full, current list). More
+//     features are expected to move out of this category over time as
+//     later phases land; ErrMalformed inputs never will, since being
+//     malformed is not an implementation gap.
+//   - ErrEncrypted: a specific case of ErrUnsupported (see its own doc
+//     comment below) for a document that declares an /Encrypt
+//     dictionary. Split out from the general case because "this file
+//     needs a password" is a meaningfully different situation for a
+//     caller to react to than "this file uses a graphics feature we
+//     don't render."
+//   - ErrClosed / ErrPageIndex: caller-misuse errors describing how the
+//     public API itself was called (a method invoked after Close, or an
+//     out-of-range page index) rather than anything about the PDF file
+//     being read. These do not wrap ErrMalformed or ErrUnsupported,
+//     since they are not a statement about the file's content at all.
+//
+// A future error type that carries structured detail (a byte offset, an
+// object number) beyond a formatted message should still wrap one of
+// these four sentinels and be tested with errors.As, per this section's
+// opening paragraph, rather than introducing a fifth top-level category.
 
 // Sentinel errors classify *why* an operation failed. Callers should use
 // errors.Is to test for these rather than comparing strings, and should
@@ -53,6 +87,23 @@ var (
 	// phases land; it must never be confused with ErrMalformed, since a
 	// well-formed-but-unsupported file is not itself invalid.
 	ErrUnsupported = pdferror.ErrUnsupported
+
+	// ErrEncrypted indicates that Open or OpenFile was asked to open a
+	// document whose trailer declares an /Encrypt dictionary - i.e. the
+	// file uses one of PDF's security handlers (Standard or public-key).
+	// This package implements no security handler and cannot decrypt
+	// such a file with or without a password; see the README's "Password
+	// handling" decision (Phase 6) for the full rationale.
+	//
+	// errors.Is(err, ErrEncrypted) lets a caller react specifically to
+	// "this file needs a password we cannot supply" (for example, to
+	// show the user a distinct message rather than a generic
+	// "unsupported PDF feature" one). ErrEncrypted also always satisfies
+	// errors.Is(err, ErrUnsupported), since it is wrapped as a specific
+	// case of that broader sentinel - a caller written before
+	// ErrEncrypted existed, checking only for ErrUnsupported, keeps
+	// working unchanged.
+	ErrEncrypted = pdferror.ErrEncrypted
 
 	// ErrClosed indicates that a method was called on a Document (or a
 	// value obtained from one, such as a Page) after Close had already

@@ -56,6 +56,69 @@ hostile input is expected: parsers must have bounded work where practical,
 return errors instead of panicking, and never write files or access the network
 as a consequence of rendering.
 
+### Concurrency, cancellation, password handling, and error taxonomy (Phase 6)
+
+Phase 6's "API stabilization" work called for deciding and documenting
+these four questions before the public API is considered stable. The
+decisions themselves (and the reasoning behind each) live as doc
+comments next to the code they govern, so they cannot silently drift out
+of sync with what the code actually does; this section is a short index
+pointing at each one, plus the fifth item from that same phase bullet
+(supported PDF versions), which has its own subsection just below.
+
+- **Concurrency.** A `*Document` (and any `Page` obtained from it) is
+    not safe for concurrent use by multiple goroutines - open a separate
+    `*Document` per goroutine for parallel work, since separate
+    Documents share no state. See the `Document` type's doc comment in
+    [document.go](document.go) for the full rationale and
+    [pdfviewer_concurrency_test.go](pdfviewer_concurrency_test.go) for
+    the race-detector-covered regression test of the supported pattern.
+- **Cancellation.** `Page.Render` and `Page.Thumbnail` both take a
+    `context.Context` and check `ctx.Err()` between pipeline stages
+    (before parsing the content stream, after parsing, after
+    interpreting it into a display list, and before rasterizing) - see
+    [page.go](page.go)'s `renderAtScale`. Cancellation is not checked
+    *within* a single stage (for example, partway through interpreting
+    one very long content stream): every stage's worst-case work is
+    already bounded independently (`maxRenderPixels`, `maxFormDepth`,
+    `maxPatternTileDimension`, and similar limits described throughout
+    `docs/capability-matrix.md`), so a canceled context is honored
+    promptly in practice without needing finer-grained checks threaded
+    through every internal loop - revisit only if a real workload shows
+    otherwise.
+- **Password handling.** This project implements no PDF security
+    handler (Standard or public-key) and has no plan to add one without
+    concrete demand - see `docs/capability-matrix.md`'s Encryption
+    section. `Open`/`OpenFile` reject any document whose trailer
+    declares an `/Encrypt` dictionary immediately, with an error wrapping
+    the new `ErrEncrypted` sentinel, rather than allowing the open to
+    apparently succeed and failing confusingly later. See
+    [internal/parser/parser.go](internal/parser/parser.go)'s `Open`.
+- **Error taxonomy.** Every error this package returns classifies as
+    exactly one of four sentinels - `ErrMalformed`, `ErrUnsupported`,
+    `ErrEncrypted` (a specific case of `ErrUnsupported`), or a
+    caller-misuse error (`ErrClosed`, `ErrPageIndex`) - checked with
+    `errors.Is`. See the "Error taxonomy" section of
+    [errors.go](errors.go) for the full decision, including why each
+    category exists and what would (and would not) justify adding a
+    fifth.
+
+### Supported PDF versions
+
+This project's initial release targets **PDF 1.4 through 1.7**: classic
+and cross-reference-stream file structure, the content-stream and
+graphics-state model, and the object/filter/color-space/font machinery
+those versions define, per `docs/capability-matrix.md`'s row-by-row
+breakdown of what is actually implemented within that range (a
+supported *version* does not imply every *feature* introduced in it is
+implemented - encryption is the clearest example, see above). PDF 2.0
+(ISO 32000-2) is not a supported version yet: it is largely a clarified
+superset of 1.7 for this project's in-scope structural and content
+features, so much of the existing 1.7-targeting code is expected to
+already handle a 2.0 file's shared structure, but this has not been
+verified against a real PDF 2.0 corpus and 2.0-specific additions are
+unimplemented - see the capability matrix's "PDF versions" section.
+
 ## Draft Public API
 
 Names and exact signatures are provisional until the first implementation and
@@ -93,10 +156,11 @@ JPEG belongs to the caller through the standard `image/png` and `image/jpeg`
 packages. `ThumbnailOptions` should be a convenience for a bounded maximum
 dimension and should share the same page interpretation as full rendering.
 
-The API still needs decisions for password-protected files, cancellation
-granularity, annotations, and whether a document or a page may be rendered
-concurrently. The initial contract should choose conservative behavior and
-document it rather than silently promising full PDF compatibility.
+Annotations (Phase 5d) and password-protected files, cancellation
+granularity, and rendering concurrency (all Phase 6) were the open
+decisions this paragraph originally called out - see the "Concurrency,
+cancellation, password handling, and error taxonomy" section above for
+what was decided and why.
 
 ## Phased Plan
 
@@ -234,6 +298,10 @@ gaps - not full implementations - see those tables' notes).
 
 **Exit criteria:** an importing Go program can open, inspect, render, thumbnail,
     and close a document without knowing the PDF internals.
+
+**Status: in progress**, landing in reviewable sub-phases exactly like
+    Phase 5 did - see the Progress Log for what has been built in each
+    sub-phase so far.
 
 ## Proposed Internal Layout
 
@@ -1699,3 +1767,87 @@ phase's entry with a note about what changed.
     permanent gaps for the same "narrow, clearly-bounded implementation"
     reasoning applied throughout this phase. Resource caching moves to
     Phase 6, as described above.
+
+### Phase 6a: Concurrency, cancellation, password handling, and error taxonomy (2026-09-08)
+
+- **Concurrency decision.** A `*Document` (and any `Page` obtained from
+    it) is documented as *not* safe for concurrent use by multiple
+    goroutines - see the new "Concurrency" bullet in the "Concurrency,
+    cancellation, password handling, and error taxonomy" section above
+    and the expanded doc comment on the `Document` type in
+    [document.go](document.go). This matches the actual internal design
+    rather than requiring a redesign for a speculative benefit: every
+    cache built up while reading a document (`internal/parser`'s
+    resolved-object cache and object-stream cache, in particular) is an
+    unsynchronized Go map, and `internal/parser`'s reference-cycle
+    detection is scoped to a single, possibly-reentrant call chain
+    within one goroutine - `resolveCompressed` calling back into
+    `Resolve` reentrantly (to load the object stream a compressed object
+    lives in) is exactly the kind of call this cycle detection has to
+    handle correctly, and doing so concurrently-safely as well would
+    need a substantially different design. A program that wants
+    parallel rendering opens a separate `*Document` per goroutine
+    instead (each `Open`/`OpenFile` call parses independently and shares
+    no state with any other), which the new
+    [pdfviewer_concurrency_test.go](pdfviewer_concurrency_test.go)
+    regression-tests under the race detector (`go test -race`) -
+    rendering and thumbnailing every page of several independently
+    opened Documents concurrently.
+- **Cancellation decision.** No code changed here - `Page.Render`/
+    `Page.Thumbnail` already checked `ctx.Err()` between pipeline stages
+    (see [page.go](page.go)'s `renderAtScale`, added across Phases 1-5).
+    What Phase 6 adds is the *decision*, written down: this
+    between-stages granularity is deliberately not made finer (for
+    example, checked periodically inside `internal/content.Interpret`'s
+    own operator loop), because every stage's worst-case work is already
+    bounded independently by limits such as `maxRenderPixels`,
+    `maxFormDepth`, and `maxPatternTileDimension` - see the new
+    "Cancellation" bullet above for the full reasoning.
+- **Password handling: `ErrEncrypted` (new sentinel).** Added
+    `ErrEncrypted` to `internal/pdferror` (re-exported from the root
+    package's [errors.go](errors.go), exactly like `ErrMalformed` and
+    `ErrUnsupported`): built by wrapping `ErrUnsupported` directly, so it
+    is both a specific, checkable case (`errors.Is(err, ErrEncrypted)`)
+    and still satisfies any existing `errors.Is(err, ErrUnsupported)`
+    check unchanged. [internal/parser/parser.go](internal/parser/parser.go)'s
+    `Open` now rejects any document whose trailer contains an `/Encrypt`
+    entry immediately, before any caller can observe a document that
+    appears to have opened successfully but would fail confusingly
+    later at the first still-encrypted stream or string it tried to
+    read. This project implements no PDF security handler and has no
+    plan to add one without concrete demand (see
+    `docs/capability-matrix.md`'s Encryption section, now updated).
+    Covered by
+    [pdferror_test.go](internal/pdferror/pdferror_test.go)'s
+    `TestEncryptedfWrapsErrEncryptedAndErrUnsupported`,
+    [parser_test.go](internal/parser/parser_test.go)'s
+    `TestOpenEncryptedDocumentIsRejected`, and
+    [pdfviewer_test.go](pdfviewer_test.go)'s
+    `TestOpenFileEncryptedIsRejected`, against a new fixture,
+    `encrypted.pdf` (see
+    [testdata/fixtures/FIXTURES.md](testdata/fixtures/FIXTURES.md)) -
+    structurally identical to `minimal-blank-page.pdf` but with a
+    trailer `/Encrypt` entry pointing at a placeholder (not
+    byte-accurate) Standard-security-handler dictionary, since `Open`
+    only ever needs to notice the trailer entry, not actually parse what
+    it points at.
+- **Error taxonomy decision.** No new mechanism beyond `ErrEncrypted`
+    above - this is a documentation decision, written as a new "Error
+    taxonomy" section in [errors.go](errors.go) enumerating all four
+    sentinel categories (`ErrMalformed`, `ErrUnsupported`, `ErrEncrypted`,
+    and the caller-misuse `ErrClosed`/`ErrPageIndex`) in one place, with
+    the reasoning for why each exists and what would justify a fifth.
+- **Supported PDF versions decision.** Documented (new README section
+    above, and an updated note on `docs/capability-matrix.md`'s "PDF 2.0"
+    row) rather than implemented: this project's initial release targets
+    PDF 1.4-1.7; PDF 2.0 is not yet a supported version, though much of
+    the existing 1.7-targeting code is expected to already handle a 2.0
+    file's shared structure since 2.0 is largely a clarified superset of
+    1.7 for this project's in-scope features - this has simply not been
+    verified against a real PDF 2.0 corpus yet.
+- **What's carried forward.** Resource caching (fonts, across multiple
+    `Page.Render` calls on the same Document - deferred from Phase 5g
+    specifically until this sub-phase's concurrency decision was
+    settled) and the remaining Phase 6 bullets (viewer-integration
+    examples, CI hardening, and eventual package versioning) move to
+    further Phase 6 sub-phases.

@@ -185,7 +185,7 @@ func (d *Document) collectPages(node syntax.Object, inherited inheritable, depth
 		return err
 	}
 
-	inherited = mergeInherited(inherited, dict)
+	inherited = mergeInherited(d.parser, inherited, dict)
 
 	nodeType, _ := dict["Type"].(syntax.Name)
 	if kidsObj, hasKids := dict["Kids"]; hasKids && nodeType != "Page" {
@@ -215,26 +215,48 @@ func (d *Document) collectPages(node syntax.Object, inherited inheritable, depth
 // mergeInherited returns the inheritable attributes a child of dict
 // should see: dict's own values where present, falling back to
 // inherited's (i.e. an ancestor's) values otherwise.
-func mergeInherited(inherited inheritable, dict syntax.Dictionary) inheritable {
+//
+// Each of /MediaBox, /Resources, and /Rotate is legal for a producer to
+// write as an indirect reference rather than a direct value (nothing in
+// the specification requires otherwise, and real-world producers -
+// including whatever produced this package's own motivating real-world
+// test file - routinely share one /Resources dictionary across many
+// pages via exactly such a reference), so each is resolved through p
+// first via resolveObject. An unresolvable reference, or a resolved
+// value of the wrong type, is tolerated exactly like a malformed direct
+// value always was: the field is simply left as whatever was already
+// inherited from further up the tree, consistent with this package's
+// general tolerance for a single bad field (see collectPages's doc
+// comment on /Rotate below).
+func mergeInherited(p *parser.Document, inherited inheritable, dict syntax.Dictionary) inheritable {
 	if box, ok := dict["MediaBox"]; ok {
-		if r, ok := parseRect(box); ok {
-			inherited.mediaBox = &r
+		if resolved, err := resolveObject(p, box); err == nil {
+			if r, ok := parseRect(resolved); ok {
+				inherited.mediaBox = &r
+			}
 		}
 	}
-	if res, ok := dict["Resources"].(syntax.Dictionary); ok {
-		inherited.resources = res
-		inherited.hasResources = true
-	}
-	if rot, ok := dict["Rotate"].(syntax.Integer); ok {
-		if normalized, ok := normalizeRotate(int(rot)); ok {
-			inherited.rotate = normalized
+	if res, ok := dict["Resources"]; ok {
+		if resolved, err := resolveObject(p, res); err == nil {
+			if resDict, ok := resolved.(syntax.Dictionary); ok {
+				inherited.resources = resDict
+				inherited.hasResources = true
+			}
 		}
-		// A /Rotate present but not a multiple of 90 is malformed per
-		// the specification; rather than rejecting the whole page over
-		// one bad inheritable attribute, this simply keeps whatever
-		// rotation was inherited from further up the tree (or the
-		// default 0), consistent with this package's general tolerance
-		// for a single bad field - see collectPages's doc comment.
+	}
+	if rot, ok := dict["Rotate"]; ok {
+		if resolved, err := resolveObject(p, rot); err == nil {
+			if i, ok := resolved.(syntax.Integer); ok {
+				if normalized, ok := normalizeRotate(int(i)); ok {
+					inherited.rotate = normalized
+				}
+				// A /Rotate present but not a multiple of 90 is malformed
+				// per the specification; rather than rejecting the whole
+				// page over one bad inheritable attribute, this simply
+				// keeps whatever rotation was inherited from further up
+				// the tree (or the default 0).
+			}
+		}
 	}
 	return inherited
 }

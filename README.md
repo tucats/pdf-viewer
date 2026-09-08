@@ -209,9 +209,17 @@ gaps - not full implementations - see those tables' notes).
 **Exit criteria:** the renderer handles a broad compatibility corpus and has
     benchmark results for single-page, multi-page, and thumbnail workloads.
 
-**Status: in progress**, landing in reviewable sub-phases (each complete
-    and independently tested) rather than as one change. See the
-    Progress Log for what has landed so far.
+**Status: done**, landed in reviewable sub-phases (each complete and
+    independently tested) rather than as one change - see the Progress
+    Log for what was actually built in each. Transparency groups
+    (isolated/knockout compositing for a `/Group` Form XObject),
+    ExtGState-level soft masks, the four non-separable blend modes, and
+    uncolored (`/PaintType 2`) tiling patterns are documented, deliberate
+    gaps - not full implementations - see `docs/capability-matrix.md`'s
+    notes on each. Caching decoded resources across multiple `Page.
+    Render` calls is deferred to Phase 6, since a cross-render cache's
+    correctness depends on Phase 6's own "decide concurrency guarantees"
+    bullet, not yet settled.
 
 ### Phase 6: API stabilization and viewer integration
 
@@ -1639,3 +1647,55 @@ phase's entry with a note about what changed.
     harder, lower-real-world-impact feature (true transparency-group
     isolation) or the phase's closing exit-criteria work (benchmarks,
     caching).
+
+### Phase 5g: Benchmarks and Phase 5 closeout (2026-09-08)
+
+- **Benchmarks (new file, pdfviewer_bench_test.go).** Phase 5's exit
+    criterion, "benchmark results for single-page, multi-page, and
+    thumbnail workloads": `BenchmarkRenderSinglePage` (a minimal vector
+    page), `BenchmarkRenderComplexPage` (a page exercising several Phase
+    5 features together - a shading gradient, a tiling pattern, constant
+    alpha - via `tiling-pattern-fill.pdf`), `BenchmarkRenderMultiPage`
+    (every page of a multi-page document per iteration), and
+    `BenchmarkThumbnail`. Each opens its fixture once and calls
+    `b.ResetTimer()` before the timed loop, so only repeated `Render`/
+    `Thumbnail` calls are measured, not the one-time `Open` cost. Run
+    with `go test . -bench . -benchmem -run '^$'`.
+- **Resource caching deliberately deferred to Phase 6.** The README's
+    Phase 5 task list also called for caching decoded resources (fonts,
+    in particular - re-rendering the same page currently re-parses any
+    embedded font program from scratch every time, since
+    `internal/content/text.go`'s `textInterpreterState.fontCache` is
+    scoped to one `Interpret` call, not shared across them) "without
+    making cache lifetime observable through the public API." Designing
+    that cache correctly depends on a question Phase 6's own task list
+    explicitly defers to itself: "decide and document concurrency
+    guarantees" for `Page.Render`. A cache built now would either need
+    to guess at that policy (risking rework once it is decided) or adopt
+    a conservative locking scheme regardless of whether concurrent
+    rendering ends up being supported at all - so this task moves to
+    Phase 6, where it can be designed against a settled concurrency
+    policy instead of ahead of one. The benchmarks above exist now
+    specifically so that future change has a measured baseline to
+    compare against.
+- **Phase 5 closeout.** Every item in the README's original Phase 5
+    bullet list has now landed except transparency-group isolation and
+    ExtGState soft masks (see below) - see sub-phases 5a-5f's own entries
+    for the full, itemized breakdown of what was built: PDF function
+    evaluation and Separation/DeviceN/Lab color spaces (5a); axial/radial
+    shadings, the `sh` operator, and shading patterns (5b); Form XObjects
+    (5c); annotation appearance streams (5d); constant alpha and blend
+    modes (5e); and tiling patterns (5f).
+- **What's carried forward to later phases.** Transparency groups
+    (isolated/knockout compositing for a `/Group` Form XObject) and
+    ExtGState-level soft masks remain unimplemented - both need
+    substantially more machinery (a full offscreen group-compositing
+    model) than this phase's other work required, for a feature this
+    project's own test corpus and real-world usage have not yet
+    demonstrated a pressing need for; revisit if concrete demand appears,
+    the same standard this project already applies to CCITTFaxDecode,
+    JBIG2Decode, and full ICC color management. The four non-separable
+    blend modes and uncolored tiling patterns remain documented,
+    permanent gaps for the same "narrow, clearly-bounded implementation"
+    reasoning applied throughout this phase. Resource caching moves to
+    Phase 6, as described above.

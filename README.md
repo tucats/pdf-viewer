@@ -1921,3 +1921,69 @@ phase's entry with a note about what changed.
     example ("fonts, in particular"); decoded images and content-stream
     parse results are not cached across renders - see
     docs/capability-matrix.md if this changes.
+
+### Phase 6c: Viewer-integration examples (2026-09-08)
+
+- **Three runnable example programs (new `cmd/` subdirectories).** Each
+    is a small, real `package main` under `cmd/` - runnable directly
+    with `go run ./cmd/<name>`, not just illustrative snippets in a doc
+    comment - matching this phase's "Add examples for a page preview,
+    page list with thumbnails, and full-page export" bullet exactly, one
+    program per named use case. Every program's own doc comment (top of
+    its `main.go`) is written to explain Go idioms themselves (flags,
+    `defer`, channels, worker pools, `io.Writer`), not just this
+    package's API, per this project's own "comprehensively commented for
+    a novice Go developer" standard for this phase.
+  - [cmd/pdfpreview](cmd/pdfpreview/main.go): renders one page
+        (`-page`, default 0) at a given scale (`-scale`, device pixels
+        per PDF point) to a PNG file (`-out`) - the "page preview"
+        example, and the simplest of the three. Its logic is factored
+        into an unexported `renderPreviewToFile` function separate from
+        `main` specifically so
+        [main_test.go](cmd/pdfpreview/main_test.go) can call it directly
+        (rather than spawning the built binary as a subprocess) -
+        covering the default path, a `-scale` change actually changing
+        pixel dimensions, an out-of-range page index, and a nonexistent
+        input file.
+  - [cmd/pdfthumbnails](cmd/pdfthumbnails/main.go): renders a bounded
+        thumbnail (`-maxdim`, default 256) for every page into an output
+        directory (`-out`) as `page-NNNN.png` - the "page list with
+        thumbnails" example. This one also doubles as a worked
+        demonstration of Phase 6a's concurrency decision: rather than
+        thumbnailing pages one at a time, `renderThumbnails` runs a
+        small worker pool (`min(runtime.NumCPU(), pageCount)` goroutines
+        pulling page indices from a shared channel), where *each worker
+        opens its own `*pdfviewer.Document`* for the same input file -
+        exactly the supported pattern documented on the `Document` type,
+        needing no locks anywhere in this file. Covered by
+        [main_test.go](cmd/pdfthumbnails/main_test.go) (one PNG per page
+        at the right bounded size, using `two-pages.pdf`'s two
+        differently-sized pages so a mix-up between them would be
+        caught, plus a nonexistent-input-file case), and passes under
+        `go test -race` - a real regression check of the "no locks
+        needed" claim above, not just an assertion of it.
+  - [cmd/pdfexport](cmd/pdfexport/main.go): renders every page at full
+        resolution (`-scale`) and encodes each with a standard-library
+        image encoder chosen by `-format` (`png`, the default, or
+        `jpeg`) to `page-NNNN.<ext>` in an output directory (`-out`) -
+        the "full-page export using standard-library image encoders"
+        example, deliberately kept sequential (one `*Document`, no
+        worker pool) as the simpler contrast to `cmd/pdfthumbnails`'s
+        concurrent version, with its own doc comment saying so and
+        pointing at the other file for when concurrency is worth the
+        extra complexity. `encoderFor` isolates the one place this
+        program knows about a specific image format, so adding a third
+        format later would not touch `exportPages`'s own logic. Covered
+        by [main_test.go](cmd/pdfexport/main_test.go): the PNG path at
+        full (non-thumbnail-bounded) resolution against `two-pages.pdf`,
+        the JPEG path decoding back correctly, and an unrecognized
+        `-format` value being rejected up front.
+  - All three programs were also smoke-tested by hand as real,
+        `go run`-invoked processes (not just their factored-out
+        functions) against real fixtures, confirming the actual
+        command-line flag parsing works end to end, not only the
+        library calls beneath it.
+- **What's carried forward.** The remaining Phase 6 bullets (CI
+    hardening - race tests, fuzzing, benchmarks, dependency/license
+    checks - and eventual package versioning) move to further Phase 6
+    sub-phases.

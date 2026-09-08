@@ -8,6 +8,16 @@
 *.so
 *.dylib
 
+# Built binaries for this module's cmd/ example programs (see the
+# repository README's Phase 6 entry) - `go build ./cmd/...` from the
+# repository root writes these, extensionless, right here on
+# Linux/macOS; each is also its own package's directory name, so listing
+# them explicitly (rather than a broad pattern) avoids ever ignoring a
+# same-named source file or directory by accident.
+/pdfpreview
+/pdfthumbnails
+/pdfexport
+
 # Test binary, built with `go test -c`
 *.test
 

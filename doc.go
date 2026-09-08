@@ -6,19 +6,28 @@
 // rationale, the phased implementation plan, and the internal package
 // layout are documented in the repository's README.md file — read that
 // first if you are trying to understand *why* the code is organized the
-// way it is. This doc comment only covers what is true of the code that
-// actually exists right now.
+// way it is. docs/capability-matrix.md is the authoritative, row-by-row
+// answer to "does this support PDF feature X" - this doc comment
+// deliberately does not restate that level of detail, since it would
+// only go stale again the way the paragraph it replaced did.
 //
-// As of Phase 1, this package can open a PDF document (Open, OpenFile),
-// report its page count, and return each page's box in PDF points
-// (Page.Bounds) - see internal/parser and internal/model for how that
-// is implemented. Page.Render and Page.Thumbnail exist, matching the
-// README's Draft Public API, but are not implemented yet: they always
-// return an error wrapping ErrUnsupported until Phase 2 and Phase 3,
-// respectively, add a rasterizer. Phase 1 also only supports the
-// classic, table-based cross-reference format, not PDF 1.5+
-// cross-reference streams - see internal/parser's package doc comment
-// and docs/capability-matrix.md for what is and is not supported yet.
+// As of Phase 6, this package can open a PDF document (Open, OpenFile),
+// inspect it (PageCount, Page.Bounds), render a page to an image.Image
+// (Page.Render) or a bounded thumbnail of one (Page.Thumbnail), and
+// close it (Document.Close) - the full shape sketched in the README's
+// Draft Public API, exercised end to end by the example programs under
+// cmd/ (see cmd/pdfpreview, cmd/pdfthumbnails, and cmd/pdfexport).
+// Rendering covers vector graphics, images, text with embedded fonts,
+// and transparency/patterns/shadings/annotations to the extent recorded
+// in docs/capability-matrix.md; a document using an unsupported feature
+// this package can positively detect fails with an error wrapping
+// ErrUnsupported (see errors.go's "Error taxonomy" section) rather than
+// silently misrendering.
+//
+// See errors.go for this package's four-sentinel error taxonomy and
+// Document's own doc comment for this package's concurrency guarantees
+// (a single Document is not safe for concurrent use by multiple
+// goroutines - open a separate Document per goroutine instead).
 //
 // # Design constraints that hold from the start
 //

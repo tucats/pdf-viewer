@@ -299,9 +299,13 @@ gaps - not full implementations - see those tables' notes).
 **Exit criteria:** an importing Go program can open, inspect, render, thumbnail,
     and close a document without knowing the PDF internals.
 
-**Status: in progress**, landing in reviewable sub-phases exactly like
-    Phase 5 did - see the Progress Log for what has been built in each
-    sub-phase so far.
+**Status: done**, landed in reviewable sub-phases exactly like Phase 5
+    did - see the Progress Log for what was actually built in each
+    sub-phase. Every bullet above was decided, documented, and (where
+    there was code to write) implemented, except package versioning,
+    which this phase deliberately leaves as a recommendation rather than
+    an action this phase takes unilaterally - see the closing Phase 6
+    Progress Log entry for why.
 
 ## Proposed Internal Layout
 
@@ -2050,3 +2054,65 @@ phase's entry with a note about what changed.
     preceding compatibility and ownership review") is the one remaining
     Phase 6 bullet, addressed in the closing Phase 6 sub-phase alongside
     a final documentation pass.
+
+### Phase 6e: Final documentation pass and Phase 6 closeout (2026-09-08)
+
+- **[doc.go](doc.go) rewritten.** The package doc comment's "Project
+    status" section had not been updated since Phase 1 - it still said
+    Render and Thumbnail "always return an error wrapping ErrUnsupported
+    until Phase 2 and Phase 3 ... add a rasterizer", which had been false
+    since those phases landed. Rewritten to describe what is actually
+    true as of Phase 6 (open/inspect/render/thumbnail/close all work,
+    exercised end to end by the cmd/ example programs) without restating
+    docs/capability-matrix.md's row-by-row detail, specifically so this
+    section is less likely to silently go stale again the same way -
+    docs/capability-matrix.md, updated in the same change as any future
+    capability change per its own stated rule, is the durable source of
+    truth for feature-level status; this doc comment now only points at
+    it instead of duplicating it.
+- **Capability matrix and README cross-checked against actual code.**
+    Reviewed `docs/capability-matrix.md` end to end against this phase's
+    changes; no further rows needed updating beyond 6a's Encryption and
+    PDF-versions changes (resource caching, examples, and CI hardening
+    are implementation/process details, not PDF *capabilities*, so they
+    do not have matrix rows of their own - matching how earlier phases'
+    equivalent work, such as Phase 2's fuzz targets, was never given one
+    either).
+- **Package versioning: a recommendation, not an action taken here.**
+    The README's remaining Phase 6 bullet - "Version the public package
+    only after the API has passed the preceding compatibility and
+    ownership review" - is, by its own wording, a gate rather than a
+    task with its own deliverable: Phase 6a-6d *are* that review
+    (concurrency, cancellation, password handling, error taxonomy, and
+    supported PDF versions decided and documented; the API demonstrated
+    working end to end via three real example programs; CI hardened with
+    race, fuzz, benchmark, and dependency checks). Publishing an actual
+    version tag (for example, `v0.1.0`, following Go's module versioning
+    conventions for a public, importable module) is a decision this
+    phase deliberately leaves to the repository's maintainer to make
+    explicitly, rather than one this phase takes unilaterally by pushing
+    a tag - a git tag on a public repository is a visible, essentially
+    permanent signal to anyone already depending on a commit hash that a
+    specific point is now "the" release, which is a call belonging to
+    whoever owns that decision for this project, not to whichever change
+    happens to complete this phase's checklist.
+- **Phase 6 closeout.** Every Phase 6 bullet from the README's original
+    Phased Plan has now been decided, documented, and (where there was
+    code to write) implemented - see sub-phases 6a-6d's own entries for
+    the itemized breakdown: concurrency/cancellation/password
+    handling/error taxonomy/supported PDF versions decisions (6a);
+    persistent font caching, the resource-caching work deferred from
+    Phase 5g (6b); three runnable viewer-integration example programs
+    (6c); and CI hardening with race, fuzz, benchmark, and dependency
+    checks (6d). This phase's own exit criterion - "an importing Go
+    program can open, inspect, render, thumbnail, and close a document
+    without knowing the PDF internals" - is met and demonstrated by the
+    cmd/ example programs, which do exactly that and nothing more.
+- **What's carried forward.** An explicit version tag remains the
+    maintainer's own decision, as described above. Beyond that, this
+    project's only remaining deliberately-deferred gaps are the ones
+    already recorded throughout `docs/capability-matrix.md` (Type 1/CFF
+    font outlines, non-Identity CID encodings, transparency groups,
+    ExtGState soft masks, uncolored tiling patterns, PDF password
+    support, and so on) - each revisit-on-demand, per the standard this
+    project has applied consistently since Phase 2.

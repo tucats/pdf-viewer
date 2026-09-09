@@ -20,22 +20,30 @@
 // The single most common real-world case - bank statements, invoices,
 // print-to-PDF output - sets an owner password (so permissions are
 // recorded) but leaves the user password empty, precisely so that any
-// PDF reader can open the file freely. That is the only case this
-// package implements: deriving the file's encryption key assuming an
-// empty user password. A document that actually requires a non-empty
-// password to open is detected (see New's validation step) and reported
-// as needing a password this package cannot supply - see
-// docs/PLAN2.md's Phase 7 for the follow-on work that would add a
-// caller-supplied password.
+// PDF reader can open the file freely (Phase 7a). The other real case -
+// a document that genuinely will not open without a password - is also
+// supported (Phase 7b): the root package's WithPassword option passes a
+// caller-supplied password all the way down to this package's New,
+// which validates it exactly the way any PDF reader's "enter password"
+// dialog would (see New's doc comment). Either way, this package only
+// ever tries the supplied (or empty) password as the document's *user*
+// password, not its owner password - see New's doc comment for that
+// scope decision. A password that does not validate is reported as
+// ErrWrongPassword, letting internal/parser distinguish "this document
+// needs a password" from "the password given was wrong" in the error
+// message it produces (both still classify as the same ErrEncrypted
+// sentinel a caller checks with errors.Is - see docs/PLAN2.md's Phase 7
+// and the root package's error taxonomy).
 //
 // # The three things a security handler does
 //
-//  1. Key derivation: turn a password (here, always empty) plus a few
-//     values already sitting in the file's /Encrypt dictionary and
-//     trailer (the owner-password hash /O, the permissions bitmask /P,
-//     the document /ID) into a single "file encryption key" - see
-//     standard.go for the classic (revision 2-4) algorithm and
-//     hash56.go for the newer (revision 5-6, AES-256) one.
+//  1. Key derivation: turn a password (empty, unless the caller supplied
+//     one via WithPassword) plus a few values already sitting in the
+//     file's /Encrypt dictionary and trailer (the owner-password hash
+//     /O, the permissions bitmask /P, the document /ID) into a single
+//     "file encryption key" - see standard.go for the classic (revision
+//     2-4) algorithm and hash56.go for the newer (revision 5-6,
+//     AES-256) one.
 //  2. Per-object keys: revisions 2-4 mix the file key with each
 //     individual object's number and generation before use (Algorithm
 //     1, key.go), so that no two objects in the file are encrypted with

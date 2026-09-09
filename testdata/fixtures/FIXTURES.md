@@ -73,6 +73,8 @@ go run ./tools/genfixtures
 | `encrypted-rc4-40bit.pdf` | Real, byte-accurate Standard Security Handler encryption (`/V 1 /R 2`, 40-bit RC4, empty owner and user passwords) wrapped around the same content as `filled-rect.pdf` plus an `/Info /Title` string - the Phase 7a baseline fixture (see `docs/PLAN2.md`) for decrypting the oldest, simplest revision. |
 | `encrypted-aes128.pdf` | Same content as `encrypted-rc4-40bit.pdf`, but `/V 4 /R 4` with a `/CF` crypt filter dictionary selecting `/AESV2` (128-bit AES-CBC) for both streams and strings - the Phase 7a fixture for the "classic" key derivation paired with AES instead of RC4. |
 | `encrypted-aes256.pdf` | Same content again, but `/V 5 /R 6`: 256-bit AES (`/AESV3`) with the newer key-wrapping key derivation (`/UE`/`/OE`, ISO 32000-2's hardened revision-6 hash) - the Phase 7a fixture for the newest Standard Security Handler revision this project supports. |
+| `encrypted-password-aes128.pdf` | Byte-for-byte identical to `encrypted-aes128.pdf` except its user password is non-empty (`"correct horse battery staple"`, tools/genfixtures's `encryptedFixturePassword` constant) - the Phase 7b fixture confirming `Open`/`OpenFile`'s `WithPassword` option correctly opens a document that genuinely requires a password, and that a missing or wrong password still fails clearly. |
+| `encrypted-password-aes256.pdf` | Byte-for-byte identical to `encrypted-aes256.pdf` except its user password is the same non-empty `encryptedFixturePassword` - the Phase 7b fixture for the AES-256 (`/V 5 /R 6`) key-wrapping construction specifically, since that revision's password handling (`/UE` unwrapping) is different code from revisions 2-4's. |
 
 ## real-world/
 

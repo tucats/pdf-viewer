@@ -31,17 +31,19 @@ import (
 // buildR234Dict returns a syntax.Dictionary equivalent to a real /Encrypt
 // dictionary for revision r (2, 3, or 4), key length keyLenBytes, using
 // method (RC4 or AESV2, only meaningful for r == 4) for both streams and
-// strings, with both the owner and user passwords empty. It also
-// returns the resulting file key, so a test can independently encrypt
-// sample data to verify Handler decrypts it correctly.
-func buildR234Dict(t *testing.T, r, keyLenBytes int, method Method) (syntax.Dictionary, []byte, []byte) {
+// strings, with the user password userPassword (the empty string for
+// Phase 7a's original "opens freely" case) and an empty owner password.
+// It also returns the resulting file key, so a test can independently
+// encrypt sample data to verify Handler decrypts it correctly.
+func buildR234Dict(t *testing.T, r, keyLenBytes int, method Method, userPassword string) (syntax.Dictionary, []byte, []byte) {
 	t.Helper()
 
 	id0 := []byte("0123456789ABCDEF")
 	var p int32 = -44
+	passwordBytes := encodePassword(userPassword, r)
 
-	o := ComputeOwnerHash(nil, nil, r, keyLenBytes)
-	fileKey := ComputeFileKey(nil, o, p, id0, r, keyLenBytes, true)
+	o := ComputeOwnerHash(nil, passwordBytes, r, keyLenBytes)
+	fileKey := ComputeFileKey(passwordBytes, o, p, id0, r, keyLenBytes, true)
 	u := ComputeUserHash(fileKey, r, id0)
 
 	dict := syntax.Dictionary{
@@ -87,9 +89,9 @@ func TestNewR234RoundTrip(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dict, fileKey, id0 := buildR234Dict(t, tc.r, tc.keyLenBytes, tc.method)
+			dict, fileKey, id0 := buildR234Dict(t, tc.r, tc.keyLenBytes, tc.method, "")
 
-			h, err := New(dict, id0)
+			h, err := New(dict, id0, "")
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -142,10 +144,12 @@ func TestNewR234RoundTrip(t *testing.T) {
 func TestNewR234WrongPassword(t *testing.T) {
 	// A document whose /U was computed for a *different* file key (as if
 	// a real, non-empty user password had been used) must be rejected
-	// with ErrWrongPassword when this package tries the empty password
-	// against it - this is exactly the "document needs a password we
-	// don't have" case Phase 7a explicitly leaves unhandled (see the
-	// package doc comment).
+	// with ErrWrongPassword when this package tries an empty password
+	// against it - the "no password supplied" half of Phase 7b's
+	// "distinguishable error given a wrong [password] or none" exit
+	// criterion (see docs/PLAN2.md); TestNewR234WithNonEmptyPassword,
+	// below, covers the "wrong password actually supplied" half, plus
+	// the case this password would actually open.
 	const r, keyLenBytes = 3, 16
 	id0 := []byte("0123456789ABCDEF")
 	var p int32 = -44
@@ -166,10 +170,58 @@ func TestNewR234WrongPassword(t *testing.T) {
 		"Length": syntax.Integer(keyLenBytes * 8),
 	}
 
-	_, err := New(dict, id0)
+	_, err := New(dict, id0, "")
 	if err != ErrWrongPassword {
 		t.Fatalf("New error = %v, want ErrWrongPassword", err)
 	}
+}
+
+// TestNewR234WithNonEmptyPassword is this package's Phase 7b regression
+// test (see docs/PLAN2.md) for revisions 2-4: a document whose user
+// password is genuinely non-empty must open (and decrypt exactly as the
+// Phase 7a round-trip tests above already check) when New is given the
+// *correct* password, and must fail with ErrWrongPassword when given
+// either the empty string or some other, incorrect password - covering
+// both halves of the exit criterion "opens given the correct password
+// ... and fails with a distinguishable error given a wrong one or
+// none".
+func TestNewR234WithNonEmptyPassword(t *testing.T) {
+	const password = "hunter2"
+	dict, fileKey, id0 := buildR234Dict(t, 4, 16, MethodAESV2, password)
+
+	t.Run("correct password opens and decrypts", func(t *testing.T) {
+		h, err := New(dict, id0, password)
+		if err != nil {
+			t.Fatalf("New(%q): %v", password, err)
+		}
+
+		const num, gen = 3, 0
+		plain := []byte("this content is protected by a real password")
+		iv := bytes.Repeat([]byte{0x77}, 16)
+		enc, err := EncryptForFixture(fileKey, MethodAESV2, num, gen, iv, plain)
+		if err != nil {
+			t.Fatalf("EncryptForFixture: %v", err)
+		}
+		got, err := h.DecryptStream(num, gen, enc)
+		if err != nil {
+			t.Fatalf("DecryptStream: %v", err)
+		}
+		if !bytes.Equal(got, plain) {
+			t.Errorf("DecryptStream = %q, want %q", got, plain)
+		}
+	})
+
+	t.Run("empty password rejected", func(t *testing.T) {
+		if _, err := New(dict, id0, ""); err != ErrWrongPassword {
+			t.Fatalf("New(\"\") error = %v, want ErrWrongPassword", err)
+		}
+	})
+
+	t.Run("wrong password rejected", func(t *testing.T) {
+		if _, err := New(dict, id0, "not-the-password"); err != ErrWrongPassword {
+			t.Fatalf("New(wrong password) error = %v, want ErrWrongPassword", err)
+		}
+	})
 }
 
 func TestNewRejectsUnsupportedFilterAndRevision(t *testing.T) {
@@ -181,7 +233,7 @@ func TestNewRejectsUnsupportedFilterAndRevision(t *testing.T) {
 			"V":      syntax.Integer(1),
 			"R":      syntax.Integer(2),
 		}
-		if _, err := New(dict, id0); err == nil {
+		if _, err := New(dict, id0, ""); err == nil {
 			t.Fatal("New: want an error for a non-Standard security handler")
 		}
 	})
@@ -192,7 +244,7 @@ func TestNewRejectsUnsupportedFilterAndRevision(t *testing.T) {
 			"V":      syntax.Integer(1),
 			"R":      syntax.Integer(1),
 		}
-		if _, err := New(dict, id0); err == nil {
+		if _, err := New(dict, id0, ""); err == nil {
 			t.Fatal("New: want an error for revision 1")
 		}
 	})
@@ -225,7 +277,7 @@ func TestNewR234IdentityMethodPassesThrough(t *testing.T) {
 		"StrF": syntax.Name("Identity"),
 	}
 
-	h, err := New(dict, id0)
+	h, err := New(dict, id0, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -241,15 +293,21 @@ func TestNewR234IdentityMethodPassesThrough(t *testing.T) {
 }
 
 // buildR56Dict is buildR234Dict's revision 5/6 (AES-256) equivalent.
-func buildR56Dict(t *testing.T, r int) (syntax.Dictionary, []byte, []byte) {
+// Unlike revisions 2-4, the file key here is not derived from
+// userPassword at all (see hash56.go's doc comment) - userPassword only
+// controls how /U and /UE are wrapped, i.e. what a caller must supply
+// to New to recover the same, arbitrary, fixed fileKey this function
+// always uses.
+func buildR56Dict(t *testing.T, r int, userPassword string) (syntax.Dictionary, []byte, []byte) {
 	t.Helper()
 
 	id0 := []byte("0123456789ABCDEF")
 	fileKey := bytes.Repeat([]byte{0x11}, 32) // arbitrary, fixed 256-bit file key
 	validationSalt := bytes.Repeat([]byte{0x22}, 8)
 	keySalt := bytes.Repeat([]byte{0x33}, 8)
+	passwordBytes := encodePassword(userPassword, r)
 
-	u, ue, err := ComputeAES256UserStrings(fileKey, r, validationSalt, keySalt)
+	u, ue, err := ComputeAES256UserStrings(fileKey, r, passwordBytes, validationSalt, keySalt)
 	if err != nil {
 		t.Fatalf("ComputeAES256UserStrings: %v", err)
 	}
@@ -275,9 +333,9 @@ func buildR56Dict(t *testing.T, r int) (syntax.Dictionary, []byte, []byte) {
 func TestNewR56RoundTrip(t *testing.T) {
 	for _, r := range []int{5, 6} {
 		t.Run(map[int]string{5: "R5", 6: "R6"}[r], func(t *testing.T) {
-			dict, fileKey, id0 := buildR56Dict(t, r)
+			dict, fileKey, id0 := buildR56Dict(t, r, "")
 
-			h, err := New(dict, id0)
+			h, err := New(dict, id0, "")
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -314,7 +372,7 @@ func TestNewR56RoundTrip(t *testing.T) {
 }
 
 func TestNewR56WrongPassword(t *testing.T) {
-	dict, _, id0 := buildR56Dict(t, 6)
+	dict, _, id0 := buildR56Dict(t, 6, "")
 	// Corrupt the validation hash portion of /U so it no longer matches
 	// an empty password, simulating a document with a real user
 	// password.
@@ -322,15 +380,59 @@ func TestNewR56WrongPassword(t *testing.T) {
 	u[0] ^= 0xFF
 	dict["U"] = u
 
-	_, err := New(dict, id0)
+	_, err := New(dict, id0, "")
 	if err != ErrWrongPassword {
 		t.Fatalf("New error = %v, want ErrWrongPassword", err)
 	}
 }
 
+// TestNewR56WithNonEmptyPassword is TestNewR234WithNonEmptyPassword's
+// revision 5/6 (AES-256) equivalent, this package's Phase 7b regression
+// test (see docs/PLAN2.md) for the newer key-wrapping construction:
+// correct password opens and decrypts, empty or wrong password fails
+// with ErrWrongPassword.
+func TestNewR56WithNonEmptyPassword(t *testing.T) {
+	const password = "correct horse battery staple"
+	dict, fileKey, id0 := buildR56Dict(t, 6, password)
+
+	t.Run("correct password opens and decrypts", func(t *testing.T) {
+		h, err := New(dict, id0, password)
+		if err != nil {
+			t.Fatalf("New(%q): %v", password, err)
+		}
+
+		const num, gen = 8, 0
+		plain := []byte("AES-256 content behind a real password")
+		iv := bytes.Repeat([]byte{0x55}, 16)
+		enc, err := EncryptForFixture(fileKey, MethodAESV3, num, gen, iv, plain)
+		if err != nil {
+			t.Fatalf("EncryptForFixture: %v", err)
+		}
+		got, err := h.DecryptStream(num, gen, enc)
+		if err != nil {
+			t.Fatalf("DecryptStream: %v", err)
+		}
+		if !bytes.Equal(got, plain) {
+			t.Errorf("DecryptStream = %q, want %q", got, plain)
+		}
+	})
+
+	t.Run("empty password rejected", func(t *testing.T) {
+		if _, err := New(dict, id0, ""); err != ErrWrongPassword {
+			t.Fatalf("New(\"\") error = %v, want ErrWrongPassword", err)
+		}
+	})
+
+	t.Run("wrong password rejected", func(t *testing.T) {
+		if _, err := New(dict, id0, "incorrect horse"); err != ErrWrongPassword {
+			t.Fatalf("New(wrong password) error = %v, want ErrWrongPassword", err)
+		}
+	})
+}
+
 func TestDecryptObjectRecursesThroughDictionariesAndArrays(t *testing.T) {
-	dict, fileKey, id0 := buildR234Dict(t, 3, 16, MethodRC4)
-	h, err := New(dict, id0)
+	dict, fileKey, id0 := buildR234Dict(t, 3, 16, MethodRC4, "")
+	h, err := New(dict, id0, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -385,7 +487,7 @@ func TestDecryptObjectRecursesThroughDictionariesAndArrays(t *testing.T) {
 }
 
 func TestDecryptObjectSkipsUnencryptedMetadataStream(t *testing.T) {
-	dict, _, id0 := buildR234Dict(t, 3, 16, MethodRC4)
+	dict, _, id0 := buildR234Dict(t, 3, 16, MethodRC4, "")
 	dict["EncryptMetadata"] = syntax.Boolean(false)
 	// Because EncryptMetadata was false when computing the file key
 	// (see buildR234Dict's "true" argument), rebuild the dictionary with
@@ -396,7 +498,7 @@ func TestDecryptObjectSkipsUnencryptedMetadataStream(t *testing.T) {
 	fileKey := ComputeFileKey(nil, []byte(o), p, id0Copy, 3, 16, false)
 	dict["U"] = syntax.String(ComputeUserHash(fileKey, 3, id0Copy))
 
-	h, err := New(dict, id0Copy)
+	h, err := New(dict, id0Copy, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

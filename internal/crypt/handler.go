@@ -46,14 +46,17 @@ const (
 )
 
 // ErrWrongPassword is returned by New when the document's /U (or, for
-// revision 5-6, /U and /UE) entries do not validate against an empty
-// password - i.e. this is a real "please enter a password" document,
-// not the common "permissions-only, opens freely" case this package
-// implements (see the package doc comment). internal/parser wraps this
-// into a pdferror.Encryptedf error so a caller sees the same
-// ErrEncrypted sentinel as any other encrypted-and-unreadable document,
-// distinguishable from a malformed-file error.
-var ErrWrongPassword = errors.New("crypt: document requires a non-empty password to open")
+// revision 5-6, /U and /UE) entries do not validate against the
+// password New was given - whether that password was the empty string
+// (no password supplied at all, or the document's user password really
+// is empty and something else about it is wrong) or a real,
+// caller-supplied one that simply does not match. internal/parser wraps
+// this into a pdferror.Encryptedf error - with a message distinguishing
+// "no password was supplied" from "the supplied password did not work"
+// - so a caller sees the same ErrEncrypted sentinel as any other
+// encrypted-and-unreadable document, distinguishable from a
+// malformed-file error.
+var ErrWrongPassword = errors.New("crypt: document requires a password to open, or the password supplied was incorrect")
 
 // Handler decrypts the strings and streams of one already-opened,
 // encrypted PDF document. It is built once, by New, when
@@ -85,11 +88,22 @@ type Handler struct {
 // New builds a Handler for a document whose already-resolved /Encrypt
 // dictionary is dict, using the trailer's /ID array's first element
 // (id0) as required by the key-derivation algorithms in standard.go and
-// hash56.go. It always attempts an empty user password - see the
-// package doc comment - and returns ErrWrongPassword if that does not
-// validate against the document's own /U (and, for revision 5-6, /UE)
-// entries, meaning the document genuinely requires a password this
-// package cannot supply.
+// hash56.go, and password as the user password to try - the empty
+// string if the caller supplied none (see the root package's
+// WithPassword option, and internal/parser's setupEncryption, this
+// function's real caller). It returns ErrWrongPassword if password does
+// not validate against the document's own /U (and, for revision 5-6,
+// /UE) entries, whether because it is genuinely wrong or because none
+// was supplied for a document that requires one.
+//
+// New only ever tries password as the *user* password (via Algorithm 6
+// for revisions 2-4, or its revision 5-6 equivalent) - it does not
+// attempt to also try password as an *owner* password (which would
+// require unwrapping /O, ISO 32000-1 Algorithm 7, to recover the user
+// password it was built from). This project's own scope decision (see
+// docs/PLAN2.md's Phase 7) is that a document's user password is what a
+// caller supplies to open a file - if a document's user password is
+// empty (Phase 7a's case), New already finds that via password == "".
 //
 // dict must not itself have been decrypted (it never should be: the
 // /Encrypt dictionary's own strings, such as /O and /U, are always
@@ -98,7 +112,7 @@ type Handler struct {
 // possible in the first place). internal/parser's setupEncryption
 // resolves the /Encrypt object before creating a Handler, guaranteeing
 // this.
-func New(dict syntax.Dictionary, id0 []byte) (*Handler, error) {
+func New(dict syntax.Dictionary, id0 []byte, password string) (*Handler, error) {
 	if filter, ok := dict["Filter"].(syntax.Name); ok && filter != "Standard" {
 		return nil, pdferror.Unsupportedf("security handler %q (only the Standard security handler is supported)", filter)
 	}
@@ -118,17 +132,20 @@ func New(dict syntax.Dictionary, id0 []byte) (*Handler, error) {
 		return nil, pdferror.Malformedf("/Encrypt dictionary missing a direct /U string")
 	}
 	encryptMetadata := boolEntry(dict, "EncryptMetadata", true)
+	passwordBytes := encodePassword(password, r)
 
 	if r >= 5 {
-		return newHandlerR56(dict, r, []byte(u), encryptMetadata)
+		return newHandlerR56(dict, r, []byte(u), passwordBytes, encryptMetadata)
 	}
-	return newHandlerR234(dict, v, r, []byte(o), []byte(u), id0, encryptMetadata)
+	return newHandlerR234(dict, v, r, []byte(o), []byte(u), id0, passwordBytes, encryptMetadata)
 }
 
 // newHandlerR56 builds a Handler for revision 5 or 6 (AES-256 - see
 // hash56.go), the branch of New that unwraps /UE rather than recomputing
-// a hash-based file key from scratch.
-func newHandlerR56(dict syntax.Dictionary, r int, u []byte, encryptMetadata bool) (*Handler, error) {
+// a hash-based file key from scratch. password is already
+// revision-appropriately encoded (see encodePassword), not a raw Go
+// string.
+func newHandlerR56(dict syntax.Dictionary, r int, u, password []byte, encryptMetadata bool) (*Handler, error) {
 	if len(u) != 48 {
 		return nil, pdferror.Malformedf("/Encrypt /U must be 48 bytes for revision %d, found %d", r, len(u))
 	}
@@ -137,7 +154,7 @@ func newHandlerR56(dict syntax.Dictionary, r int, u []byte, encryptMetadata bool
 		return nil, pdferror.Malformedf("/Encrypt dictionary missing a direct, 32-byte /UE string required for revision %d", r)
 	}
 
-	fileKey, err := ComputeFileKeyR56(nil, r, u, []byte(ue))
+	fileKey, err := ComputeFileKeyR56(password, r, u, []byte(ue))
 	if err != nil {
 		return nil, err
 	}
@@ -152,8 +169,10 @@ func newHandlerR56(dict syntax.Dictionary, r int, u []byte, encryptMetadata bool
 }
 
 // newHandlerR234 builds a Handler for revisions 2-4 (RC4 and AES-128 -
-// see standard.go and key.go).
-func newHandlerR234(dict syntax.Dictionary, v, r int, o, u, id0 []byte, encryptMetadata bool) (*Handler, error) {
+// see standard.go and key.go). password is already
+// revision-appropriately encoded (see encodePassword), not a raw Go
+// string.
+func newHandlerR234(dict syntax.Dictionary, v, r int, o, u, id0, password []byte, encryptMetadata bool) (*Handler, error) {
 	if len(o) != 32 {
 		return nil, pdferror.Malformedf("/Encrypt /O must be 32 bytes for revision %d, found %d", r, len(o))
 	}
@@ -172,7 +191,7 @@ func newHandlerR234(dict syntax.Dictionary, v, r int, o, u, id0 []byte, encryptM
 	}
 
 	p := int32(intEntry(dict, "P", 0))
-	fileKey := ComputeFileKey(nil, o, p, id0, r, keyLenBytes, encryptMetadata)
+	fileKey := ComputeFileKey(password, o, p, id0, r, keyLenBytes, encryptMetadata)
 
 	if !validateUserPassword(fileKey, r, id0, u) {
 		return nil, ErrWrongPassword

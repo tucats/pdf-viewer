@@ -24,10 +24,13 @@ const fixturesDir = "../../testdata/fixtures/handmade"
 // openFixture opens the named file from fixturesDir as a Document,
 // failing the test immediately if that does not succeed - most tests in
 // this file expect a successful open and only care about what comes
-// after, so this keeps them from having to repeat that boilerplate.
-func openFixture(t *testing.T, name string) *Document {
+// after, so this keeps them from having to repeat that boilerplate. opts
+// is passed through to Open unchanged (most tests pass none, getting
+// Phase 7a's original empty-password-only behavior; a test opening a
+// Phase 7b password-protected fixture passes WithPassword).
+func openFixture(t *testing.T, name string, opts ...OpenOption) *Document {
 	t.Helper()
-	d, err := openFixtureErr(t, name)
+	d, err := openFixtureErr(t, name, opts...)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", name, err)
 	}
@@ -36,7 +39,7 @@ func openFixture(t *testing.T, name string) *Document {
 
 // openFixtureErr is like openFixture but returns the error instead of
 // failing the test, for tests that specifically want to inspect it.
-func openFixtureErr(t *testing.T, name string) (*Document, error) {
+func openFixtureErr(t *testing.T, name string, opts ...OpenOption) (*Document, error) {
 	t.Helper()
 	path := filepath.Join(fixturesDir, name)
 	data, err := os.ReadFile(path)
@@ -47,7 +50,7 @@ func openFixtureErr(t *testing.T, name string) (*Document, error) {
 	if err != nil {
 		t.Fatalf("source.New(%s): %v", path, err)
 	}
-	return Open(src)
+	return Open(src, opts...)
 }
 
 // resolveDict is a small test helper: it resolves ref (which must
@@ -276,6 +279,82 @@ func TestOpenEncryptedDocumentEmptyPasswordDecrypts(t *testing.T) {
 			if !bytes.Equal(title, wantTitle) {
 				t.Errorf("decrypted /Title = %q, want %q", title, wantTitle)
 			}
+		})
+	}
+}
+
+// encryptedFixturePassword must match tools/genfixtures/main.go's own
+// encryptedFixturePassword constant exactly - it is the non-empty user
+// password buildEncryptedPasswordAES128 and buildEncryptedPasswordAES256
+// build their fixtures around. It cannot simply be imported (genfixtures
+// is a "package main", not an importable library), so this is a
+// deliberately duplicated literal; if a test using it below starts
+// failing with ErrWrongPassword instead of a decryption-content mismatch,
+// check that the two still agree.
+const encryptedFixturePassword = "correct horse battery staple"
+
+// TestOpenEncryptedDocumentNonEmptyPasswordDecrypts is this package's
+// regression test for Phase 7b (see docs/PLAN2.md): a document whose
+// user password is genuinely non-empty must open and transparently
+// decrypt when Open is given WithPassword(the correct password), and
+// must fail with an error wrapping ErrEncrypted given the wrong
+// password or none at all - the same "distinguishable error given a
+// wrong one or none" exit criterion
+// internal/crypt/handler_test.go's TestNewR234WithNonEmptyPassword and
+// TestNewR56WithNonEmptyPassword already check one layer down, exercised
+// here through the full Open/setupEncryption/Resolve path a real caller
+// actually uses.
+func TestOpenEncryptedDocumentNonEmptyPasswordDecrypts(t *testing.T) {
+	wantContent := []byte("1 0 0 rg\n10 10 80 80 re\nf\n")
+	wantTitle := []byte("Encrypted Fixture")
+
+	for _, name := range []string{"encrypted-password-aes128.pdf", "encrypted-password-aes256.pdf"} {
+		t.Run(name, func(t *testing.T) {
+			t.Run("correct password", func(t *testing.T) {
+				d := openFixture(t, name, WithPassword(encryptedFixturePassword))
+
+				contentObj, err := d.Resolve(4)
+				if err != nil {
+					t.Fatalf("Resolve(4): %v", err)
+				}
+				stream, ok := contentObj.(syntax.Stream)
+				if !ok {
+					t.Fatalf("Resolve(4) = %#v (%T), want syntax.Stream", contentObj, contentObj)
+				}
+				if !bytes.Equal(stream.Raw, wantContent) {
+					t.Errorf("decrypted content stream = %q, want %q", stream.Raw, wantContent)
+				}
+
+				infoObj, err := d.Resolve(5)
+				if err != nil {
+					t.Fatalf("Resolve(5): %v", err)
+				}
+				info, ok := infoObj.(syntax.Dictionary)
+				if !ok {
+					t.Fatalf("Resolve(5) = %#v (%T), want syntax.Dictionary", infoObj, infoObj)
+				}
+				title, ok := info["Title"].(syntax.String)
+				if !ok {
+					t.Fatalf("/Info /Title = %#v, want syntax.String", info["Title"])
+				}
+				if !bytes.Equal(title, wantTitle) {
+					t.Errorf("decrypted /Title = %q, want %q", title, wantTitle)
+				}
+			})
+
+			t.Run("no password", func(t *testing.T) {
+				_, err := openFixtureErr(t, name)
+				if !errors.Is(err, pdferror.ErrEncrypted) {
+					t.Fatalf("Open(%s) with no password: error = %v, want ErrEncrypted", name, err)
+				}
+			})
+
+			t.Run("wrong password", func(t *testing.T) {
+				_, err := openFixtureErr(t, name, WithPassword("not the right password"))
+				if !errors.Is(err, pdferror.ErrEncrypted) {
+					t.Fatalf("Open(%s) with the wrong password: error = %v, want ErrEncrypted", name, err)
+				}
+			})
 		})
 	}
 }

@@ -10,13 +10,13 @@ import (
 // Public API" section: OpenOption for Open and OpenFile, and
 // RenderOptions/ThumbnailOptions for Page.Render and Page.Thumbnail.
 //
-// Open and OpenFile still have nothing to configure (see OpenOption
-// below) - that extension point exists purely so this package's
-// exported function *signatures* already match the shape described in
-// the README's Draft Public API and will not need to change (only grow)
-// once there is something to put in it, since adding a field to an
-// existing options struct is backward compatible in Go, but adding a
-// previously-absent parameter to an existing function is not.
+// OpenOption's variadic-functional-option shape (Open(r, size,
+// opts...), each opt an OpenOption) exists so that this package's
+// exported function *signatures* never need to change (only grow) as
+// more settings are added to openConfig below - adding a field to an
+// existing options struct, or a new With* constructor, is backward
+// compatible in Go, but adding a previously-absent parameter to an
+// existing function is not.
 //
 // RenderOptions carries the minimal set of fields Render's implementation
 // (see page.go) actually uses: Scale and Background. Per the README's
@@ -30,18 +30,51 @@ import (
 // "a convenience for a bounded maximum dimension" sharing full
 // rendering's page interpretation.
 
-// OpenOption configures how Open or OpenFile parses a document. Most of
-// this extension point remains unused for now (a future limit on how
+// OpenOption configures how Open or OpenFile parses a document - see
+// WithDiagnostics, WithFontSubstitution, and WithPassword, below, for
+// what can currently be configured. A future setting (a limit on how
 // large a file the cross-reference recovery scan documented in
 // internal/parser will attempt, for example, exposed for callers who
 // want stricter or looser bounds than this module's current internal
-// defaults) - WithDiagnostics, below, is its first real use.
+// defaults) would be added the same way: a new field on openConfig plus
+// a new With* constructor, not a change to Open or OpenFile's own
+// signature.
 type OpenOption func(*openConfig)
 
 // openConfig holds the settings OpenOption values mutate.
 type openConfig struct {
 	diagnostics      *Diagnostics
 	fontSubstitution *FontSubstitution
+	password         string
+}
+
+// WithPassword supplies the password to try when opening a document
+// protected by PDF's Standard security handler (see ErrEncrypted's doc
+// comment) - most commonly a PDF that will not open at all without one
+// being typed into a viewer's "enter password" dialog first. Without
+// this option, Open and OpenFile still try the empty password (this is
+// what lets the much more common "permissions-only" case - a document
+// with an owner password but no user password, such as many bank
+// statements and print-to-PDF output - open with no option needed at
+// all), but a document that genuinely requires a non-empty password
+// fails with an error wrapping ErrEncrypted unless WithPassword supplies
+// the right one.
+//
+// If the document's own password is empty and password is non-empty
+// anyway, or vice versa, Open fails exactly as it would for any other
+// wrong password - the Standard security handler has no concept of
+// "close enough". If the document is not encrypted at all, this option
+// has no effect whatsoever (nothing in this package ever looks at
+// password unless the trailer declares an /Encrypt dictionary in the
+// first place).
+//
+// This package only ever tries password as the document's *user*
+// password (the one needed just to open the file), never as its
+// *owner* password (the one that, separately, controls permissions like
+// printing or copying) - see internal/crypt's package doc comment for
+// the full rationale behind that scope decision.
+func WithPassword(password string) OpenOption {
+	return func(c *openConfig) { c.password = password }
 }
 
 // WithDiagnostics attaches d to the Document being opened, so that

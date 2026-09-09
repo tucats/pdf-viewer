@@ -50,9 +50,9 @@ var update = flag.Bool("update", false, "update golden reference images in testd
 
 const renderRefsDir = "testdata/renderrefs"
 
-func renderFixture(t *testing.T, name string) image.Image {
+func renderFixture(t *testing.T, name string, opts ...pdfviewer.OpenOption) image.Image {
 	t.Helper()
-	doc, err := pdfviewer.OpenFile(fixturePath(name))
+	doc, err := pdfviewer.OpenFile(fixturePath(name), opts...)
 	if err != nil {
 		t.Fatalf("OpenFile(%s): %v", name, err)
 	}
@@ -172,6 +172,25 @@ func TestRenderEncryptedMatchesPlainContent(t *testing.T) {
 	for _, name := range []string{"encrypted-rc4-40bit.pdf", "encrypted-aes128.pdf", "encrypted-aes256.pdf"} {
 		t.Run(name, func(t *testing.T) {
 			compareImages(t, renderFixture(t, name), plain)
+		})
+	}
+}
+
+// TestRenderEncryptedWithPasswordMatchesPlainContent is
+// TestRenderEncryptedMatchesPlainContent's Phase 7b counterpart (see
+// docs/PLAN2.md): a document whose user password is genuinely
+// non-empty must, given the correct password via WithPassword, render
+// pixel-identically to the same unencrypted content too - decryption
+// happening correctly is not by itself enough evidence that the right
+// *key* was used unless the actually-decrypted content is verified, and
+// full-page rendering is the most end-to-end way this project has to
+// verify that.
+func TestRenderEncryptedWithPasswordMatchesPlainContent(t *testing.T) {
+	plain := renderFixture(t, "filled-rect.pdf")
+	for _, name := range []string{"encrypted-password-aes128.pdf", "encrypted-password-aes256.pdf"} {
+		t.Run(name, func(t *testing.T) {
+			got := renderFixture(t, name, pdfviewer.WithPassword(encryptedPasswordFixturePassword))
+			compareImages(t, got, plain)
 		})
 	}
 }

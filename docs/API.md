@@ -148,10 +148,12 @@ defer doc.Close()
 ```
 
 `opts ...OpenOption` is an extension point for open-time configuration.
-Most calls omit it entirely, as in the examples above; the two values
+Most calls omit it entirely, as in the examples above; the values
 currently available are `WithDiagnostics` (see
-[Diagnostics](#diagnostics), directly below) and `WithFontSubstitution`
-(see [Font substitution](#font-substitution)).
+[Diagnostics](#diagnostics), directly below), `WithFontSubstitution`
+(see [Font substitution](#font-substitution)), and `WithPassword` (see
+[Error handling](#error-handling)'s `ErrEncrypted` entry) for a document
+protected by a non-empty password.
 
 Always call `Close` on a successfully opened `Document` once you are
 done with it (typically via `defer`) - see
@@ -402,7 +404,7 @@ sentinel values, meant to be checked with the standard library's
 | --- | --- |
 | `pdfviewer.ErrMalformed` | The input is not well-formed PDF (a bad cross-reference table, a truncated stream, a syntax error, ...) - a property of the bytes given to this package. |
 | `pdfviewer.ErrUnsupported` | The input is well-formed PDF but uses a feature this package doesn't implement (see [What gets rendered](#what-gets-rendered)). |
-| `pdfviewer.ErrEncrypted` | The document's trailer declares an `/Encrypt` dictionary that this package could not open. As of Phase 7a, a document encrypted with the Standard security handler and an *empty* user password (the common "permissions-only, opens freely" case - many bank statements, invoices, and print-to-PDF output) now opens and decrypts transparently instead of returning this error; `ErrEncrypted` is now returned only for a document that genuinely requires a non-empty password (not yet supported - see `docs/PLAN2.md`'s Phase 7b) or that uses a security handler other than Standard (public-key handlers). `ErrEncrypted` always also satisfies `errors.Is(err, pdfviewer.ErrUnsupported)` - it is a specific case of that broader category - so existing code that only checks for `ErrUnsupported` keeps working. |
+| `pdfviewer.ErrEncrypted` | The document's trailer declares an `/Encrypt` dictionary that this package could not open. A document encrypted with the Standard security handler now opens and decrypts transparently whether its user password is empty (the common "permissions-only, opens freely" case - many bank statements, invoices, and print-to-PDF output - no option needed) or non-empty (supply the correct one via `WithPassword`); `ErrEncrypted` is returned when the password supplied (or, if none was, the empty string that is tried by default) does not validate, or when the document uses a security handler other than Standard (public-key handlers, no known demand). A wrong password and a missing one are distinguished only in the error's message text, not by a separate sentinel - check the message if your application needs to show a different message for "this file needs a password" versus "that password was wrong". `ErrEncrypted` always also satisfies `errors.Is(err, pdfviewer.ErrUnsupported)` - it is a specific case of that broader category - so existing code that only checks for `ErrUnsupported` keeps working. |
 | `pdfviewer.ErrClosed` | A method was called on a `Document` (or a `Page` obtained from one) after `Close` had already been called on that `Document`. |
 | `pdfviewer.ErrPageIndex` | `Document.Page` was called with a negative index, or one greater than or equal to `PageCount()`. |
 
@@ -410,10 +412,11 @@ sentinel values, meant to be checked with the standard library's
 doc, err := pdfviewer.OpenFile(path)
 switch {
 case errors.Is(err, pdfviewer.ErrEncrypted):
-	// This file needs a password this package cannot supply - ask the
-	// user for a different, unencrypted copy, or explain why it can't
-	// be opened. Note: ErrEncrypted also matches ErrUnsupported below,
-	// so check for it first if you want to react to it specifically.
+	// This file needs the correct password - retry with
+	// pdfviewer.WithPassword(thePassword), prompting the user for one
+	// first if you don't already have it. Note: ErrEncrypted also
+	// matches ErrUnsupported below, so check for it first if you want
+	// to react to it specifically.
 case errors.Is(err, pdfviewer.ErrMalformed):
 	// The file itself is broken or corrupt.
 case errors.Is(err, pdfviewer.ErrUnsupported):
@@ -548,12 +551,13 @@ OpenType/CFF outlines plus Identity-encoded CID fonts, transparency
 (constant alpha and separable blend modes), shading and tiling
 patterns, Form XObjects, and annotation appearance streams.
 
-It implements the Standard PDF security handler for the common
-empty-user-password case (RC4 and AES, revisions 2-6 - see
-[Error handling](#error-handling)'s `ErrEncrypted` entry), but not a
-document that requires a real password to open, nor any public-key
-security handler. It also does not implement querying a system font
-service for a non-embedded font (opt in to
+It implements the Standard PDF security handler, both the empty- and
+non-empty-user-password cases (RC4 and AES, revisions 2-6; the latter
+via the `WithPassword` `OpenOption` - see [Error handling](#error-handling)'s
+`ErrEncrypted` entry), but not recovering a user password from a
+supplied owner password, nor any public-key security handler. It also
+does not implement querying a system font service for a non-embedded
+font (opt in to
 finding a substitute outline from files on disk instead - see
 [Font substitution](#font-substitution) - or a missing/unsupported font
 falls back to a small placeholder box), transparency group isolation,
@@ -604,7 +608,8 @@ example of this package's API - see each `main.go`'s own doc comment.
 This package has not yet been tagged with a version - see PLAN.md's
 Phase 6 entry for what that decision depends on. The public API
 described in this guide (`Open`, `OpenFile`, `Document`, `Page`,
-`OpenOption` and its values (`WithDiagnostics`, `WithFontSubstitution`),
+`OpenOption` and its values (`WithDiagnostics`, `WithFontSubstitution`,
+`WithPassword`),
 `RenderOptions`, `ThumbnailOptions`, `Rect`, and the sentinel errors) is
 considered stable in shape following the Phase 6 API-stabilization
 review, but until an actual release is tagged, treat it the way you

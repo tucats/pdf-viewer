@@ -17,24 +17,27 @@ import (
 // for the actual key-derivation and decryption algorithms.
 
 // setupEncryption resolves the trailer's /Encrypt entry and, if it
-// names a Standard Security Handler that validates under an empty user
-// password, records the resulting crypt.Handler in d.crypt so that
-// every later Resolve call decrypts what it reads.
+// names a Standard Security Handler that validates under password (the
+// empty string if the caller did not supply one via the root package's
+// WithPassword option - see Open's opts parameter), records the
+// resulting crypt.Handler in d.crypt so that every later Resolve call
+// decrypts what it reads.
 //
 // Every failure path below - a malformed /Encrypt dictionary, an
 // unsupported revision or security handler, or (via
-// crypt.ErrWrongPassword) a document that genuinely requires a
-// caller-supplied password this package cannot yet provide (see
-// docs/PLAN2.md's Phase 7b) - is deliberately reported as an error
-// wrapping pdferror.ErrEncrypted rather than as whatever more specific
-// error (ErrMalformed, ErrUnsupported) actually caused it. This matches
-// this package's pre-Phase-7 behavior of rejecting *any* /Encrypt
+// crypt.ErrWrongPassword) a document whose user password does not
+// validate, whether because none was supplied or because the one
+// supplied was wrong - is deliberately reported as an error wrapping
+// pdferror.ErrEncrypted rather than as whatever more specific error
+// (ErrMalformed, ErrUnsupported) actually caused it. This matches this
+// package's pre-Phase-7 behavior of rejecting *any* unopenable /Encrypt
 // dictionary uniformly: from a caller's perspective, "this document
 // declares itself encrypted and this package could not fully open it"
 // is one coherent situation (see the root package's errors.go, "Error
 // taxonomy" section) worth a single, specific sentinel to check for,
 // regardless of which particular detail of the encryption setup this
-// package could not handle.
+// package could not handle - the wrong-vs-missing-password distinction
+// is carried only in the error's message text, not a second sentinel.
 //
 // This method must run *before* d.crypt is set (which it does - d.crypt
 // starts nil and this is the only place that ever assigns it), so that
@@ -42,16 +45,14 @@ import (
 // array, never attempts to decrypt anything: both are always stored as
 // plaintext even in an encrypted document, since they are exactly what
 // a reader needs in order to work out *how* to decrypt everything else.
-func (d *Document) setupEncryption() error {
-	handler, err := d.buildEncryptionHandler()
+func (d *Document) setupEncryption(password string) error {
+	handler, err := d.buildEncryptionHandler(password)
 	if err != nil {
 		if errors.Is(err, crypt.ErrWrongPassword) {
-			// The one situation Phase 7a explicitly leaves unhandled: a
-			// document that really does require a caller-supplied
-			// password to open at all, as opposed to the "opens freely,
-			// permissions recorded via an owner password" case this
-			// package now handles transparently.
-			return pdferror.Encryptedf("document requires a non-empty password, which is not yet supported")
+			if password == "" {
+				return pdferror.Encryptedf("document requires a password to open; none was supplied (see the root package's WithPassword option)")
+			}
+			return pdferror.Encryptedf("the supplied password is incorrect")
 		}
 		return pdferror.Encryptedf("could not set up the document's Standard Security Handler: %v", err)
 	}
@@ -63,7 +64,7 @@ func (d *Document) setupEncryption() error {
 // is split out only so that setupEncryption has one single place to
 // apply the ErrEncrypted-wrapping policy documented above, rather than
 // repeating it at every possible failure point below.
-func (d *Document) buildEncryptionHandler() (*crypt.Handler, error) {
+func (d *Document) buildEncryptionHandler(password string) (*crypt.Handler, error) {
 	encObj, err := d.resolveIfReference(d.Trailer["Encrypt"])
 	if err != nil {
 		return nil, err
@@ -78,7 +79,7 @@ func (d *Document) buildEncryptionHandler() (*crypt.Handler, error) {
 		return nil, err
 	}
 
-	return crypt.New(dict, id0)
+	return crypt.New(dict, id0, password)
 }
 
 // trailerID0 returns the first element of the trailer's /ID array (the

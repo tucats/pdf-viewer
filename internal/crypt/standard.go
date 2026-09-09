@@ -110,14 +110,19 @@ func ComputeOwnerHash(ownerPassword, userPassword []byte, r, keyLenBytes int) []
 
 // ComputeFileKey implements Algorithm 2 ("Computing an encryption key"),
 // ISO 32000-1 §7.6.3.3, for revisions 2-4. It derives the document's
-// file encryption key from the (here, always empty - see the package
-// doc comment) user password plus values already present in the
+// file encryption key from a candidate user password (already
+// revision-appropriately encoded - see encodePassword - and possibly
+// empty, either because none was supplied or because the document's own
+// user password really is empty) plus values already present in the
 // /Encrypt dictionary and trailer: the owner-password hash o (the /O
 // entry, see ComputeOwnerHash), the permissions bitmask p (the /P
 // entry), and the document identifier id0 (the trailer /ID array's
 // first element). encryptMetadata is the /EncryptMetadata entry
 // (defaulting to true when absent); when it is false and r is 4 or
 // higher, step (f) mixes in four extra 0xFF bytes, per the algorithm.
+// The caller (New, handler.go) does not yet know whether password is
+// correct - that is what validateUserPassword, using this function's
+// result, determines next.
 func ComputeFileKey(password, o []byte, p int32, id0 []byte, r, keyLenBytes int, encryptMetadata bool) []byte {
 	h := md5.New()
 	h.Write(PadPassword(password))  // step (a)

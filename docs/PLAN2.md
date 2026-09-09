@@ -40,7 +40,7 @@ capability matrix.
 
 ## Phase 7: Standard security handler (encryption)
 
-**Status: 7a done; 7b not started.**
+**Status: 7a and 7b done.**
 
 Currently *any* `/Encrypt`-declaring trailer is rejected immediately
 (`ErrEncrypted`), including the very common case of a PDF whose owner
@@ -481,3 +481,77 @@ in order, not rewritten later except to fix mistakes.
     bullet and `docs/capability-matrix.md`'s Encryption section. The
     `/Crypt` stream filter and public-key security handlers remain
     explicitly out of this phase's scope, as originally planned.
+
+### Phase 7b: Standard security handler, non-empty user password — done (2026-09-09)
+
+- **Password-input API.** Added `WithPassword(string)` to the root
+    package's `OpenOption`s (options.go), matching the shape
+    `docs/PLAN.md`'s Draft Public API section had sketched. It threads
+    down through a new, parallel `internal/parser.OpenOption`/
+    `internal/parser.WithPassword` (parser.go) - `internal/parser.Open`
+    gained a `opts ...OpenOption` parameter, backward compatible with
+    every existing call site since it is variadic - to
+    `internal/crypt.New`'s new `password string` parameter.
+- **`internal/crypt` password support.** `New`'s key-derivation calls
+    (`ComputeFileKey` for revisions 2-4, `ComputeFileKeyR56` for 5-6)
+    already accepted an arbitrary password byte slice - Phase 7a simply
+    always passed nil/empty. The only genuinely new code is
+    `password.go`'s `encodePassword`, converting a caller's Go string
+    into the bytes each revision's algorithm expects: revisions 2-4 use
+    an approximation of PDFDocEncoding (exact for ASCII/Latin-1
+    passwords, substituting `?` for anything outside that range, a
+    documented simplification - see that function's doc comment);
+    revisions 5-6 use the password's own UTF-8 bytes truncated to 127
+    bytes per ISO 32000-2 §7.6.4.3.4, without the full SASLprep (RFC
+    4013) normalization the specification technically also calls for
+    (exact for any password SASLprep would not itself alter, which
+    covers ordinary ASCII text - another documented simplification, the
+    same kind this project makes elsewhere, e.g. LZWDecode's
+    `/EarlyChange 0` gap). `ComputeAES256UserStrings` (hash56.go) gained
+    a `password` parameter for the same reason its revision 2-4
+    counterparts already had one - so tools/genfixtures and this
+    package's own tests could build a real, correctly-passworded
+    fixture.
+    - **Deliberately out of scope:** recovering a user password from a
+        supplied *owner* password (ISO 32000-1 Algorithm 7) - this phase
+        only tries a caller-supplied password as the document's *user*
+        password, matching the phase's own title. See `New`'s doc
+        comment.
+- **Error message, not a new sentinel.** `internal/parser.setupEncryption`
+    now distinguishes "no password was supplied" from "the supplied
+    password was wrong" only in the wrapped error's message text - both
+    still classify as `ErrEncrypted` via `errors.Is`, keeping this
+    project's four-sentinel error taxonomy (root package's errors.go)
+    intact rather than adding a fifth category for a distinction a
+    message string already conveys.
+- **Fixtures.** `tools/genfixtures` gained
+    `buildEncryptedPasswordAES128`/`buildEncryptedPasswordAES256`,
+    byte-for-byte identical to Phase 7a's `buildEncryptedAES128`/
+    `buildEncryptedAES256` except for a shared non-empty
+    `encryptedFixturePassword` constant used as the user password -
+    `buildEncryptedFilledRect` and the AES-256 fixture builder were both
+    refactored to take a `password` parameter (defaulting to `""` for
+    the pre-existing Phase 7a callers) rather than duplicating the whole
+    fixture-building function a second time.
+- **Tests.** `internal/crypt/handler_test.go` gained
+    `TestNewR234WithNonEmptyPassword`/`TestNewR56WithNonEmptyPassword`
+    (correct password opens and decrypts; empty or wrong password each
+    fail with `ErrWrongPassword`) and `password_test.go` covers
+    `encodePassword`'s ASCII/non-ASCII/truncation behavior directly.
+    `internal/parser/parser_test.go`'s
+    `TestOpenEncryptedDocumentNonEmptyPasswordDecrypts` and the root
+    package's `TestOpenFileWithPasswordSucceedsOrFails` (plus
+    `pdfviewer_render_test.go`'s
+    `TestRenderEncryptedWithPasswordMatchesPlainContent`) add the same
+    "correct password succeeds; wrong or missing password fails with
+    `ErrEncrypted`" coverage at the `Document.Resolve`, `Open`/
+    `OpenFile`, and full-page-rendering layers respectively. Full test
+    suite, `go vet`, the race detector, and a 20s/7M+-execution run of
+    the existing `FuzzOpenAndResolveAll` target (which picks up the new
+    fixtures as seeds automatically) all pass clean.
+- **What's carried forward.** Owner-password recovery of a user
+    password (Algorithm 7) remains out of scope, as does the `/Crypt`
+    stream filter and public-key security handlers - see this phase's
+    "Deliberately out of scope" bullet above and
+    `docs/capability-matrix.md`'s Encryption section. With 7a and 7b
+    both done, Phase 7 as a whole is complete.

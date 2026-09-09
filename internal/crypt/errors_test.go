@@ -65,7 +65,7 @@ func TestNewRejectsMalformedEncryptDict(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := New(tc.dict, id0); err == nil {
+			if _, err := New(tc.dict, id0, ""); err == nil {
 				t.Fatalf("New(%v): want an error, got nil", tc.dict)
 			}
 		})
@@ -73,8 +73,8 @@ func TestNewRejectsMalformedEncryptDict(t *testing.T) {
 }
 
 func TestDecryptStreamRejectsCorruptCiphertext(t *testing.T) {
-	dict, _, id0 := buildR234Dict(t, 4, 16, MethodAESV2)
-	h, err := New(dict, id0)
+	dict, _, id0 := buildR234Dict(t, 4, 16, MethodAESV2, "")
+	h, err := New(dict, id0, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -104,8 +104,8 @@ func TestDecryptStreamRejectsCorruptCiphertext(t *testing.T) {
 }
 
 func TestDecryptObjectPropagatesErrors(t *testing.T) {
-	dict, _, id0 := buildR234Dict(t, 4, 16, MethodAESV2)
-	h, err := New(dict, id0)
+	dict, _, id0 := buildR234Dict(t, 4, 16, MethodAESV2, "")
+	h, err := New(dict, id0, "")
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

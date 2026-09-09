@@ -138,11 +138,11 @@ func hashR6(password, salt, udata []byte) []byte {
 
 // ComputeFileKeyR56 implements the user-password half of ISO 32000-2
 // §7.6.4.4.9's Algorithm 2.A ("Retrieving the file encryption key from
-// an encrypted document in order to decrypt it"): given the (here,
-// always empty - see the package doc comment) user password and the
-// document's /U and /UE entries, it both validates that password and,
-// if valid, unwraps and returns the document's 32-byte AES-256 file
-// encryption key.
+// an encrypted document in order to decrypt it"): given a candidate
+// user password (already revision-appropriately encoded - see
+// encodePassword - and possibly empty) and the document's /U and /UE
+// entries, it both validates that password and, if valid, unwraps and
+// returns the document's 32-byte AES-256 file encryption key.
 //
 // u must be the full 48-byte /U string (32-byte hash, 8-byte validation
 // salt, 8-byte key salt) and ue the 32-byte /UE string; New (handler.go)
@@ -176,18 +176,21 @@ func ComputeFileKeyR56(password []byte, r int, u, ue []byte) ([]byte, error) {
 // spec-correct encrypted fixture (see the package doc comment's "Why
 // some of this package's functions are exported" section) - New never
 // calls this, since this project only ever reads PDF files, not writes
-// them.
+// them. password is the user password to build /U and /UE for (already
+// revision-appropriately encoded, or nil for an empty user password -
+// see encodePassword), matching whatever a caller would later need to
+// supply via WithPassword to open the resulting fixture successfully.
 //
 // validationSalt and keySalt must each be 8 bytes; a real PDF-writing
 // application would generate them randomly, but this package's only
 // callers want fully reproducible output (see standard.go's
 // ComputeUserHash for the same reasoning), so they are supplied by the
 // caller rather than generated here.
-func ComputeAES256UserStrings(fileKey []byte, r int, validationSalt, keySalt []byte) (u, ue []byte, err error) {
-	hash := HashRevision(r, nil, validationSalt, nil)
+func ComputeAES256UserStrings(fileKey []byte, r int, password, validationSalt, keySalt []byte) (u, ue []byte, err error) {
+	hash := HashRevision(r, password, validationSalt, nil)
 	u = bytes.Join([][]byte{hash, validationSalt, keySalt}, nil)
 
-	intermediateKey := HashRevision(r, nil, keySalt, nil)
+	intermediateKey := HashRevision(r, password, keySalt, nil)
 	ue, err = aesCBCNoPad(intermediateKey, zeroIV16, fileKey, true)
 	if err != nil {
 		return nil, nil, err

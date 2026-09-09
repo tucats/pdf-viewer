@@ -104,7 +104,7 @@ func Open(r io.ReaderAt, size int64, opts ...OpenOption) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	p, err := parser.Open(src)
+	p, err := parser.Open(src, parser.WithPassword(cfg.password))
 	if err != nil {
 		return nil, err
 	}

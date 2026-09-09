@@ -115,6 +115,8 @@ func main() {
 		{"encrypted-rc4-40bit.pdf", buildEncryptedRC4_40bit()},
 		{"encrypted-aes128.pdf", buildEncryptedAES128()},
 		{"encrypted-aes256.pdf", buildEncryptedAES256()},
+		{"encrypted-password-aes128.pdf", buildEncryptedPasswordAES128()},
+		{"encrypted-password-aes256.pdf", buildEncryptedPasswordAES256()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -305,8 +307,15 @@ func hexString(b []byte) string {
 // the cipher actually used for both streams and strings, and cfmName is
 // the /CFM name that selects it in a revision-4 document's /CF
 // dictionary (unused, and left empty, for revision 2-3 documents, which
-// have no /CF concept at all - RC4 is simply the only option).
-func buildEncryptedFilledRect(v, r, keyLenBytes int, method crypt.Method, cfmName string) []byte {
+// have no /CF concept at all - RC4 is simply the only option). password
+// is the document's user password ("" for Phase 7a's original
+// "permissions-only, opens freely" fixtures; a real password for Phase
+// 7b's - see buildEncryptedPasswordAES128, below); it is used as-is,
+// without internal/crypt's own PDFDocEncoding-approximating encoding
+// step (see that package's encodePassword, unexported and therefore
+// unavailable here), which is exact for any plain-ASCII password - the
+// only kind this package's fixtures use.
+func buildEncryptedFilledRect(v, r, keyLenBytes int, method crypt.Method, cfmName, password string) []byte {
 	const (
 		pageContentObj = 4
 		infoObj        = 5
@@ -316,9 +325,10 @@ func buildEncryptedFilledRect(v, r, keyLenBytes int, method crypt.Method, cfmNam
 	content := []byte("1 0 0 rg\n10 10 80 80 re\nf\n") // identical to buildFilledRect's content
 	iv := bytes.Repeat([]byte{0xA5}, 16)               // arbitrary, fixed - see EncryptForFixture's doc comment
 	var p int32 = -3904                                // arbitrary permissions bitmask; this project does not enforce permissions on read, only decrypts (see internal/crypt's package doc comment)
+	passwordBytes := []byte(password)                  // owner password stays empty regardless - see ComputeOwnerHash's doc comment
 
-	o := crypt.ComputeOwnerHash(nil, nil, r, keyLenBytes) // both owner and user password empty
-	fileKey := crypt.ComputeFileKey(nil, o, p, encryptedFixtureID, r, keyLenBytes, true)
+	o := crypt.ComputeOwnerHash(nil, passwordBytes, r, keyLenBytes)
+	fileKey := crypt.ComputeFileKey(passwordBytes, o, p, encryptedFixtureID, r, keyLenBytes, true)
 	u := crypt.ComputeUserHash(fileKey, r, encryptedFixtureID)
 
 	encContent, err := crypt.EncryptForFixture(fileKey, method, pageContentObj, 0, iv, content)
@@ -357,17 +367,40 @@ func buildEncryptedFilledRect(v, r, keyLenBytes int, method crypt.Method, cfmNam
 
 // buildEncryptedRC4_40bit returns an encrypted fixture using the
 // oldest, simplest configuration: /V 1 /R 2, 40-bit (5-byte) RC4 -
-// revision 2 always implies RC4 with no /CF dictionary at all.
+// revision 2 always implies RC4 with no /CF dictionary at all. Its user
+// password is empty (Phase 7a's "opens freely" case).
 func buildEncryptedRC4_40bit() []byte {
-	return buildEncryptedFilledRect(1, 2, 5, crypt.MethodRC4, "")
+	return buildEncryptedFilledRect(1, 2, 5, crypt.MethodRC4, "", "")
 }
 
 // buildEncryptedAES128 returns an encrypted fixture using /V 4 /R 4,
 // 128-bit AES (the "/AESV2" crypt filter method) - the common
 // configuration for a document that opts into AES over RC4 while
 // remaining on the "classic" (non-AES-256) key derivation algorithm.
+// Its user password is empty (Phase 7a's "opens freely" case); see
+// buildEncryptedPasswordAES128 for the Phase 7b (non-empty password)
+// counterpart.
 func buildEncryptedAES128() []byte {
-	return buildEncryptedFilledRect(4, 4, 16, crypt.MethodAESV2, "AESV2")
+	return buildEncryptedFilledRect(4, 4, 16, crypt.MethodAESV2, "AESV2", "")
+}
+
+// encryptedFixturePassword is the non-empty user password this
+// package's Phase 7b fixtures (buildEncryptedPasswordAES128 and
+// buildEncryptedPasswordAES256) use - a document that genuinely will
+// not open without a caller supplying this exact string via the root
+// package's WithPassword option (see pdfviewer_test.go and
+// internal/parser/parser_test.go's Phase 7b tests, which use this same
+// constant to open them).
+const encryptedFixturePassword = "correct horse battery staple"
+
+// buildEncryptedPasswordAES128 is buildEncryptedAES128's Phase 7b
+// counterpart: byte-for-byte identical except its user password is
+// encryptedFixturePassword, not empty - so unlike every other encrypted
+// fixture in this file, opening it successfully requires
+// pdfviewer.WithPassword(encryptedFixturePassword) (or the equivalent
+// internal/parser.WithPassword).
+func buildEncryptedPasswordAES128() []byte {
+	return buildEncryptedFilledRect(4, 4, 16, crypt.MethodAESV2, "AESV2", encryptedFixturePassword)
 }
 
 // buildEncryptedAES256 returns an encrypted fixture using /V 5 /R 6,
@@ -378,8 +411,31 @@ func buildEncryptedAES128() []byte {
 // and ComputeAES256UserStrings' doc comments. Unlike
 // buildEncryptedFilledRect's revision 2-4 fixtures, the file key here is
 // simply an arbitrary fixed 32-byte value rather than one derived by
-// ComputeFileKey, since revision 5-6 never derives it from anything.
+// ComputeFileKey, since revision 5-6 never derives it from anything. Its
+// user password is empty (Phase 7a's "opens freely" case); see
+// buildEncryptedPasswordAES256 for the Phase 7b (non-empty password)
+// counterpart.
 func buildEncryptedAES256() []byte {
+	return buildEncryptedAES256Fixture("")
+}
+
+// buildEncryptedPasswordAES256 is buildEncryptedAES256's Phase 7b
+// counterpart: byte-for-byte identical except its user password is
+// encryptedFixturePassword, not empty - see
+// buildEncryptedPasswordAES128's doc comment for the parallel revision
+// 2-4 fixture.
+func buildEncryptedPasswordAES256() []byte {
+	return buildEncryptedAES256Fixture(encryptedFixturePassword)
+}
+
+// buildEncryptedAES256Fixture is the shared implementation behind
+// buildEncryptedAES256 and buildEncryptedPasswordAES256 - see
+// buildEncryptedAES256's doc comment for what it builds and why the
+// file key is an arbitrary fixed value rather than one ComputeFileKey
+// derives. password is used as-is (see buildEncryptedFilledRect's doc
+// comment on why that is exact for the plain-ASCII passwords this
+// package's fixtures use).
+func buildEncryptedAES256Fixture(password string) []byte {
 	const (
 		pageContentObj = 4
 		infoObj        = 5
@@ -389,13 +445,14 @@ func buildEncryptedAES256() []byte {
 	content := []byte("1 0 0 rg\n10 10 80 80 re\nf\n")
 	iv := bytes.Repeat([]byte{0xA5}, 16)
 	var p int32 = -3904
+	passwordBytes := []byte(password)
 
 	fileKey := bytes.Repeat([]byte{0x5A}, 32) // arbitrary, fixed 256-bit file key
 	validationSalt := bytes.Repeat([]byte{0x11}, 8)
 	keySalt := bytes.Repeat([]byte{0x22}, 8)
 
 	const r = 6
-	u, ue, err := crypt.ComputeAES256UserStrings(fileKey, r, validationSalt, keySalt)
+	u, ue, err := crypt.ComputeAES256UserStrings(fileKey, r, passwordBytes, validationSalt, keySalt)
 	if err != nil {
 		panic("genfixtures: computing AES-256 /U and /UE: " + err.Error())
 	}

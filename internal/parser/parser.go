@@ -143,6 +143,31 @@ type Document struct {
 	crypt *crypt.Handler
 }
 
+// OpenOption configures Open. Currently its only use is WithPassword;
+// see that function's doc comment. This mirrors the root pdfviewer
+// package's own OpenOption/opts pattern (see its options.go) one layer
+// down, so that a new setting can be added later (to either layer)
+// without another breaking change to Open's signature - the same
+// forward-compatibility reasoning the root package's OpenOption doc
+// comment explains in more detail.
+type OpenOption func(*openConfig)
+
+// openConfig holds the settings OpenOption values mutate.
+type openConfig struct {
+	password string
+}
+
+// WithPassword supplies the password Open should try when the
+// document's trailer declares an /Encrypt dictionary - see
+// setupEncryption (encrypt.go) and internal/crypt's package doc comment
+// for how it is actually used. Omitting this option (or passing "") is
+// exactly Phase 7a's original behavior: Open still tries the empty
+// password, which is all a document protected only by an owner password
+// (permissions, no password needed to open it) ever requires.
+func WithPassword(password string) OpenOption {
+	return func(c *openConfig) { c.password = password }
+}
+
 // Open parses src's header, trailer, and cross-reference table (and any
 // chain of incremental updates), returning a Document ready to resolve
 // object references. It does not read or validate any object's content
@@ -151,7 +176,12 @@ type Document struct {
 // repository README's "Pagination and resource ownership" section:
 // Document.Resolve does the actual per-object work, only for objects a
 // caller actually asks for.
-func Open(src *source.Reader) (*Document, error) {
+func Open(src *source.Reader, opts ...OpenOption) (*Document, error) {
+	cfg := &openConfig{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
 	if err := validateHeader(src); err != nil {
 		return nil, err
 	}
@@ -175,19 +205,20 @@ func Open(src *source.Reader) (*Document, error) {
 		return nil, pdferror.Malformedf("no trailer dictionary found")
 	}
 	if _, ok := d.Trailer["Encrypt"]; ok {
-		// Phase 7a: the Standard Security Handler is now implemented for
-		// the common case of an empty user password (see encrypt.go and
-		// internal/crypt's package doc comment) - a document protected
-		// that way opens and decrypts transparently, exactly as if it
-		// were not encrypted at all, from here on. A document that
-		// genuinely requires a non-empty password (Phase 7b, not yet
-		// implemented - see docs/PLAN2.md) or that names a security
-		// handler other than Standard (public-key handlers - no known
-		// demand, see docs/capability-matrix.md) still fails clearly here
-		// at Open, with an error wrapping ErrEncrypted, rather than
-		// proceeding only to fail confusingly later at the first
-		// still-encrypted stream or string actually read.
-		if err := d.setupEncryption(); err != nil {
+		// Phase 7: the Standard Security Handler is now implemented,
+		// both for the common case of an empty user password (Phase 7a)
+		// and for a caller-supplied one via WithPassword (Phase 7b - see
+		// encrypt.go and internal/crypt's package doc comment). A
+		// document protected that way opens and decrypts transparently,
+		// exactly as if it were not encrypted at all, from here on. A
+		// document whose user password does not validate against
+		// cfg.password (wrong, or simply not supplied), or that names a
+		// security handler other than Standard (public-key handlers - no
+		// known demand, see docs/capability-matrix.md), still fails
+		// clearly here at Open, with an error wrapping ErrEncrypted,
+		// rather than proceeding only to fail confusingly later at the
+		// first still-encrypted stream or string actually read.
+		if err := d.setupEncryption(cfg.password); err != nil {
 			return nil, err
 		}
 	}

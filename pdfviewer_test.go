@@ -150,6 +150,55 @@ func TestOpenFileEncryptedEmptyPasswordSucceeds(t *testing.T) {
 	}
 }
 
+// encryptedPasswordFixturePassword must match
+// tools/genfixtures/main.go's own encryptedFixturePassword constant
+// exactly - see internal/parser/parser_test.go's identically-purposed,
+// identically-named-in-spirit constant for why this cannot simply be
+// imported instead.
+const encryptedPasswordFixturePassword = "correct horse battery staple"
+
+// TestOpenFileWithPasswordSucceedsOrFails is the public-API-level
+// regression test for Phase 7b (see docs/PLAN2.md): WithPassword must
+// let Open/OpenFile open a document that genuinely requires a non-empty
+// password when given the correct one, and must still fail with an
+// error wrapping ErrEncrypted given the wrong password or none -
+// internal/parser/parser_test.go's
+// TestOpenEncryptedDocumentNonEmptyPasswordDecrypts already checks the
+// decrypted *content* is correct one layer down; this test only checks
+// the public API surface (the WithPassword option itself, and that
+// Open's error classification is unchanged) behaves the same way a
+// caller actually using it would see.
+func TestOpenFileWithPasswordSucceedsOrFails(t *testing.T) {
+	for _, name := range []string{"encrypted-password-aes128.pdf", "encrypted-password-aes256.pdf"} {
+		t.Run(name, func(t *testing.T) {
+			t.Run("correct password", func(t *testing.T) {
+				doc, err := pdfviewer.OpenFile(fixturePath(name), pdfviewer.WithPassword(encryptedPasswordFixturePassword))
+				if err != nil {
+					t.Fatalf("OpenFile(%s) with the correct password: %v", name, err)
+				}
+				defer doc.Close()
+				if got, want := doc.PageCount(), 1; got != want {
+					t.Errorf("PageCount() = %d, want %d", got, want)
+				}
+			})
+
+			t.Run("no password", func(t *testing.T) {
+				_, err := pdfviewer.OpenFile(fixturePath(name))
+				if !errors.Is(err, pdfviewer.ErrEncrypted) {
+					t.Fatalf("OpenFile(%s) with no password: error = %v, want ErrEncrypted", name, err)
+				}
+			})
+
+			t.Run("wrong password", func(t *testing.T) {
+				_, err := pdfviewer.OpenFile(fixturePath(name), pdfviewer.WithPassword("definitely not it"))
+				if !errors.Is(err, pdfviewer.ErrEncrypted) {
+					t.Fatalf("OpenFile(%s) with the wrong password: error = %v, want ErrEncrypted", name, err)
+				}
+			})
+		})
+	}
+}
+
 func TestPageIndexOutOfRange(t *testing.T) {
 	doc, err := pdfviewer.OpenFile(fixturePath("minimal-blank-page.pdf"))
 	if err != nil {

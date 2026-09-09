@@ -104,12 +104,16 @@ func TestOpenFileTruncatedIsMalformed(t *testing.T) {
 }
 
 // TestOpenFileEncryptedIsRejected is the public-API-level regression
-// test for Phase 6's "password handling" decision (see errors.go's
-// ErrEncrypted doc comment and README): this package implements no PDF
-// security handler, so opening a document whose trailer declares an
-// /Encrypt dictionary must fail clearly and immediately, rather than
-// appearing to succeed and then failing confusingly the first time some
-// still-encrypted stream or string is actually read.
+// test for this package's "password handling" decision (see errors.go's
+// ErrEncrypted doc comment and docs/PLAN2.md's Phase 7): encrypted.pdf's
+// /Encrypt dictionary uses placeholder, non-byte-accurate /O and /U
+// values (see tools/genfixtures's buildEncrypted) that do not validate
+// under an empty password, so - like any document that genuinely
+// requires a password this package cannot supply - it must fail clearly
+// and immediately at Open, rather than appearing to succeed and then
+// failing confusingly the first time some still-encrypted stream or
+// string is actually read. See TestOpenFileEncryptedEmptyPasswordSucceeds,
+// just below, for the complementary case that now opens successfully.
 func TestOpenFileEncryptedIsRejected(t *testing.T) {
 	_, err := pdfviewer.OpenFile(fixturePath("encrypted.pdf"))
 	if !errors.Is(err, pdfviewer.ErrEncrypted) {
@@ -117,6 +121,32 @@ func TestOpenFileEncryptedIsRejected(t *testing.T) {
 	}
 	if !errors.Is(err, pdfviewer.ErrUnsupported) {
 		t.Fatalf("error = %v, want it to also satisfy ErrUnsupported", err)
+	}
+}
+
+// TestOpenFileEncryptedEmptyPasswordSucceeds is the public-API-level
+// regression test for Phase 7a (see docs/PLAN2.md): a document
+// genuinely protected with the Standard security handler, but whose
+// user password is empty - the common "permissions-only" case, such as
+// many bank statements and print-to-PDF output - must open successfully
+// with no password-related error at all, and its page count must be
+// readable exactly as if the document were not encrypted.
+// pdfviewer_render_test.go's TestRenderEncryptedMatchesPlainContent
+// covers the deeper claim that decrypted *content* renders correctly;
+// this test only checks that the public API's Open/OpenFile path itself
+// does not surface ErrEncrypted for this case.
+func TestOpenFileEncryptedEmptyPasswordSucceeds(t *testing.T) {
+	for _, name := range []string{"encrypted-rc4-40bit.pdf", "encrypted-aes128.pdf", "encrypted-aes256.pdf"} {
+		t.Run(name, func(t *testing.T) {
+			doc, err := pdfviewer.OpenFile(fixturePath(name))
+			if err != nil {
+				t.Fatalf("OpenFile(%s): %v", name, err)
+			}
+			defer doc.Close()
+			if got, want := doc.PageCount(), 1; got != want {
+				t.Errorf("PageCount() = %d, want %d", got, want)
+			}
+		})
 	}
 }
 

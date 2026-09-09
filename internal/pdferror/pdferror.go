@@ -37,11 +37,16 @@ var (
 	ErrUnsupported = errors.New("pdfviewer: unsupported PDF feature")
 
 	// ErrEncrypted indicates that a document's trailer declares an
-	// /Encrypt dictionary - i.e. the file uses one of PDF's security
-	// handlers (Standard or public-key) to encrypt some or all of its
-	// contents. This project implements no security handler at all (see
-	// the root package's doc comment for the "Password handling"
-	// decision and rationale), so opening such a file always fails.
+	// /Encrypt dictionary that this project could not open. Since Phase
+	// 7 (see docs/PLAN2.md and internal/crypt's package doc comment),
+	// the Standard security handler is implemented for the common case
+	// of an empty user password, so a document protected only by an
+	// owner password (permissions restrictions with no password needed
+	// to open the file) now opens and decrypts transparently instead of
+	// producing this error. It is still returned for a document that
+	// genuinely requires a non-empty password (not yet supported - see
+	// docs/PLAN2.md's Phase 7b) or that names a security handler other
+	// than Standard (public-key handlers - no known demand).
 	//
 	// ErrEncrypted is built by wrapping ErrUnsupported directly (see its
 	// declaration below), not by declaring an independent error value:

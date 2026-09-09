@@ -220,6 +220,66 @@ func TestOpenEncryptedDocumentIsRejected(t *testing.T) {
 	}
 }
 
+// TestOpenEncryptedDocumentEmptyPasswordDecrypts is this package's
+// regression test for Phase 7a (see docs/PLAN2.md): a document whose
+// /Encrypt dictionary validates under an empty user password must open
+// successfully and transparently decrypt both stream and string content
+// - unlike TestOpenEncryptedDocumentIsRejected's fixture, whose
+// placeholder /O and /U values do not validate at all.
+//
+// It covers all three configurations tools/genfixtures builds (see
+// buildEncryptedRC4_40bit, buildEncryptedAES128, and buildEncryptedAES256's
+// own doc comments): classic 40-bit RC4 (revision 2), 128-bit AES
+// (revision 4), and 256-bit AES (revision 6). Every fixture encodes the
+// exact same page content as filled-rect.pdf and the exact same /Info
+// /Title string, so a single expectation covers all three.
+func TestOpenEncryptedDocumentEmptyPasswordDecrypts(t *testing.T) {
+	wantContent := []byte("1 0 0 rg\n10 10 80 80 re\nf\n")
+	wantTitle := []byte("Encrypted Fixture")
+
+	for _, name := range []string{"encrypted-rc4-40bit.pdf", "encrypted-aes128.pdf", "encrypted-aes256.pdf"} {
+		t.Run(name, func(t *testing.T) {
+			d := openFixture(t, name)
+
+			// Object 4 is the page's /Contents stream in every one of
+			// these fixtures (see buildEncryptedFilledRect) - resolving
+			// it must transparently decrypt its raw bytes before this
+			// test ever sees them.
+			contentObj, err := d.Resolve(4)
+			if err != nil {
+				t.Fatalf("Resolve(4): %v", err)
+			}
+			stream, ok := contentObj.(syntax.Stream)
+			if !ok {
+				t.Fatalf("Resolve(4) = %#v (%T), want syntax.Stream", contentObj, contentObj)
+			}
+			if !bytes.Equal(stream.Raw, wantContent) {
+				t.Errorf("decrypted content stream = %q, want %q", stream.Raw, wantContent)
+			}
+
+			// Object 5 is the trailer's /Info dictionary, whose /Title
+			// entry is a string - this exercises string decryption
+			// (DecryptString), a separate code path from stream
+			// decryption (DecryptStream) above.
+			infoObj, err := d.Resolve(5)
+			if err != nil {
+				t.Fatalf("Resolve(5): %v", err)
+			}
+			info, ok := infoObj.(syntax.Dictionary)
+			if !ok {
+				t.Fatalf("Resolve(5) = %#v (%T), want syntax.Dictionary", infoObj, infoObj)
+			}
+			title, ok := info["Title"].(syntax.String)
+			if !ok {
+				t.Fatalf("/Info /Title = %#v, want syntax.String", info["Title"])
+			}
+			if !bytes.Equal(title, wantTitle) {
+				t.Errorf("decrypted /Title = %q, want %q", title, wantTitle)
+			}
+		})
+	}
+}
+
 // TestResolveNonexistentObjectYieldsNull confirms the PDF specification
 // rule that Resolve implements for a reference to an object number the
 // cross-reference table has no entry for: it behaves like a reference to

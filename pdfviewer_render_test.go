@@ -150,6 +150,32 @@ func TestRenderFlateContentMatchesPlainContent(t *testing.T) {
 	compareImages(t, flate, plain)
 }
 
+// TestRenderEncryptedMatchesPlainContent is this package's end-to-end,
+// whole-page regression test for Phase 7a (see docs/PLAN2.md): opening
+// and rendering a page from a Standard Security Handler-encrypted
+// document (empty user password) must produce pixel-identical output to
+// rendering the same content unencrypted, since decryption happens
+// transparently, deep inside internal/parser.Document.Resolve, long
+// before internal/content or internal/graphics ever see a byte of page
+// content. Each of the three fixtures below (see
+// tools/genfixtures/main.go's buildEncryptedRC4_40bit, buildEncryptedAES128,
+// and buildEncryptedAES256) encrypts the exact same content
+// filled-rect.pdf draws unencrypted, using a different revision/cipher
+// combination - RC4 40-bit, AES-128, and AES-256 respectively - so this
+// one test exercises every decryption code path this package added for
+// Phase 7a via the same rendering pipeline a real caller uses, not just
+// internal/parser's own lower-level object-resolution tests
+// (TestOpenEncryptedDocumentEmptyPasswordDecrypts in
+// internal/parser/parser_test.go).
+func TestRenderEncryptedMatchesPlainContent(t *testing.T) {
+	plain := renderFixture(t, "filled-rect.pdf")
+	for _, name := range []string{"encrypted-rc4-40bit.pdf", "encrypted-aes128.pdf", "encrypted-aes256.pdf"} {
+		t.Run(name, func(t *testing.T) {
+			compareImages(t, renderFixture(t, name), plain)
+		})
+	}
+}
+
 // TestRenderTilingPatternFill exercises a tiling pattern used as a fill
 // paint source: tools/genfixtures/main.go's buildTilingPatternFill's own
 // doc comment works out, by hand, that the cell spanning pattern-space

@@ -402,7 +402,7 @@ sentinel values, meant to be checked with the standard library's
 | --- | --- |
 | `pdfviewer.ErrMalformed` | The input is not well-formed PDF (a bad cross-reference table, a truncated stream, a syntax error, ...) - a property of the bytes given to this package. |
 | `pdfviewer.ErrUnsupported` | The input is well-formed PDF but uses a feature this package doesn't implement (see [What gets rendered](#what-gets-rendered)). |
-| `pdfviewer.ErrEncrypted` | The document's trailer declares an `/Encrypt` dictionary. This package implements no PDF security handler, so such a file can never be opened, with or without a password. `ErrEncrypted` always also satisfies `errors.Is(err, pdfviewer.ErrUnsupported)` - it is a specific case of that broader category - so existing code that only checks for `ErrUnsupported` keeps working. |
+| `pdfviewer.ErrEncrypted` | The document's trailer declares an `/Encrypt` dictionary that this package could not open. As of Phase 7a, a document encrypted with the Standard security handler and an *empty* user password (the common "permissions-only, opens freely" case - many bank statements, invoices, and print-to-PDF output) now opens and decrypts transparently instead of returning this error; `ErrEncrypted` is now returned only for a document that genuinely requires a non-empty password (not yet supported - see `docs/PLAN2.md`'s Phase 7b) or that uses a security handler other than Standard (public-key handlers). `ErrEncrypted` always also satisfies `errors.Is(err, pdfviewer.ErrUnsupported)` - it is a specific case of that broader category - so existing code that only checks for `ErrUnsupported` keeps working. |
 | `pdfviewer.ErrClosed` | A method was called on a `Document` (or a `Page` obtained from one) after `Close` had already been called on that `Document`. |
 | `pdfviewer.ErrPageIndex` | `Document.Page` was called with a negative index, or one greater than or equal to `PageCount()`. |
 
@@ -548,9 +548,12 @@ OpenType/CFF outlines plus Identity-encoded CID fonts, transparency
 (constant alpha and separable blend modes), shading and tiling
 patterns, Form XObjects, and annotation appearance streams.
 
-It does **not** implement any PDF security handler (encrypted documents
-fail with `ErrEncrypted` - see [Error handling](#error-handling)),
-querying a system font service for a non-embedded font (opt in to
+It implements the Standard PDF security handler for the common
+empty-user-password case (RC4 and AES, revisions 2-6 - see
+[Error handling](#error-handling)'s `ErrEncrypted` entry), but not a
+document that requires a real password to open, nor any public-key
+security handler. It also does not implement querying a system font
+service for a non-embedded font (opt in to
 finding a substitute outline from files on disk instead - see
 [Font substitution](#font-substitution) - or a missing/unsupported font
 falls back to a small placeholder box), transparency group isolation,

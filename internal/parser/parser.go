@@ -46,6 +46,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/tucats/pdf-viewer/internal/crypt"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
 	"github.com/tucats/pdf-viewer/internal/source"
 	"github.com/tucats/pdf-viewer/internal/syntax"
@@ -129,6 +130,17 @@ type Document struct {
 	// producer typically groups many objects into one for better
 	// compression - decodes and parses that stream's bytes only once.
 	objStreams map[int]*objStreamContents
+
+	// crypt is non-nil only for a document whose trailer declares an
+	// /Encrypt dictionary that this package was actually able to open
+	// (see setupEncryption, encrypt.go): the Standard Security Handler,
+	// with an empty user password that validated successfully. When
+	// non-nil, Resolve decrypts every string and stream it reads before
+	// caching or returning it - see Resolve's own comments. A document
+	// with no /Encrypt entry at all (the common case - see
+	// docs/capability-matrix.md's Encryption section) leaves this nil,
+	// and Resolve skips the decryption step entirely.
+	crypt *crypt.Handler
 }
 
 // Open parses src's header, trailer, and cross-reference table (and any
@@ -163,16 +175,21 @@ func Open(src *source.Reader) (*Document, error) {
 		return nil, pdferror.Malformedf("no trailer dictionary found")
 	}
 	if _, ok := d.Trailer["Encrypt"]; ok {
-		// This project's Phase 6 "password handling" decision: no PDF
-		// security handler (Standard or public-key) is implemented, so an
-		// encrypted document is rejected up front, at Open, with a clear
-		// and specific error - rather than being allowed to proceed only
-		// to fail confusingly later, wherever its first still-encrypted
-		// stream or string happened to be read (as garbled filter/syntax
-		// errors that would look like file corruption, not "this needs a
-		// password"). See the root package's errors.go for the
-		// ErrEncrypted sentinel this wraps and its full rationale.
-		return nil, pdferror.Encryptedf("document trailer declares an /Encrypt dictionary")
+		// Phase 7a: the Standard Security Handler is now implemented for
+		// the common case of an empty user password (see encrypt.go and
+		// internal/crypt's package doc comment) - a document protected
+		// that way opens and decrypts transparently, exactly as if it
+		// were not encrypted at all, from here on. A document that
+		// genuinely requires a non-empty password (Phase 7b, not yet
+		// implemented - see docs/PLAN2.md) or that names a security
+		// handler other than Standard (public-key handlers - no known
+		// demand, see docs/capability-matrix.md) still fails clearly here
+		// at Open, with an error wrapping ErrEncrypted, rather than
+		// proceeding only to fail confusingly later at the first
+		// still-encrypted stream or string actually read.
+		if err := d.setupEncryption(); err != nil {
+			return nil, err
+		}
 	}
 	return d, nil
 }

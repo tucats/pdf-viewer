@@ -89,11 +89,17 @@ var (
 	ErrUnsupported = pdferror.ErrUnsupported
 
 	// ErrEncrypted indicates that Open or OpenFile was asked to open a
-	// document whose trailer declares an /Encrypt dictionary - i.e. the
-	// file uses one of PDF's security handlers (Standard or public-key).
-	// This package implements no security handler and cannot decrypt
-	// such a file with or without a password; see the README's "Password
-	// handling" decision (Phase 6) for the full rationale.
+	// document whose trailer declares an /Encrypt dictionary that this
+	// package could not open. As of Phase 7 (see docs/PLAN2.md), a
+	// document protected with the Standard security handler and an
+	// empty user password - the common "permissions-only, opens freely"
+	// case, such as many bank statements, invoices, and print-to-PDF
+	// output - now opens and decrypts transparently instead of
+	// returning this error. ErrEncrypted is returned only when the
+	// document genuinely requires a non-empty password this package has
+	// no way to supply (Phase 7b, not yet implemented), or when it names
+	// a security handler other than Standard (a public-key handler, with
+	// no known demand driving support for one).
 	//
 	// errors.Is(err, ErrEncrypted) lets a caller react specifically to
 	// "this file needs a password we cannot supply" (for example, to

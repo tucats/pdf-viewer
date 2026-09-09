@@ -35,6 +35,7 @@ package main
 import (
 	"bytes"
 	"compress/zlib"
+	"encoding/hex"
 	"fmt"
 	"image"
 	"image/color"
@@ -43,6 +44,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/tucats/pdf-viewer/internal/crypt"
 )
 
 // outputDir is where every generated fixture is written: the
@@ -109,6 +112,9 @@ func main() {
 		{"alpha-fill.pdf", buildAlphaFill()},
 		{"blend-multiply.pdf", buildBlendMultiply()},
 		{"tiling-pattern-fill.pdf", buildTilingPatternFill()},
+		{"encrypted-rc4-40bit.pdf", buildEncryptedRC4_40bit()},
+		{"encrypted-aes128.pdf", buildEncryptedAES128()},
+		{"encrypted-aes256.pdf", buildEncryptedAES256()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -241,7 +247,17 @@ func buildMalformedBadXrefOffset() []byte {
 // dictionary's contents are deliberately not a byte-accurate Standard
 // security handler encoding (real /O and /U entries are 32-byte binary
 // hashes, not readable placeholder text) - this fixture only needs the
-// *trailer* to name an /Encrypt entry, since that is all Open inspects.
+// *trailer* to name an /Encrypt entry, since that is all Open inspects
+// before attempting (and, because /O and /U are fake, failing) to
+// validate an empty password against it. Since Phase 7a (see
+// docs/PLAN2.md) added real decryption, this fixture now exercises a
+// *different* case than it originally did: not "encryption is entirely
+// unimplemented", but "this document's /Encrypt dictionary does not
+// validate under an empty password" - still, correctly, rejected with
+// an error wrapping ErrEncrypted either way. See
+// buildEncryptedRC4_40bit, buildEncryptedAES128, and
+// buildEncryptedAES256 below for fixtures with byte-accurate,
+// successfully-decryptable encryption.
 func buildEncrypted() []byte {
 	b := newBuilder()
 	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
@@ -250,6 +266,168 @@ func buildEncrypted() []byte {
 	b.addObject(4, 0, "<< /Length 0 >>", []byte{})
 	b.addObject(5, 0, "<< /Filter /Standard /V 1 /R 2 /O (placeholder-owner-hash) /U (placeholder-user-hash) /P -3904 >>", nil)
 	b.writeXrefAndTrailer(1, " /Encrypt 5 0 R")
+	return b.buf.Bytes()
+}
+
+// encryptedFixtureID is the fixed, 16-byte trailer /ID this package's
+// real (non-placeholder) encrypted fixtures below all use as both
+// elements of the /ID array - a real PDF-writing application derives
+// this identifier from file contents and creation time, but this
+// project's fixtures need fully reproducible bytes across
+// regenerations (see the package doc comment), so a fixed, readable
+// value is used instead. It doubles as the "first element of /ID" input
+// the Standard Security Handler's key-derivation algorithms require -
+// see internal/crypt's ComputeFileKey and ComputeUserHash.
+var encryptedFixtureID = []byte("pdf-viewer-fixtr") // exactly 16 bytes
+
+// hexString formats b as a PDF hexadecimal string literal, e.g.
+// hexString([]byte("AB")) == "<4142>". The Standard Security Handler's
+// /O, /U, /OE, and /UE dictionary entries (and this package's /ID
+// entries) are arbitrary binary bytes that would need error-prone
+// backslash-escaping to write as a literal-string "(...)" PDF token;
+// hex notation sidesteps that entirely, at the cost of being twice as
+// long, which does not matter for these small, fixed-size fields.
+func hexString(b []byte) string {
+	return "<" + hex.EncodeToString(b) + ">"
+}
+
+// buildEncryptedFilledRect returns a real, spec-correct Standard
+// Security Handler-encrypted PDF - decryptable by internal/crypt
+// (Phase 7a; see docs/PLAN2.md) using an empty user password - built
+// around the same 100x100 filled-rectangle content buildFilledRect
+// uses, so a test can decode this fixture and compare its rendered
+// output against that unencrypted fixture's to confirm decryption
+// recovers the exact original content, plus an /Info /Title string to
+// exercise string (not just stream) decryption.
+//
+// v and r are the /Encrypt dictionary's /V and /R entries (see
+// internal/crypt's package doc comment for what those mean); method is
+// the cipher actually used for both streams and strings, and cfmName is
+// the /CFM name that selects it in a revision-4 document's /CF
+// dictionary (unused, and left empty, for revision 2-3 documents, which
+// have no /CF concept at all - RC4 is simply the only option).
+func buildEncryptedFilledRect(v, r, keyLenBytes int, method crypt.Method, cfmName string) []byte {
+	const (
+		pageContentObj = 4
+		infoObj        = 5
+		encryptObj     = 6
+	)
+	title := []byte("Encrypted Fixture")
+	content := []byte("1 0 0 rg\n10 10 80 80 re\nf\n") // identical to buildFilledRect's content
+	iv := bytes.Repeat([]byte{0xA5}, 16)               // arbitrary, fixed - see EncryptForFixture's doc comment
+	var p int32 = -3904                                // arbitrary permissions bitmask; this project does not enforce permissions on read, only decrypts (see internal/crypt's package doc comment)
+
+	o := crypt.ComputeOwnerHash(nil, nil, r, keyLenBytes) // both owner and user password empty
+	fileKey := crypt.ComputeFileKey(nil, o, p, encryptedFixtureID, r, keyLenBytes, true)
+	u := crypt.ComputeUserHash(fileKey, r, encryptedFixtureID)
+
+	encContent, err := crypt.EncryptForFixture(fileKey, method, pageContentObj, 0, iv, content)
+	if err != nil {
+		panic("genfixtures: encrypting fixture content: " + err.Error())
+	}
+	encTitle, err := crypt.EncryptForFixture(fileKey, method, infoObj, 0, iv, title)
+	if err != nil {
+		panic("genfixtures: encrypting fixture title: " + err.Error())
+	}
+
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>", nil)
+	b.addObject(pageContentObj, 0, fmt.Sprintf("<< /Length %d >>", len(encContent)), encContent)
+	b.addObject(infoObj, 0, fmt.Sprintf("<< /Title %s >>", hexString(encTitle)), nil)
+
+	encryptDict := fmt.Sprintf("<< /Filter /Standard /V %d /R %d /O %s /U %s /P %d /Length %d",
+		v, r, hexString(o), hexString(u), p, keyLenBytes*8)
+	if v == 4 {
+		// Revision 4 names its cipher indirectly, through a crypt filter
+		// dictionary (/CF) that /StmF and /StrF both point at - see
+		// internal/crypt's resolveCryptFilters.
+		encryptDict += fmt.Sprintf(" /CF << /StdCF << /CFM /%s /AuthEvent /DocOpen /Length %d >> >> /StmF /StdCF /StrF /StdCF",
+			cfmName, keyLenBytes)
+	}
+	encryptDict += " >>"
+	b.addObject(encryptObj, 0, encryptDict, nil)
+
+	trailerExtra := fmt.Sprintf(" /Encrypt %d 0 R /ID [%s %s] /Info %d 0 R",
+		encryptObj, hexString(encryptedFixtureID), hexString(encryptedFixtureID), infoObj)
+	b.writeXrefAndTrailer(1, trailerExtra)
+	return b.buf.Bytes()
+}
+
+// buildEncryptedRC4_40bit returns an encrypted fixture using the
+// oldest, simplest configuration: /V 1 /R 2, 40-bit (5-byte) RC4 -
+// revision 2 always implies RC4 with no /CF dictionary at all.
+func buildEncryptedRC4_40bit() []byte {
+	return buildEncryptedFilledRect(1, 2, 5, crypt.MethodRC4, "")
+}
+
+// buildEncryptedAES128 returns an encrypted fixture using /V 4 /R 4,
+// 128-bit AES (the "/AESV2" crypt filter method) - the common
+// configuration for a document that opts into AES over RC4 while
+// remaining on the "classic" (non-AES-256) key derivation algorithm.
+func buildEncryptedAES128() []byte {
+	return buildEncryptedFilledRect(4, 4, 16, crypt.MethodAESV2, "AESV2")
+}
+
+// buildEncryptedAES256 returns an encrypted fixture using /V 5 /R 6,
+// 256-bit AES (the "/AESV3" crypt filter method) - the newest Standard
+// Security Handler revision, whose file encryption key is not derived
+// from the password at all but independently chosen and merely wrapped
+// (via /UE) using a password-derived key - see internal/crypt/hash56.go
+// and ComputeAES256UserStrings' doc comments. Unlike
+// buildEncryptedFilledRect's revision 2-4 fixtures, the file key here is
+// simply an arbitrary fixed 32-byte value rather than one derived by
+// ComputeFileKey, since revision 5-6 never derives it from anything.
+func buildEncryptedAES256() []byte {
+	const (
+		pageContentObj = 4
+		infoObj        = 5
+		encryptObj     = 6
+	)
+	title := []byte("Encrypted Fixture")
+	content := []byte("1 0 0 rg\n10 10 80 80 re\nf\n")
+	iv := bytes.Repeat([]byte{0xA5}, 16)
+	var p int32 = -3904
+
+	fileKey := bytes.Repeat([]byte{0x5A}, 32) // arbitrary, fixed 256-bit file key
+	validationSalt := bytes.Repeat([]byte{0x11}, 8)
+	keySalt := bytes.Repeat([]byte{0x22}, 8)
+
+	const r = 6
+	u, ue, err := crypt.ComputeAES256UserStrings(fileKey, r, validationSalt, keySalt)
+	if err != nil {
+		panic("genfixtures: computing AES-256 /U and /UE: " + err.Error())
+	}
+	o, oe, err := crypt.ComputeAES256OwnerStrings(fileKey, r, u, validationSalt, keySalt)
+	if err != nil {
+		panic("genfixtures: computing AES-256 /O and /OE: " + err.Error())
+	}
+
+	encContent, err := crypt.EncryptForFixture(fileKey, crypt.MethodAESV3, pageContentObj, 0, iv, content)
+	if err != nil {
+		panic("genfixtures: encrypting fixture content: " + err.Error())
+	}
+	encTitle, err := crypt.EncryptForFixture(fileKey, crypt.MethodAESV3, infoObj, 0, iv, title)
+	if err != nil {
+		panic("genfixtures: encrypting fixture title: " + err.Error())
+	}
+
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>", nil)
+	b.addObject(pageContentObj, 0, fmt.Sprintf("<< /Length %d >>", len(encContent)), encContent)
+	b.addObject(infoObj, 0, fmt.Sprintf("<< /Title %s >>", hexString(encTitle)), nil)
+
+	encryptDict := fmt.Sprintf(
+		"<< /Filter /Standard /V 5 /R 6 /O %s /U %s /OE %s /UE %s /P %d /Length 256 /CF << /StdCF << /CFM /AESV3 /AuthEvent /DocOpen /Length 32 >> >> /StmF /StdCF /StrF /StdCF >>",
+		hexString(o), hexString(u), hexString(oe), hexString(ue), p)
+	b.addObject(encryptObj, 0, encryptDict, nil)
+
+	trailerExtra := fmt.Sprintf(" /Encrypt %d 0 R /ID [%s %s] /Info %d 0 R",
+		encryptObj, hexString(encryptedFixtureID), hexString(encryptedFixtureID), infoObj)
+	b.writeXrefAndTrailer(1, trailerExtra)
 	return b.buf.Bytes()
 }
 

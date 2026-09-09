@@ -55,9 +55,20 @@ func (d *Document) Resolve(num int) (syntax.Object, error) {
 	var obj syntax.Object
 	var err error
 	if entry.Compressed {
+		// An object packed inside an object stream is never separately
+		// encrypted: the object stream itself was already decrypted (as
+		// an ordinary stream, via this same Resolve method, keyed by the
+		// object stream's *own* number/generation) before
+		// resolveCompressed ever parses the plaintext bytes packed
+		// inside it - see internal/crypt's package doc comment and
+		// objstream.go's loadObjectStream, which reaches this stream's
+		// bytes via an ordinary d.Resolve call of its own.
 		obj, err = d.resolveCompressed(entry)
 	} else {
 		obj, err = d.readObjectAt(num, entry.Offset)
+		if err == nil {
+			obj, err = d.decryptObject(num, entry.Generation, obj)
+		}
 	}
 	delete(d.resolving, num)
 
@@ -73,6 +84,20 @@ func (d *Document) Resolve(num int) (syntax.Object, error) {
 
 	d.cache[num] = obj
 	return obj, nil
+}
+
+// decryptObject returns obj unchanged if this Document is not encrypted
+// (d.crypt == nil - the common case), or the result of decrypting every
+// string and stream found anywhere inside it (via internal/crypt's
+// Handler.DecryptObject) otherwise. num and gen identify the indirect
+// object obj was just parsed from, which the Standard Security
+// Handler's per-object key derivation needs - see internal/crypt's
+// ObjectKey.
+func (d *Document) decryptObject(num, gen int, obj syntax.Object) (syntax.Object, error) {
+	if d.crypt == nil {
+		return obj, nil
+	}
+	return d.crypt.DecryptObject(num, gen, obj)
 }
 
 // retryAfterRecovery is called after an initial Resolve attempt fails.
@@ -97,6 +122,9 @@ func (d *Document) retryAfterRecovery(num int, firstErr error) (syntax.Object, e
 
 	d.resolving[num] = true
 	obj, err := d.readObjectAt(num, entry.Offset)
+	if err == nil {
+		obj, err = d.decryptObject(num, entry.Generation, obj)
+	}
 	delete(d.resolving, num)
 	if err != nil {
 		return nil, firstErr

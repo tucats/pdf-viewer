@@ -58,6 +58,9 @@ func TestGeneratedFixturesMatchCheckedInFiles(t *testing.T) {
 		"alpha-fill.pdf":                buildAlphaFill(),
 		"blend-multiply.pdf":            buildBlendMultiply(),
 		"tiling-pattern-fill.pdf":       buildTilingPatternFill(),
+		"encrypted-rc4-40bit.pdf":       buildEncryptedRC4_40bit(),
+		"encrypted-aes128.pdf":          buildEncryptedAES128(),
+		"encrypted-aes256.pdf":          buildEncryptedAES256(),
 	}
 
 	for name, want := range fixtures {
@@ -116,6 +119,9 @@ func TestFixtureSetIsComplete(t *testing.T) {
 		"alpha-fill.pdf":                true,
 		"blend-multiply.pdf":            true,
 		"tiling-pattern-fill.pdf":       true,
+		"encrypted-rc4-40bit.pdf":       true,
+		"encrypted-aes128.pdf":          true,
+		"encrypted-aes256.pdf":          true,
 	}
 
 	entries, err := os.ReadDir(outputDir)

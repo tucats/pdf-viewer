@@ -40,7 +40,7 @@ capability matrix.
 
 ## Phase 7: Standard security handler (encryption)
 
-**Status: Not started.**
+**Status: 7a done; 7b not started.**
 
 Currently *any* `/Encrypt`-declaring trailer is rejected immediately
 (`ErrEncrypted`), including the very common case of a PDF whose owner
@@ -404,3 +404,80 @@ that document's own stated rule. Re-order phases here if a concrete
 real-world finding (a user-reported file that fails, a corpus survey)
 contradicts the frequency estimates above; the ordering is a starting
 estimate, not a commitment independent of evidence.
+
+## Progress Log
+
+This section mirrors `docs/PLAN.md`'s own Progress Log: updated at the
+end of each phase (or sub-phase) with what was actually built, appended
+in order, not rewritten later except to fix mistakes.
+
+### Phase 7a: Standard security handler, empty user password — done (2026-09-09)
+
+- **`internal/crypt` (new package).** Implements the Standard Security
+    Handler's key derivation and decryption, using only `crypto/rc4`,
+    `crypto/aes`, `crypto/cipher`, `crypto/md5`, `crypto/sha256`, and
+    `crypto/sha512` from the standard library (no CGO, no third-party
+    dependency, matching this project's Dependency and safety policy):
+    - `standard.go`: Algorithm 2 (`ComputeFileKey`) and Algorithms 3-5
+        (`ComputeOwnerHash`, `ComputeUserHash`) for revisions 2-4 (RC4 and
+        AES-128/"AESV2").
+    - `hash56.go`: the AES-256 ("V5") revision 5/6 construction -
+        revision 6's hardened hash (Algorithm 2.B, `hashR6`, mixing
+        SHA-256/384/512 with AES-128 rounds) and Algorithm 2.A's file-key
+        unwrapping (`ComputeFileKeyR56`), plus the forward direction
+        (`ComputeAES256UserStrings`/`ComputeAES256OwnerStrings`) used only
+        by this package's own tests and `tools/genfixtures`.
+    - `key.go`: Algorithm 1 (`ObjectKey`), the per-object key mixing
+        revisions 2-4 need and revision 5-6 deliberately skips.
+    - `cipher.go`: RC4 and PKCS#7-padded AES-CBC encrypt/decrypt wrappers.
+    - `handler.go`: `Handler`, built by `New` from an already-resolved
+        `/Encrypt` dictionary and the trailer `/ID`, always attempting an
+        empty password and returning `ErrWrongPassword` if that does not
+        validate (Algorithm 6 for revisions 2-4, the validation-salt hash
+        comparison for revisions 5-6) - the one case Phase 7a leaves for
+        Phase 7b. `Handler.DecryptObject` recursively decrypts every
+        `syntax.String` and `syntax.Stream` found inside an already-parsed
+        object, correctly leaving `/Metadata` streams alone when
+        `/EncryptMetadata` is false.
+- **`internal/parser` wiring.** `Open` no longer rejects every `/Encrypt`
+    trailer unconditionally: `setupEncryption` (new file, `encrypt.go`)
+    resolves the `/Encrypt` dictionary and trailer `/ID` (before any
+    decryption is possible, so neither is ever itself decrypted) and
+    builds a `crypt.Handler`, stored on `Document.crypt`.
+    `Document.Resolve` now decrypts every ordinary (non-object-stream)
+    object it reads via `Handler.DecryptObject`, keyed by that object's
+    own number and generation - an object packed inside an object stream
+    is correctly left alone a second time, since the containing object
+    stream was already decrypted as an ordinary stream. Any failure
+    building the handler (malformed `/Encrypt` dictionary, unsupported
+    revision or security handler, or a real password requirement) is
+    still reported as `ErrEncrypted`, preserving this package's existing
+    error-classification behavior for every case Phase 7a does not cover.
+- **Fixtures.** `tools/genfixtures` gained
+    `buildEncryptedRC4_40bit`/`buildEncryptedAES128`/`buildEncryptedAES256`,
+    real byte-accurate encrypted PDFs (built using `internal/crypt`'s own
+    exported forward-direction functions, so the fixture generator and
+    the decryption code cannot silently drift apart) covering revisions
+    2, 4, and 6 respectively, each encrypting the same content
+    `filled-rect.pdf` draws plus an `/Info /Title` string. The
+    pre-existing `encrypted.pdf` fixture (placeholder, non-byte-accurate
+    `/O`/`/U`) now exercises the "password required" rejection path
+    instead of "encryption unimplemented at all".
+- **Tests.** `internal/crypt/handler_test.go` round-trips every
+    supported revision/cipher combination (encrypt with this package's
+    own forward functions, decrypt with `Handler`) plus wrong-password,
+    unsupported-revision/filter, `/Identity` crypt-filter passthrough,
+    dictionary/array/stream recursion, and `/EncryptMetadata false`
+    cases. `internal/parser/parser_test.go` and
+    `pdfviewer_render_test.go` add end-to-end coverage confirming a real
+    encrypted fixture opens, decrypts its content stream and `/Info`
+    string correctly, and renders pixel-identically to its unencrypted
+    equivalent. The existing `FuzzOpenAndResolveAll` target picks up the
+    new fixtures as seeds automatically (no code change needed) and ran
+    clean (8M+ executions, no panics) against the new decryption code
+    paths.
+- **What's carried forward.** Phase 7b (a non-empty, caller-supplied
+    password) is unimplemented, as scoped - see this document's Phase 7b
+    bullet and `docs/capability-matrix.md`'s Encryption section. The
+    `/Crypt` stream filter and public-key security handlers remain
+    explicitly out of this phase's scope, as originally planned.

@@ -195,7 +195,7 @@ func decodeOne(name syntax.Name, parms syntax.Dictionary, data []byte) ([]byte, 
 	case "CCITTFaxDecode", "CCF":
 		return decodeCCITT(data, parms)
 	case "JBIG2Decode":
-		return decodeJBIG2(data)
+		return decodeJBIG2(data, nil)
 	default:
 		return nil, pdferror.Unsupportedf("stream filter %q", name)
 	}

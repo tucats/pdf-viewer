@@ -81,15 +81,38 @@ import (
 //     common) is therefore also not consulted: a file that relies on it
 //     necessarily uses symbol/text regions, which already stop this
 //     decoder with ErrUnsupported before /JBIG2Globals would matter.
-func decodeJBIG2(data []byte) ([]byte, error) {
-	page, err := decodeJBIG2Segments(data)
-	if err != nil {
+func decodeJBIG2(data, globals []byte) ([]byte, error) {
+	d := &jbig2Decoder{symbolDicts: make(map[uint32][]*jbig2Bitmap)}
+
+	// A /JBIG2Globals stream is a sequence of segments in exactly the
+	// same form as the image's own, decoded first so that the symbol
+	// dictionaries it defines are in the registry by the time the
+	// image's text regions refer to them by number. It contains no
+	// region segments of its own (there is no page for them to paint
+	// onto), so it contributes nothing to the page bitmap.
+	if len(globals) > 0 {
+		if err := d.processSegments(globals); err != nil {
+			return nil, err
+		}
+	}
+	if err := d.processSegments(data); err != nil {
 		return nil, err
 	}
-	if page == nil {
-		return nil, pdferror.Malformedf("JBIG2Decode: no generic region segment found")
+
+	if d.page == nil {
+		return nil, pdferror.Malformedf("JBIG2Decode: no region segment found")
 	}
-	return page.packInverted(), nil
+	return d.page.packInverted(), nil
+}
+
+// jbig2Decoder holds the state one JBIG2Decode stream's segments build
+// up between them: the page bitmap regions are composited onto, and the
+// symbols each symbol dictionary segment exported, kept by segment
+// number because that is how a later text region asks for them (see
+// segmentHeader.referredTo).
+type jbig2Decoder struct {
+	page        *jbig2Bitmap
+	symbolDicts map[uint32][]*jbig2Bitmap
 }
 
 // jbig2Bitmap is a simple, one-byte-per-pixel bitmap (1 = JBIG2
@@ -206,10 +229,11 @@ func (b *jbig2Bitmap) composite(region *jbig2Bitmap, x0, y0 int, op combineOp) {
 	}
 }
 
-// decodeJBIG2Segments walks every segment in data (JBIG2's PDF-embedded
-// organization - see this file's doc comment) and returns the page bitmap
-// built by compositing every generic region segment encountered, sized to
-// the largest extent any region actually painted.
+// processSegments walks every segment in data (JBIG2's PDF-embedded
+// organization - see this file's doc comment), compositing every region
+// segment onto d.page (sized to the largest extent any region actually
+// painted) and recording every symbol dictionary segment's exported
+// symbols in d.symbolDicts.
 //
 // Note that the page size comes from the regions themselves rather than
 // from a page information segment's own declared page width and height.
@@ -221,20 +245,19 @@ func (b *jbig2Bitmap) composite(region *jbig2Bitmap, x0, y0 int, op combineOp) {
 // 0xFFFFFFFF for a page whose height is only settled by a later
 // end-of-stripe segment. Sizing to what was actually painted needs none
 // of that, and cannot disagree with the pixels it returns.
-func decodeJBIG2Segments(data []byte) (*jbig2Bitmap, error) {
-	var page *jbig2Bitmap
+func (d *jbig2Decoder) processSegments(data []byte) error {
 	pos := 0
 	for pos < len(data) {
 		hdr, headerLen, err := parseSegmentHeader(data[pos:])
 		if err != nil {
-			return nil, err
+			return err
 		}
 		pos += headerLen
 		if hdr.dataLength == unknownSegmentLength {
-			return nil, pdferror.Unsupportedf("JBIG2Decode: segment %d has an unknown data length (streaming generic region)", hdr.number)
+			return pdferror.Unsupportedf("JBIG2Decode: segment %d has an unknown data length (streaming generic region)", hdr.number)
 		}
 		if uint64(pos)+hdr.dataLength > uint64(len(data)) {
-			return nil, pdferror.Malformedf("JBIG2Decode: segment %d's declared data length runs past the end of the stream", hdr.number)
+			return pdferror.Malformedf("JBIG2Decode: segment %d's declared data length runs past the end of the stream", hdr.number)
 		}
 		segData := data[pos : uint64(pos)+hdr.dataLength]
 		pos += int(hdr.dataLength)
@@ -243,45 +266,84 @@ func decodeJBIG2Segments(data []byte) (*jbig2Bitmap, error) {
 		case segTypeIntermediateGenericRegion, segTypeImmediateGenericRegion, segTypeImmediateLosslessGenericRegion:
 			region, x0, y0, op, err := decodeGenericRegionSegment(segData)
 			if err != nil {
-				return nil, err
+				return err
+			}
+			if err := d.compositeOntoPage(hdr, region, x0, y0, op); err != nil {
+				return err
 			}
 
-			// The page has to be big enough to hold this region at the
-			// position the region itself declares. Both the region's size
-			// and its position were already bounded per-axis by
-			// parseRegionInfo, but their *sum* still needs checking before
-			// being used as an allocation size: a modest region positioned
-			// near the far end of the allowed coordinate range would
-			// otherwise ask for a page far larger than any real image.
-			needW, needH := x0+region.width, y0+region.height
-			if needW > maxGenericRegionDimension || needH > maxGenericRegionDimension || needW*needH > maxGenericRegionPixels {
-				return nil, pdferror.Unsupportedf("JBIG2Decode: segment %d's region at (%d, %d) would need a %dx%d page, exceeding this package's limits", hdr.number, x0, y0, needW, needH)
+		case segTypeSymbolDictionary:
+			symbols, err := decodeSymbolDictSegment(segData, d.referredSymbols(hdr))
+			if err != nil {
+				return err
+			}
+			d.symbolDicts[hdr.number] = symbols
+
+		case segTypeTextRegionIntermediate, segTypeTextRegionImmediate, segTypeTextRegionImmediateLossless:
+			region, x0, y0, op, err := decodeTextRegionSegment(segData, d.referredSymbols(hdr))
+			if err != nil {
+				return err
+			}
+			if err := d.compositeOntoPage(hdr, region, x0, y0, op); err != nil {
+				return err
 			}
 
-			switch {
-			case page == nil:
-				page = newJBIG2Bitmap(needW, needH, 0)
-			case needW > page.width || needH > page.height:
-				page = growJBIG2Bitmap(page, needW, needH)
-			}
-			page.composite(region, x0, y0, op)
-
-		case segTypeSymbolDictionary, segTypeTextRegionIntermediate, segTypeTextRegionImmediate, segTypeTextRegionImmediateLossless,
-			segTypeHalftoneRegionIntermediate, segTypeHalftoneRegionImmediate, segTypeHalftoneRegionImmediateLossless,
+		case segTypeHalftoneRegionIntermediate, segTypeHalftoneRegionImmediate, segTypeHalftoneRegionImmediateLossless,
 			segTypeRefinementRegionIntermediate, segTypeRefinementRegionImmediate, segTypeRefinementRegionImmediateLossless,
 			segTypePatternDictionary:
-			return nil, pdferror.Unsupportedf("JBIG2Decode: segment type %d (symbol/text/halftone/refinement region) is not implemented, only generic regions", hdr.segmentType)
+			return pdferror.Unsupportedf("JBIG2Decode: segment type %d (halftone or refinement region) is not implemented", hdr.segmentType)
 
 		default:
 			// Page info, end-of-page, end-of-stripe, end-of-file, table,
 			// extension, and any other segment type this package does
-			// not need to interpret carry no information a single-page
-			// generic-region bitmap needs; segData has already been
-			// skipped over above regardless of what this switch does
-			// with it.
+			// not need to interpret carry no information the page bitmap
+			// needs; segData has already been skipped over above
+			// regardless of what this switch does with it.
 		}
 	}
-	return page, nil
+	return nil
+}
+
+// referredSymbols gathers the symbols available to hdr's segment: every
+// symbol exported by each symbol dictionary it refers to, concatenated
+// in the order the referred-to list gives them, since that concatenation
+// is exactly what the segment's coded symbol IDs index into.
+//
+// A referred-to segment that is not a symbol dictionary contributes
+// nothing and is skipped rather than rejected - a text region may also
+// refer to the custom Huffman table segments this package does not read,
+// and a symbol dictionary refers to the page it belongs to.
+func (d *jbig2Decoder) referredSymbols(hdr segmentHeader) []*jbig2Bitmap {
+	var symbols []*jbig2Bitmap
+	for _, ref := range hdr.referredTo {
+		symbols = append(symbols, d.symbolDicts[ref]...)
+	}
+	return symbols
+}
+
+// compositeOntoPage paints a decoded region onto d.page at the position
+// the region declared, growing (or first allocating) the page as needed.
+func (d *jbig2Decoder) compositeOntoPage(hdr segmentHeader, region *jbig2Bitmap, x0, y0 int, op combineOp) error {
+	// The page has to be big enough to hold this region at the position
+	// the region itself declares. Both the region's size and its
+	// position were already bounded per-axis by parseRegionInfo, but
+	// their *sum* still needs checking before being used as an
+	// allocation size: a modest region positioned near the far end of
+	// the allowed coordinate range would otherwise ask for a page far
+	// larger than any real image.
+	needW, needH := x0+region.width, y0+region.height
+	if needW > maxGenericRegionDimension || needH > maxGenericRegionDimension || needW*needH > maxGenericRegionPixels {
+		return pdferror.Unsupportedf("JBIG2Decode: segment %d's region at (%d, %d) would need a %dx%d page, exceeding this package's limits", hdr.number, x0, y0, needW, needH)
+	}
+
+	switch {
+	case d.page == nil:
+		d.page = newJBIG2Bitmap(needW, needH, 0)
+	case needW > d.page.width || needH > d.page.height:
+		d.page = growJBIG2Bitmap(d.page, needW, needH)
+	}
+	d.page.composite(region, x0, y0, op)
+	return nil
 }
 
 // growJBIG2Bitmap returns a copy of b enlarged to at least w x h

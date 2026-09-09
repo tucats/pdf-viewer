@@ -429,20 +429,34 @@ func buildGenericRegionSegment(width, height, template int, tpgdon bool, originX
 	}
 	region = append(region, coded...)
 
-	header := buildSegmentHeader(0, segTypeImmediateGenericRegion, uint32(len(region)))
+	header := buildSegmentHeader(0, segTypeImmediateGenericRegion, nil, uint32(len(region)))
 	return append(header, region...)
 }
 
 // buildSegmentHeader builds one JBIG2 segment header (T.88 7.2) in its
-// simplest legal form: no referred-to segments, a 1-byte page
-// association (always page 1) - everything buildGenericRegionSegment's
-// single-segment fixtures need and nothing more.
-func buildSegmentHeader(number uint32, segType int, dataLength uint32) []byte {
-	h := make([]byte, 0, 11)
+// simplest legal form: the short-form referred-to count (so at most 4
+// referred-to segments) and a 1-byte page association, always page 1 -
+// everything this package's fixtures need and nothing more.
+//
+// Every segment number this package emits is small, so each referred-to
+// number is written as a single byte, which is what parseSegmentHeader
+// will read back for a referring segment numbered 256 or below.
+func buildSegmentHeader(number uint32, segType int, referredTo []uint32, dataLength uint32) []byte {
+	if len(referredTo) > 4 {
+		panic("filter: buildSegmentHeader: more referred-to segments than the short form can hold")
+	}
+	if number > 256 {
+		panic("filter: buildSegmentHeader: segment number too large for 1-byte referred-to numbers")
+	}
+
+	h := make([]byte, 0, 11+len(referredTo))
 	h = appendBE32(h, number)
-	h = append(h, byte(segType)) // Bits 6-7 (page assoc size, deferred) both 0.
-	h = append(h, 0x00)          // Referred-to count/retention flags: short form, count 0.
-	h = append(h, 0x01)          // Page association: page 1.
+	h = append(h, byte(segType))            // Bits 6-7 (page assoc size, deferred) both 0.
+	h = append(h, byte(len(referredTo))<<5) // Referred-to count in the top 3 bits; retention flags 0.
+	for _, ref := range referredTo {
+		h = append(h, byte(ref))
+	}
+	h = append(h, 0x01) // Page association: page 1.
 	h = appendBE32(h, dataLength)
 	return h
 }

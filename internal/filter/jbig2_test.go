@@ -195,7 +195,7 @@ func TestJBIG2GenericRegionRoundTrip(t *testing.T) {
 				want := jbig2TestPattern(shape, width, height)
 				stream := EncodeJBIG2GenericRegion(width, height, want, tpgdon)
 
-				out, err := decodeJBIG2(stream)
+				out, err := decodeJBIG2(stream, nil)
 				if err != nil {
 					t.Fatalf("%s %dx%d (tpgdon=%v): decodeJBIG2: %v", shape, width, height, tpgdon, err)
 				}
@@ -270,7 +270,7 @@ func TestJBIG2MultipleRegionsComposite(t *testing.T) {
 		stream = append(stream, encodeGenericRegionSegment(width, stripHeight, strip, false, 0, s*stripHeight, combOpOr)...)
 	}
 
-	out, err := decodeJBIG2(stream)
+	out, err := decodeJBIG2(stream, nil)
 	if err != nil {
 		t.Fatalf("decodeJBIG2: %v", err)
 	}
@@ -296,13 +296,13 @@ func TestJBIG2IgnoresSegmentsItDoesNotNeed(t *testing.T) {
 	)
 
 	var stream []byte
-	stream = append(stream, buildSegmentHeader(0, segTypePageInfo, pageInfoDataBytes)...)
+	stream = append(stream, buildSegmentHeader(0, segTypePageInfo, nil, pageInfoDataBytes)...)
 	stream = append(stream, make([]byte, pageInfoDataBytes)...)
 	stream = append(stream, EncodeJBIG2GenericRegion(width, height, want, false)...)
-	stream = append(stream, buildSegmentHeader(2, segTypeEndOfPage, 0)...)
-	stream = append(stream, buildSegmentHeader(3, segTypeEndOfFile, 0)...)
+	stream = append(stream, buildSegmentHeader(2, segTypeEndOfPage, nil, 0)...)
+	stream = append(stream, buildSegmentHeader(3, segTypeEndOfFile, nil, 0)...)
 
-	out, err := decodeJBIG2(stream)
+	out, err := decodeJBIG2(stream, nil)
 	if err != nil {
 		t.Fatalf("decodeJBIG2: %v", err)
 	}
@@ -343,27 +343,27 @@ func TestJBIG2UnsupportedAndMalformedStreams(t *testing.T) {
 			},
 		},
 		{
-			name:    "symbol dictionary segment",
-			wantErr: pdferror.ErrUnsupported,
-			edit: func(s []byte) []byte {
-				// Keep the type's other flag bits, replace the type itself.
-				s[segmentTypeOffset] = s[segmentTypeOffset]&^0x3F | byte(segTypeSymbolDictionary)
-				return s
-			},
-		},
-		{
-			name:    "text region segment",
-			wantErr: pdferror.ErrUnsupported,
-			edit: func(s []byte) []byte {
-				s[segmentTypeOffset] = s[segmentTypeOffset]&^0x3F | byte(segTypeTextRegionImmediate)
-				return s
-			},
-		},
-		{
 			name:    "refinement region segment",
 			wantErr: pdferror.ErrUnsupported,
 			edit: func(s []byte) []byte {
+				// Keep the type's other flag bits, replace the type itself.
 				s[segmentTypeOffset] = s[segmentTypeOffset]&^0x3F | byte(segTypeRefinementRegionImmediate)
+				return s
+			},
+		},
+		{
+			name:    "halftone region segment",
+			wantErr: pdferror.ErrUnsupported,
+			edit: func(s []byte) []byte {
+				s[segmentTypeOffset] = s[segmentTypeOffset]&^0x3F | byte(segTypeHalftoneRegionImmediate)
+				return s
+			},
+		},
+		{
+			name:    "pattern dictionary segment",
+			wantErr: pdferror.ErrUnsupported,
+			edit: func(s []byte) []byte {
+				s[segmentTypeOffset] = s[segmentTypeOffset]&^0x3F | byte(segTypePatternDictionary)
 				return s
 			},
 		},
@@ -429,7 +429,7 @@ func TestJBIG2UnsupportedAndMalformedStreams(t *testing.T) {
 			wantErr: pdferror.ErrMalformed,
 			edit: func(s []byte) []byte {
 				const segTypeEndOfFile = 51
-				return buildSegmentHeader(0, segTypeEndOfFile, 0)
+				return buildSegmentHeader(0, segTypeEndOfFile, nil, 0)
 			},
 		},
 	}
@@ -438,7 +438,7 @@ func TestJBIG2UnsupportedAndMalformedStreams(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			const width, height = 12, 9
 			stream := tc.edit(EncodeJBIG2GenericRegion(width, height, jbig2TestPattern("border", width, height), false))
-			_, err := decodeJBIG2(stream)
+			_, err := decodeJBIG2(stream, nil)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("decodeJBIG2: got %v, want an error wrapping %v", err, tc.wantErr)
 			}
@@ -483,7 +483,7 @@ func TestJBIG2AllTemplatesAndNonDefaultATPixels(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, tpgdon := range []bool{false, true} {
 				stream := encodeGenericRegionSegmentAT(width, height, pix, tpgdon, 0, 0, combOpOr, tc.template, tc.at)
-				got, err := decodeJBIG2(stream)
+				got, err := decodeJBIG2(stream, nil)
 				if err != nil {
 					t.Fatalf("tpgdon=%v: decodeJBIG2: %v", tpgdon, err)
 				}
@@ -508,7 +508,7 @@ func TestJBIG2RegionPositionedPastPageLimit(t *testing.T) {
 		stream[yOffset+i] = b
 	}
 
-	if _, err := decodeJBIG2(stream); err == nil {
+	if _, err := decodeJBIG2(stream, nil); err == nil {
 		t.Fatal("decodeJBIG2 accepted a region positioned far outside any plausible page")
 	}
 }
@@ -533,7 +533,7 @@ func TestJBIG2DecodeTruncatedCodedData(t *testing.T) {
 		// exercises short *coded data* rather than the length check.
 		truncated[10] -= byte(cut)
 
-		out, err := decodeJBIG2(truncated)
+		out, err := decodeJBIG2(truncated, nil)
 		if err != nil {
 			continue // A rejected stream is an acceptable outcome too.
 		}

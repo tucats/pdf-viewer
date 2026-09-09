@@ -58,15 +58,21 @@ const unknownSegmentLength = 0xFFFFFFFF
 
 // segmentHeader is one parsed JBIG2 segment header (T.88 7.2) - just the
 // handful of fields jbig2.go actually needs, not a full transcription of
-// every header field (in particular, the referred-to segment numbers
-// themselves are parsed only to know how many bytes to skip past, since
-// generic region decoding never needs to look another segment up by
-// number - only symbol/text region decoding would, and this package does
-// not implement those).
+// every header field (the per-segment "retention flags", for instance,
+// are skipped over unread: they exist to tell a streaming decoder when
+// it may discard a segment's results, which a decoder holding the whole
+// stream in memory has no use for).
 type segmentHeader struct {
 	number      uint32
 	segmentType int
-	dataLength  uint64
+	// referredTo lists the segment numbers this segment's decoding
+	// depends on (T.88 7.2.5). A text region refers to the symbol
+	// dictionaries whose symbols it draws with, and a symbol dictionary
+	// may refer to other dictionaries whose symbols it imports - so
+	// unlike a generic region, which stands alone, these types can only
+	// be decoded by looking their referred-to segments up by number.
+	referredTo []uint32
+	dataLength uint64
 }
 
 // parseSegmentHeader parses the single segment header at the start of
@@ -140,7 +146,21 @@ func parseSegmentHeader(data []byte) (segmentHeader, int, error) {
 	default:
 		refSize = 4
 	}
-	pos += refCount * refSize
+	if len(data) < pos+refCount*refSize {
+		return segmentHeader{}, 0, pdferror.Malformedf("JBIG2Decode: truncated segment header (referred-to segment numbers)")
+	}
+	referredTo := make([]uint32, refCount)
+	for i := 0; i < refCount; i++ {
+		switch refSize {
+		case 1:
+			referredTo[i] = uint32(data[pos])
+		case 2:
+			referredTo[i] = uint32(binary.BigEndian.Uint16(data[pos : pos+2]))
+		default:
+			referredTo[i] = binary.BigEndian.Uint32(data[pos : pos+4])
+		}
+		pos += refSize
+	}
 
 	// Segment page association (7.2.6): 1 or 4 bytes per the header
 	// flags bit checked above.
@@ -157,5 +177,10 @@ func parseSegmentHeader(data []byte) (segmentHeader, int, error) {
 	dataLength := binary.BigEndian.Uint32(data[pos : pos+4])
 	pos += 4
 
-	return segmentHeader{number: number, segmentType: segType, dataLength: uint64(dataLength)}, pos, nil
+	return segmentHeader{
+		number:      number,
+		segmentType: segType,
+		referredTo:  referredTo,
+		dataLength:  uint64(dataLength),
+	}, pos, nil
 }

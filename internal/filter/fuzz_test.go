@@ -20,6 +20,7 @@ func FuzzDecode(f *testing.F) {
 	f.Add("RunLengthDecode", []byte{2, 'a', 'b', 'c', 128})
 	f.Add("LZWDecode", []byte{0x80, 0x0b, 0x60, 0x50, 0x22, 0x0c})
 	f.Add("FlateDecode", []byte{0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01})
+	f.Add("CCITTFaxDecode", ccittFixture1393)
 
 	f.Fuzz(func(t *testing.T, filterName string, data []byte) {
 		dict := syntax.Dictionary{"Filter": syntax.Name(filterName)}

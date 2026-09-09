@@ -10,12 +10,14 @@
 // # Supported filters
 //
 // ASCII85Decode, ASCIIHexDecode, RunLengthDecode, LZWDecode, FlateDecode
-// (with PNG and TIFF predictors), and DCTDecode (JPEG, via the standard
-// library's image/jpeg - see dct.go) are implemented. Any other filter
-// name - CCITTFaxDecode, JBIG2Decode, JPXDecode, and Crypt - returns an
-// error wrapping pdferror.ErrUnsupported naming the filter, rather than
-// being silently skipped or misread; see docs/capability-matrix.md for
-// the up-to-date status of each.
+// (with PNG and TIFF predictors), DCTDecode (JPEG, via the standard
+// library's image/jpeg - see dct.go), and CCITTFaxDecode (Group 3 and
+// Group 4 fax compression, a from-scratch decoder since the standard
+// library has none - see ccitt.go) are implemented. Any other filter
+// name - JBIG2Decode, JPXDecode, and Crypt - returns an error wrapping
+// pdferror.ErrUnsupported naming the filter, rather than being silently
+// skipped or misread; see docs/capability-matrix.md for the up-to-date
+// status of each.
 //
 // # Filter chains
 //
@@ -188,6 +190,8 @@ func decodeOne(name syntax.Name, parms syntax.Dictionary, data []byte) ([]byte, 
 		return decodeFlate(data, parms)
 	case "DCTDecode", "DCT":
 		return decodeDCT(data)
+	case "CCITTFaxDecode", "CCF":
+		return decodeCCITT(data, parms)
 	default:
 		return nil, pdferror.Unsupportedf("stream filter %q", name)
 	}
@@ -213,4 +217,24 @@ func intParm(parms syntax.Dictionary, key syntax.Name, def int) int {
 		return def
 	}
 	return int(n)
+}
+
+// boolParm reads a boolean-valued entry from parms (which may be nil,
+// meaning no parameters were given at all), returning def if the key is
+// absent, parms itself is nil, or the entry is not a syntax.Boolean. Used
+// by CCITTFaxDecode's several true/false /DecodeParms entries
+// (/BlackIs1, /EncodedByteAlign, /EndOfLine, /EndOfBlock - see ccitt.go).
+func boolParm(parms syntax.Dictionary, key syntax.Name, def bool) bool {
+	if parms == nil {
+		return def
+	}
+	v, ok := parms[key]
+	if !ok {
+		return def
+	}
+	b, ok := v.(syntax.Boolean)
+	if !ok {
+		return def
+	}
+	return bool(b)
 }

@@ -52,7 +52,7 @@ and its Progress Log for what was actually built in each phase.
 | RunLengthDecode | Phase 2 | Done | Implemented in `internal/filter` (`runlength.go`). |
 | LZWDecode | Phase 2 | Partial | Implemented in `internal/filter` (`lzw.go`) via the standard library's `compress/lzw`, whose `MSB` order is explicitly documented as PDF-compatible. "Partial" because only the default `/EarlyChange 1` is supported - `/EarlyChange 0` returns an error wrapping `ErrUnsupported`, since the standard library offers no way to select that variant. PNG/TIFF predictors are supported here too, sharing `predictor.go` with FlateDecode. |
 | DCTDecode (JPEG) | Phase 3 | Done | Implemented in `internal/filter` (`dct.go`) via the standard library's `image/jpeg`: baseline and progressive JPEG, grayscale/YCbCr/CMYK (Adobe) component layouts all supported since Go's decoder already handles each. Bounded via `jpeg.DecodeConfig` (reads only the header) before committing to a full decode, so a maliciously huge declared image size is rejected before an oversized allocation. |
-| CCITTFaxDecode | Not yet scheduled | Not started | Common in scanned/fax-derived PDFs; no standard-library decoder exists, so this needs its own design decision before scheduling. |
+| CCITTFaxDecode | Phase 3 (added later) | Done | Common in scanned/fax-derived PDFs; no standard-library decoder exists, so `internal/filter` (`ccitt.go`) implements one from scratch, closely porting the well-proven xpdf/pdf.js CCITT decoder's Huffman tables and row-decoding algorithm (see that file's own doc comment for provenance and license). Group 4 (`/K` < 0, pure 2D/T.6 - the common case for scan-to-PDF output), Group 3 1D (`/K` 0), and Group 3 mixed 1D/2D (`/K` > 0) are all supported, along with `/BlackIs1`, `/EncodedByteAlign`, `/EndOfLine`, and `/EndOfBlock`. |
 | JBIG2Decode | Not scheduled | Not started | Encumbered, complex format with narrow real-world benefit relative to implementation cost; revisit only on concrete demand. |
 | JPXDecode (JPEG 2000) | Not scheduled | Not started | Same rationale as JBIG2Decode. |
 | Crypt filter | Not scheduled | Not started | Depends on encryption support above. |
@@ -124,7 +124,8 @@ and its Progress Log for what was actually built in each phase.
 | Decode arrays | Phase 3 | Done | Implemented in `internal/image` (`decode.go`'s `decodeArray`/`decodeSample`) for every supported color space, `/ImageMask`, and `/Indexed`'s index range, each with the specification's documented default when `/Decode` is absent. |
 | `/BitsPerComponent` 1, 2, 4, 8, 16 | Phase 3 | Done | Implemented in `internal/image` (`decode.go`'s `bitReader`): most-significant-bit-first packing, each image row starting on a fresh byte boundary, per the specification. |
 | DCTDecode (JPEG) images | Phase 3 | Done | See the Filters table above. |
-| CCITTFaxDecode / JBIG2Decode / JPXDecode images | Not yet scheduled | Not started | An image using one of these filters fails with an error wrapping `ErrUnsupported` (propagated from `internal/filter`) rather than being silently skipped or misrendered - see `internal/content`'s "Do"/"BI" handling. |
+| CCITTFaxDecode images | Phase 3 (added later) | Done | See the Filters table above - decoded bytes flow into `internal/image` exactly like any other `/BitsPerComponent` 1 image (most commonly an `/ImageMask`, but a plain `/DeviceGray` image is equally supported). |
+| JBIG2Decode / JPXDecode images | Not yet scheduled | Not started | An image using one of these filters fails with an error wrapping `ErrUnsupported` (propagated from `internal/filter`) rather than being silently skipped or misrendered - see `internal/content`'s "Do"/"BI" handling. |
 
 ## Annotations and forms
 

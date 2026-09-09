@@ -666,9 +666,8 @@ those operators' operands when interpreting a charstring - actual
 hinting/grid-fitting is out of scope, matching this project's existing
 "no hinting" precedent for TrueType outlines.
 
-**Status.** In progress - split into independently committable
-sub-phases (3a-3e) as the work landed, each covering one deliverable
-above:
+**Status.** Done - landed as independently committable sub-phases
+(3a-3e), each covering one deliverable above:
 
 - **3a - CFF core parsing and the Type 2 Charstring interpreter: Done.**
   `internal/fonts/cff.go` implements INDEX/DICT parsing (including the
@@ -734,9 +733,15 @@ above:
   `TestProbeFontFile_OTTOWithCFFTableHasOutlines` for the new path;
   `FuzzProbeFontFile`'s seed corpus gained an OTTO+`"CFF "` seed too
   (20s local fuzz run after the change surfaced no crashes).
-- **3e - `docs/capability-matrix.md` update: Not started.** Flip
-  "OpenType/CFF (Type1C, CIDFontType0C)" and the CIDFontType0 note in
-  "Composite fonts: Type 0 / CID", now that 3a-3d are all done.
+- **3e - `docs/capability-matrix.md` update: Done.** "OpenType/CFF
+  (Type1C, CIDFontType0C)" flipped from "Not started" to "Done"; the
+  "Composite fonts: Type 0 / CID" and "Simple fonts: Type 1" rows'
+  notes updated to reflect CFF support landing (both remain otherwise
+  unchanged in status: Type 0/CID stays "Partial" for its existing,
+  unrelated non-Identity-encoding gap, and Type 1's own distinct
+  charstring format is still "Not started").
+
+Phase 3 (all sub-phases 3a-3e) is now complete.
 
 ### Phase 4 - Font source, matching, and wiring
 

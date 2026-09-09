@@ -807,7 +807,33 @@ below) - Phase 4's `FontSource` design should not preclude adding one
 later (an in-memory/embedded `FontSource` implementation should fit the
 same interface as `DirectorySource`), but does not include one itself.
 
-**Status.** Not started.
+**Status.** In progress, landed as independently committable sub-phases
+(4a onward, mirroring Phase 3's 3a-3e precedent), each covering one
+deliverable above:
+
+- **4a - matching algorithm: Done.** `internal/fonts/substitute.go`
+  implements `FontSource` (the interface a later sub-phase's
+  `DirectorySource` will satisfy - see "Depends on" note below) and
+  `matchFace`, the four-step algorithm from "Matching algorithm" above
+  (exact family match, narrowed by bold/italic via `bestByStyle`; then
+  the `standard14Categories` table; then the query's own descriptor
+  Serif/FixedPitch flags; then giving up) plus `categoryOf`, which
+  classifies a candidate face the same way for the category-fallback
+  steps. A candidate with `HasOutlines` false is never selected by any
+  step (see `matchFace`'s doc comment) - a face Phase 2 could
+  characterize but this package cannot extract glyphs from is treated as
+  though absent. "Symbol" and "ZapfDingbats" are deliberately excluded
+  from `standard14Categories` (see that table's doc comment): a symbol
+  font's dingbats have no sensible sans/serif/monospace substitute, so
+  those names fall through to no match (`notdefGlyph`) rather than a
+  plausible-looking but wrong glyph. Verified entirely with small
+  synthetic in-memory `FontFace`/`FontSource` values
+  (`internal/fonts/substitute_test.go`) - no real font files or
+  filesystem access, per this document's "Testing" section.
+- **4b onward - not yet started.** `DirectorySource` (real directory
+  scanning via Phase 2's `ProbeFontFile`), the `WithFontSubstitution`
+  `OpenOption`/wiring into `Load`'s fallback path, diagnostics, and
+  width-from-substitute remain to be built.
 
 ### Phase 5 - Bundled last-resort font (deferred, not started)
 

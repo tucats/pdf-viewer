@@ -17,10 +17,17 @@ import (
 // A Page must not be used after the Document it came from has been
 // closed - see Document.Close's doc comment.
 type Page interface {
-	// Bounds returns the page's box (its /MediaBox, resolving PDF's
-	// page-attribute inheritance rules if the page itself does not
-	// specify one directly - see internal/model's package doc comment)
-	// in PDF points (1/72 inch).
+	// Bounds returns the page's box in PDF points (1/72 inch): its
+	// /CropBox (resolving PDF's page-attribute inheritance rules if the
+	// page itself does not specify one directly, and clipped to lie
+	// within /MediaBox - see internal/model's Page.CropBox doc comment),
+	// or /MediaBox itself if the page has no /CropBox anywhere in its
+	// ancestry. This is deliberately CropBox rather than MediaBox: PDF
+	// producers commonly set MediaBox to a whole physical press sheet
+	// (crop marks, bleed, and other margin content included) and
+	// CropBox to the smaller region actually meant to be seen, and every
+	// mainstream PDF viewer displays that smaller region - Bounds (and
+	// Render/Thumbnail, which use the same box) matches that.
 	Bounds() Rect
 
 	// Render draws the page and returns it as an image, per opts (see
@@ -67,7 +74,7 @@ type pageImpl struct {
 }
 
 func (p *pageImpl) Bounds() Rect {
-	b := p.page.MediaBox
+	b := p.page.CropBox
 	return Rect{LLX: b.LLX, LLY: b.LLY, URX: b.URX, URY: b.URY}
 }
 
@@ -201,14 +208,14 @@ func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background 
 // silent, easy-to-miss correctness bug for exactly the property
 // (thumbnails are bounded in size) Thumbnail exists to guarantee.
 func (p *pageImpl) thumbnailScale(maxDimension int) (float64, error) {
-	box := p.page.MediaBox
+	box := p.page.CropBox
 	w := math.Abs(box.URX - box.LLX)
 	h := math.Abs(box.URY - box.LLY)
 	if p.page.Rotate == 90 || p.page.Rotate == 270 {
 		w, h = h, w
 	}
 	if w <= 0 || h <= 0 {
-		return 0, MalformedErrorf("page has a degenerate MediaBox (%v x %v points)", w, h)
+		return 0, MalformedErrorf("page has a degenerate box (%v x %v points)", w, h)
 	}
 	longest := w
 	if h > longest {
@@ -233,12 +240,21 @@ func (p *pageImpl) thumbnailScale(maxDimension int) (float64, error) {
 // pageDeviceGeometry computes the pixel dimensions of page's rendered
 // output at the given scale (device pixels per PDF point) and the
 // initial content-transformation matrix - mapping the page's default
-// user space (as defined by its MediaBox) all the way to device pixel
-// space, including both the standard PDF-to-raster axis flip (PDF's
-// y-axis points up; image rows count down) and the page's own /Rotate
-// attribute (see model.Page.Rotate).
+// user space all the way to device pixel space, including both the
+// standard PDF-to-raster axis flip (PDF's y-axis points up; image rows
+// count down) and the page's own /Rotate attribute (see
+// model.Page.Rotate).
+//
+// The output window is anchored to page's CropBox, not its MediaBox
+// (see model.Page.CropBox and Page.Bounds' doc comments for why): a
+// page's content stream still draws in the same MediaBox-relative user
+// space it always did (nothing about the content's own coordinates
+// changes), but only the CropBox-sized, CropBox-origin-anchored portion
+// of that user space becomes visible in the rendered image - exactly
+// like a physical printer's sheet being trimmed down to the finished
+// page, everything outside the trim line simply does not appear.
 func pageDeviceGeometry(page model.Page, scale float64) (width, height int, ctm graphics.Matrix, err error) {
-	box := page.MediaBox
+	box := page.CropBox
 	minX, maxX := box.LLX, box.URX
 	if minX > maxX {
 		minX, maxX = maxX, minX
@@ -250,13 +266,13 @@ func pageDeviceGeometry(page model.Page, scale float64) (width, height int, ctm 
 	pageWidth := (maxX - minX) * scale
 	pageHeight := (maxY - minY) * scale
 	if pageWidth <= 0 || pageHeight <= 0 {
-		return 0, 0, graphics.Matrix{}, MalformedErrorf("page has a degenerate MediaBox (%v x %v points)", maxX-minX, maxY-minY)
+		return 0, 0, graphics.Matrix{}, MalformedErrorf("page has a degenerate box (%v x %v points)", maxX-minX, maxY-minY)
 	}
 
 	// baseCTM maps a user-space point directly to this "unrotated"
-	// device space: x shifts by the MediaBox's own origin and scales;
-	// y additionally flips, since PDF user space has y increasing
-	// upward but image rows increase downward.
+	// device space: x shifts by the CropBox's own origin and scales; y
+	// additionally flips, since PDF user space has y increasing upward
+	// but image rows increase downward.
 	baseCTM := graphics.Matrix{
 		A: scale, D: -scale,
 		E: -minX * scale, F: maxY * scale,

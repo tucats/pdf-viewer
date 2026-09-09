@@ -272,6 +272,97 @@ func TestPageWithNoMediaBoxIsMalformed(t *testing.T) {
 	}
 }
 
+// TestCropBoxDefaultsToMediaBox confirms a page with no /CropBox
+// anywhere in its ancestry reports CropBox equal to MediaBox - the
+// specification's documented default, and this package's fallback for
+// every document this project's own test corpus (fixture PDFs above) has
+// used until now, which is why none of those cases needed a CropBox
+// field at all before it existed.
+func TestCropBoxDefaultsToMediaBox(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+`)
+	d := openTestDocument(t, data)
+	page := d.Page(0)
+	if page.CropBox != page.MediaBox {
+		t.Errorf("CropBox = %+v, MediaBox = %+v, want them equal when /CropBox is absent", page.CropBox, page.MediaBox)
+	}
+}
+
+// TestCropBoxIsInherited exercises the same inheritance rule
+// TestMediaBoxIsInherited does, for /CropBox instead of /MediaBox.
+func TestCropBoxIsInherited(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /CropBox [10 10 600 780] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+`)
+	d := openTestDocument(t, data)
+	want := Rect{LLX: 10, LLY: 10, URX: 600, URY: 780}
+	if got := d.Page(0).CropBox; got != want {
+		t.Errorf("Page(0).CropBox = %+v, want %+v (should have been inherited)", got, want)
+	}
+}
+
+// TestPageCropBoxOverridesInherited confirms a page's own /CropBox takes
+// precedence over one inherited from an ancestor.
+func TestPageCropBoxOverridesInherited(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /CropBox [10 10 600 780] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /CropBox [0 0 100 100] >> endobj
+`)
+	d := openTestDocument(t, data)
+	want := Rect{LLX: 0, LLY: 0, URX: 100, URY: 100}
+	if got := d.Page(0).CropBox; got != want {
+		t.Errorf("Page(0).CropBox = %+v, want %+v (page's own box should win)", got, want)
+	}
+}
+
+// TestCropBoxIsClippedToMediaBox is this package's regression test for
+// the real-world case that motivated adding CropBox support in the
+// first place: a print-production PDF (crop marks, bleed, and color
+// calibration bars scanned or laid out around the actual trimmed page)
+// whose /MediaBox spans the whole physical sheet and whose /CropBox
+// names the smaller trimmed region within it - see resolveCropBox's own
+// doc comment for the specification citation. This uses a /CropBox that
+// extends beyond /MediaBox on every side to confirm the clipping happens
+// (a well-formed real-world file's CropBox is normally already within
+// its MediaBox, as in the case above, so this specifically exercises
+// the "producer got it wrong" path).
+func TestCropBoxIsClippedToMediaBox(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] /CropBox [-50 -50 150 150] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+`)
+	d := openTestDocument(t, data)
+	want := Rect{LLX: 0, LLY: 0, URX: 100, URY: 100}
+	if got := d.Page(0).CropBox; got != want {
+		t.Errorf("Page(0).CropBox = %+v, want %+v (should be clipped to MediaBox)", got, want)
+	}
+}
+
+// TestCropBoxDegenerateFallsBackToMediaBox confirms a /CropBox that does
+// not overlap /MediaBox at all (which real producers should never write,
+// but nothing in the file format actually forbids) falls back to the
+// whole MediaBox rather than producing a zero-size or negative-size
+// page - see resolveCropBox's own doc comment for the rationale.
+func TestCropBoxDegenerateFallsBackToMediaBox(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] /CropBox [200 200 300 300] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+`)
+	d := openTestDocument(t, data)
+	page := d.Page(0)
+	if page.CropBox != page.MediaBox {
+		t.Errorf("CropBox = %+v, MediaBox = %+v, want them equal when /CropBox does not overlap MediaBox at all", page.CropBox, page.MediaBox)
+	}
+}
+
 // --- test helpers -----------------------------------------------------
 
 // buildTestDocument assembles a minimal, syntactically valid PDF file

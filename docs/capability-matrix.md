@@ -140,7 +140,7 @@ and its Progress Log for what was actually built in each phase.
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
 | MediaBox | Phase 1 | Done | Implemented in `internal/model`, including inheritance from an ancestor Pages node when a page does not specify its own; exposed publicly via `Page.Bounds`. |
-| CropBox | Phase 1–2 | Not started | Falls back to MediaBox when absent, per spec. |
+| CropBox | Phase 1–2 | Done | Implemented in `internal/model` (inherited like `/MediaBox`, clipped to lie within it per spec, falling back to `/MediaBox` when absent or when clipping would leave nothing). `Page.Bounds`, `Render`, and `Thumbnail` (root package `page.go`) all use it in place of `/MediaBox`, so a page whose media box includes bleed/crop-mark margins outside the intended trim (common in print-production PDFs) renders cropped to the same region other viewers show. |
 | BleedBox, TrimBox, ArtBox | Phase 2 | Not started | Exposed via `RenderOptions`' page-box selection (see README Draft Public API). |
 | Page rotation (`/Rotate`) | Phase 2 | Done | Implemented in `internal/model` (inherited like `/MediaBox`/`/Resources`, normalized to 0/90/180/270 with an invalid value falling back to the inherited default) and applied in `Page.Render`'s device geometry (root package `page.go`). |
 

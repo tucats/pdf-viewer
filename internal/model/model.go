@@ -29,6 +29,8 @@
 package model
 
 import (
+	"math"
+
 	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/parser"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
@@ -46,6 +48,21 @@ type Page struct {
 	// anywhere along a page's ancestor chain is treated as malformed
 	// (see Document.pages below).
 	MediaBox Rect
+
+	// CropBox is the page's box in PDF points, exactly as a real PDF
+	// viewer (Preview, Acrobat, ...) would determine "the visible page":
+	// the page's own (possibly inherited) /CropBox entry if it has one,
+	// clipped to lie within MediaBox (a /CropBox is only ever meant to
+	// select a region *within* the media, never extend past it - see
+	// buildPage), or MediaBox itself when there is no /CropBox anywhere
+	// in the page's ancestry. Printers commonly produce a MediaBox
+	// spanning the whole physical press sheet - including bleed and
+	// crop-mark margins outside the final trimmed page - with /CropBox
+	// naming the smaller, actually-intended-to-be-seen region within it;
+	// this field, not MediaBox, is what Bounds and Render use, so that
+	// this package's output matches what other viewers show rather than
+	// including that outer margin.
+	CropBox Rect
 
 	// RawResources is the page's (possibly inherited) /Resources
 	// dictionary, not yet interpreted. It is exposed now, ahead of the
@@ -216,6 +233,7 @@ func (d *Document) Page(index int) Page {
 // what was inherited from further up.
 type inheritable struct {
 	mediaBox     *Rect
+	cropBox      *Rect
 	resources    syntax.Dictionary
 	hasResources bool
 	rotate       int
@@ -300,6 +318,13 @@ func mergeInherited(p *parser.Document, inherited inheritable, dict syntax.Dicti
 			}
 		}
 	}
+	if box, ok := dict["CropBox"]; ok {
+		if resolved, err := resolveObject(p, box); err == nil {
+			if r, ok := parseRect(resolved); ok {
+				inherited.cropBox = &r
+			}
+		}
+	}
 	if res, ok := dict["Resources"]; ok {
 		if resolved, err := resolveObject(p, res); err == nil {
 			if resDict, ok := resolved.(syntax.Dictionary); ok {
@@ -349,6 +374,7 @@ func buildPage(dict syntax.Dictionary, inherited inheritable) (Page, error) {
 	}
 	page := Page{
 		MediaBox: *inherited.mediaBox,
+		CropBox:  resolveCropBox(*inherited.mediaBox, inherited.cropBox),
 		Rotate:   inherited.rotate,
 		dict:     dict,
 	}
@@ -356,6 +382,56 @@ func buildPage(dict syntax.Dictionary, inherited inheritable) (Page, error) {
 		page.RawResources = inherited.resources
 	}
 	return page, nil
+}
+
+// resolveCropBox implements the /CropBox field's own doc comment: cropBox
+// is nil when the page's ancestry had no /CropBox entry at all, in which
+// case the result is simply mediaBox unchanged; otherwise the result is
+// *cropBox clipped to lie within mediaBox, per the specification ("the
+// crop, bleed, trim, and art boxes shall not ordinarily extend beyond
+// the boundaries of the media box... if they do, they shall be clipped
+// to the media box"). Both rectangles are normalized (min, min)-(max,
+// max) first, since PDF does not require a box's corners to be listed
+// in any particular order (see Rect's own doc comment) and an
+// intersection computed from un-normalized corners would be meaningless.
+//
+// If clipping produces a degenerate (zero or negative area) rectangle -
+// a malformed /CropBox that does not actually overlap the media box at
+// all - mediaBox is returned instead, on the theory that showing the
+// whole page is a far more useful fallback than a blank or rejected one
+// for what is, after all, only a viewing hint.
+func resolveCropBox(mediaBox Rect, cropBox *Rect) Rect {
+	if cropBox == nil {
+		return mediaBox
+	}
+	media := normalizeRect(mediaBox)
+	crop := normalizeRect(*cropBox)
+
+	clipped := Rect{
+		LLX: math.Max(media.LLX, crop.LLX),
+		LLY: math.Max(media.LLY, crop.LLY),
+		URX: math.Min(media.URX, crop.URX),
+		URY: math.Min(media.URY, crop.URY),
+	}
+	if clipped.URX <= clipped.LLX || clipped.URY <= clipped.LLY {
+		return mediaBox
+	}
+	return clipped
+}
+
+// normalizeRect reorders r's corners, if needed, so LLX <= URX and
+// LLY <= URY - the (min, min)-(max, max) form resolveCropBox's
+// intersection math (and callers elsewhere that assume this form)
+// requires, but which PDF itself does not guarantee a page box array is
+// already written in.
+func normalizeRect(r Rect) Rect {
+	if r.LLX > r.URX {
+		r.LLX, r.URX = r.URX, r.LLX
+	}
+	if r.LLY > r.URY {
+		r.LLY, r.URY = r.URY, r.LLY
+	}
+	return r
 }
 
 // parseRect interprets obj as a four-number PDF rectangle array

@@ -1,7 +1,7 @@
 # PDF capability matrix
 
 This is the Phase 0 capability matrix called for in the repository
-README's phased plan: a single place recording, for each area of PDF
+docs/PLAN.md's phased plan: a single place recording, for each area of PDF
 functionality, what this project targets supporting and what phase is
 expected to deliver it. It exists so that "does pdf-viewer support X?"
 has one authoritative, checkable answer instead of requiring an
@@ -17,11 +17,11 @@ rather than discovered by accident.
 | Planned | Targeted for a specific phase below, no code yet. |
 | Partial | Some code exists; coverage is incomplete. See notes. |
 | Done | Implemented and covered by tests. |
-| Non-goal | Deliberately out of scope; see the README's "Non-goals for the Initial Release" section. |
+| Non-goal | Deliberately out of scope; see the docs/PLAN.md's "Non-goals for the Initial Release" section. |
 
 This table should be updated in the same change that changes a
 capability's support level — treat a code change that isn't reflected
-here as incomplete. See [README.md](../README.md) for the phased plan
+here as incomplete. See [docs/PLAN.md](../docs/PLAN.md) for the phased plan
 and its Progress Log for what was actually built in each phase.
 
 ## PDF versions
@@ -30,7 +30,7 @@ and its Progress Log for what was actually built in each phase.
 | --- | --- | --- | --- |
 | PDF 1.4–1.7 core structure (classic xref tables, classic trailers, incremental updates via /Prev, recovery scan for a corrupted xref table) | Phase 1 | Partial | Implemented in `internal/parser`; see its package doc comment. "Partial" because broader real-world compatibility is still growing, not because the mechanism itself is incomplete. |
 | PDF 1.5+ cross-reference streams and object streams | Phase 2 (moved from Phase 1) | Done | Implemented in `internal/parser` (`xrefstream.go`, `objstream.go`), now that Flate decoding exists (`internal/filter`). A document may freely mix classic and stream-based cross-reference sections across its `/Prev` chain. Hybrid-reference files (a classic table plus a supplementary `/XRefStm` for stream-unaware readers) are not specially handled - objects only reachable via `/XRefStm` are not found - but this is rare in practice and does not cause an error, only a missing object (resolved as null). |
-| PDF 2.0 (ISO 32000-2) structural changes | Phase 6 | Not started | Phase 6 decision (see the README's "Supported PDF versions" section): this project's supported range for its initial release is PDF 1.4-1.7. PDF 2.0 is largely a clarified superset of 1.7 for the structural/content features this project implements, so most 1.7-targeting code is expected to already handle a 2.0 file's shared structure correctly - but this has not been verified against a real 2.0 corpus, and PDF 2.0-specific additions (e.g. new encryption revisions, `/AF` associated files) are unimplemented. Revisit once a 2.0 test corpus exists. |
+| PDF 2.0 (ISO 32000-2) structural changes | Phase 6 | Not started | Phase 6 decision (see the docs/PLAN.md's "Supported PDF versions" section): this project's supported range for its initial release is PDF 1.4-1.7. PDF 2.0 is largely a clarified superset of 1.7 for the structural/content features this project implements, so most 1.7-targeting code is expected to already handle a 2.0 file's shared structure correctly - but this has not been verified against a real 2.0 corpus, and PDF 2.0-specific additions (e.g. new encryption revisions, `/AF` associated files) are unimplemented. Revisit once a 2.0 test corpus exists. |
 | Linearized ("fast web view") files | Not scheduled | Not started | Linearization is an optimization hint or convention layered on top of standard structure, not the file's ground truth; a linearized file must still be readable using vanilla xref/trailer parsing, so this project treats it as automatically handled rather than as a scheduled feature. |
 
 ## Encryption
@@ -38,9 +38,9 @@ and its Progress Log for what was actually built in each phase.
 | Capability | Target phase | Status | Notes |
 | --- | --- | --- | --- |
 | Unencrypted documents | Phase 1 | Done | Baseline; every fixture and real-world file this project has been tested against is unencrypted. |
-| Detecting and rejecting any encrypted document | Phase 6 | Done | Implemented in `internal/parser` (`Open`): a trailer declaring `/Encrypt` is rejected immediately with an error wrapping the new `ErrEncrypted` sentinel (itself wrapping `ErrUnsupported`) - see the root package's errors.go and the README's "Password handling" decision. This is a clear, immediate failure in place of the confusing garbled-data errors that would otherwise surface later, the first time some still-encrypted stream or string was read. |
+| Detecting and rejecting any encrypted document | Phase 6 | Done | Implemented in `internal/parser` (`Open`): a trailer declaring `/Encrypt` is rejected immediately with an error wrapping the new `ErrEncrypted` sentinel (itself wrapping `ErrUnsupported`) - see the root package's errors.go and the docs/PLAN.md's "Password handling" decision. This is a clear, immediate failure in place of the confusing garbled-data errors that would otherwise surface later, the first time some still-encrypted stream or string was read. |
 | Standard security handler, empty user password ("owner-password-only" protected files) | Not yet scheduled | Not started | Common in practice (permissions-only protection); would need real RC4/AES decryption and the Standard security handler's key-derivation algorithm implemented from scratch (no CGO per the "Dependency and safety policy" - Go's standard library has no PDF-specific crypto helper). Revisit only on concrete demand; today such a file fails with `ErrEncrypted` like any other encrypted document. |
-| Standard security handler, non-empty user password | Not yet scheduled | Not started | Same as above, plus a password-input API decision (see the README's Draft Public API open questions) - `Open`/`OpenFile` currently take no password of any kind. |
+| Standard security handler, non-empty user password | Not yet scheduled | Not started | Same as above, plus a password-input API decision (see the docs/PLAN.md's Draft Public API open questions) - `Open`/`OpenFile` currently take no password of any kind. |
 | Public-key security handler | Not scheduled | Not started | No known demand driving this; revisit only if a real use case appears. |
 
 ## Filters (stream and string decoding)
@@ -99,7 +99,7 @@ and its Progress Log for what was actually built in each phase.
 | Font substitution (finding a real outline for a font this package cannot extract one from directly) | Phase 4 | Done for simple fonts; Partial for Type 0/CID | Opt-in via `pdfviewer.WithFontSubstitution` (`options.go`) - a `Document` opened without it behaves exactly as before this feature existed. Implemented across `internal/fonts/substitute.go` (the `FontSource` interface and `matchFace`'s four-step algorithm: exact family match, then a small standard-14-to-category table, then the PDF's own descriptor Serif/FixedPitch flags, then give up) and `internal/fonts/directory_source.go` (`DirectorySource`, this package's only shipped `FontSource`: scans configured and/or GOOS-gated default platform directories for `.ttf`/`.ttc`/`.otf` files via `os.ReadDir`/`os.ReadFile` only - no CGO, subprocess, or platform font-service API, preserving this package's "no system font service" policy - and probes each with the existing Phase 2/3 sfnt/CFF parsing). Wired into `simple.go`'s `loadSimpleFont` fallback path only: once a match is found, its outline is used exactly like an embedded font's, and (`internal/fonts/font.go`'s `advanceWidthSource`) its own advance widths are used in place of the generic default when the PDF supplies no `/Widths` at all. **Not implemented for `cid.go`'s Type0/CID fonts** - a deliberate scope decision, not an oversight: matching a code to a substitute's own glyph needs to resolve that code to a Unicode rune, which is only possible for a simple font's `/Encoding`; a Type0 font's CIDs have no known Unicode meaning without a `/ToUnicode` CMap, which this package does not parse (see "Text extraction" below) - so a non-embedded Type0 font still always falls back to `notdefGlyph` even with substitution enabled. A bundled last-resort font (so substitution has something to find even with no system fonts configured/available) was explicitly deferred by the user, pending a separate license decision - see `docs/FONTS.md`'s Phase 5. |
 | Type 3 fonts (glyphs defined as content streams) | Not yet scheduled | Not started | A Type 3 font dictionary is accepted (via the same "simple font" code path as Type 1/TrueType) but its glyphs are never executed as content streams - it always falls back to `notdefGlyph`, using whatever `/Widths` it declares. Its own `/FontMatrix` (which can differ from the standard 1/1000 scale every other font type uses) is not applied to width interpretation, since no real outline is ever painted for one. Rare in practice; revisit if real-world demand appears. |
 | OpenType/CFF (Type1C, CIDFontType0C) | Phase 4 | Done | Implemented in `internal/fonts/cff.go`: CFF INDEX/DICT/charset/FDSelect parsing and a full Type 2 Charstring interpreter (all path-construction and flex operators, subroutine calls, the arithmetic/storage escape operators), producing the same outline shape `truetype.go`'s `glyf` parsing does. `/FontFile3` is read for both a simple font's bare CFF/Type1C program (`simple.go`'s `loadEmbeddedCFF`, glyph lookup by charset name via `/Encoding`) and a CIDFontType0 descendant's CID-keyed program (`cid.go`, glyph lookup by CID via the charset's inverted CID-to-GID map) - either a bare CFF stream or an OpenType wrapper whose own `"CFF "` table holds it. The same support extracts outlines from an OTTO-flavored *candidate* font file found on disk (`probe.go`'s `FontFace.Outline`), closing this row's other half. Not implemented: a CFF program's own built-in Encoding table (16), the predefined Expert/ExpertSubset charsets (a documented, narrow gap - see `cff.go`'s doc comment), the deprecated implicit-`seac` 4-argument `endchar` form, and CFF2 (not needed by any font this project reads). |
-| Text extraction (recovering Unicode text from a page, as opposed to painting it) | Not yet scheduled | Not started | Deliberately kept separate from text *painting* per the README's Phase 4 plan, so it can be added later without changing how rendering works; `internal/fonts` parses no `/ToUnicode` CMap and exposes no rune-level API. |
+| Text extraction (recovering Unicode text from a page, as opposed to painting it) | Not yet scheduled | Not started | Deliberately kept separate from text *painting* per the docs/PLAN.md's Phase 4 plan, so it can be added later without changing how rendering works; `internal/fonts` parses no `/ToUnicode` CMap and exposes no rune-level API. |
 
 ## Transparency and advanced graphics
 
@@ -141,12 +141,12 @@ and its Progress Log for what was actually built in each phase.
 | --- | --- | --- | --- |
 | MediaBox | Phase 1 | Done | Implemented in `internal/model`, including inheritance from an ancestor Pages node when a page does not specify its own; exposed publicly via `Page.Bounds`. |
 | CropBox | Phase 1–2 | Done | Implemented in `internal/model` (inherited like `/MediaBox`, clipped to lie within it per spec, falling back to `/MediaBox` when absent or when clipping would leave nothing). `Page.Bounds`, `Render`, and `Thumbnail` (root package `page.go`) all use it in place of `/MediaBox`, so a page whose media box includes bleed/crop-mark margins outside the intended trim (common in print-production PDFs) renders cropped to the same region other viewers show. |
-| BleedBox, TrimBox, ArtBox | Phase 2 | Not started | Exposed via `RenderOptions`' page-box selection (see README Draft Public API). |
+| BleedBox, TrimBox, ArtBox | Phase 2 | Not started | Exposed via `RenderOptions`' page-box selection (see docs/PLAN.md Draft Public API). |
 | Page rotation (`/Rotate`) | Phase 2 | Done | Implemented in `internal/model` (inherited like `/MediaBox`/`/Resources`, normalized to 0/90/180/270 with an invalid value falling back to the inherited default) and applied in `Page.Render`'s device geometry (root package `page.go`). |
 
 ## Explicit non-goals
 
-These are recorded here (duplicating the README's "Non-goals for the
+These are recorded here (duplicating the docs/PLAN.md's "Non-goals for the
 Initial Release" section) so this matrix is a complete answer to "is X
 supported", including the things this project does not intend to
 support:
@@ -157,4 +157,4 @@ support:
     scripting behavior embedded in a PDF.
 - Guaranteed recovery of every malformed or hostile file; only bounded,
     non-panicking, classified-error behavior is guaranteed (see the
-    "Dependency and safety policy" section of the README).
+    "Dependency and safety policy" section of the PLAN).

@@ -723,28 +723,39 @@ func TestSubrBias(t *testing.T) {
 	}
 }
 
-// TestCFF_CIDKeyedCharsetAndFDSelect builds a small CID-keyed CFF font
-// (a Top DICT carrying a ROS operator, an FDArray of one Font DICT, an
-// FDSelect assigning every glyph to it, and a charset mapping GID 1 to
-// CID 500) directly - not through cid.go, which is wired up in a later
-// phase - to verify this file's own CID-keyed parsing end to end.
-func TestCFF_CIDKeyedCharsetAndFDSelect(t *testing.T) {
-	glyph := squareCharstring()
+// buildTestCIDCFF assembles a complete, minimal, entirely synthetic
+// CID-keyed CFF font program: a Top DICT carrying a ROS operator (CFF
+// specification section 19, the marker this package's isCID field
+// keys off), a format-0 charset mapping GID i (i>=1) to cids[i-1], and
+// a single Font DICT (an FDArray of one element, with FDSelect
+// assigning every glyph to it) - the simplest CID-keyed shape this
+// file's own tests, and cid_test.go's Load-level integration tests,
+// need. glyphs[0] is glyph index 0 (.notdef, as always); glyphs[i] for
+// i>=1 corresponds to cids[i-1].
+func buildTestCIDCFF(t *testing.T, glyphs [][]byte, cids []uint16) []byte {
+	t.Helper()
+	if len(glyphs) != len(cids)+1 {
+		t.Fatalf("buildTestCIDCFF: len(glyphs)=%d must be len(cids)+1=%d", len(glyphs), len(cids)+1)
+	}
 
 	header := []byte{1, 0, 4, 4}
 	nameIndex := encodeCFFIndex([][]byte{[]byte("Test")})
 	stringIndex := encodeCFFIndex(nil)
 	gsubrIndex := encodeCFFIndex(nil)
-	csIndex := encodeCFFIndex([][]byte{{}, glyph})
+	csIndex := encodeCFFIndex(glyphs)
 
 	var charset bytes.Buffer
 	charset.WriteByte(0) // format 0
-	_ = binary.Write(&charset, binary.BigEndian, uint16(500))
+	for _, cid := range cids {
+		_ = binary.Write(&charset, binary.BigEndian, cid)
+	}
 
-	fdPrivate := []byte{} // no Private DICT entries needed for this Font DICT; local subrs are absent (nil) for this test.
-	fontDict := encodeCFFDictEntry(18, len(fdPrivate), 0)
+	fontDict := encodeCFFDictEntry(18, 0, 0) // an empty Private DICT (size 0); this Font DICT has no local subrs.
 	fdArray := encodeCFFIndex([][]byte{fontDict})
-	fdSelect := []byte{0, 0} // format 0: 2 glyphs, both FD 0
+	// FDSelect format 0: one format byte (0) followed by one FD-index
+	// byte per glyph - every glyph maps to Font DICT 0, so the whole
+	// thing is just zero-valued bytes, which make() already gives us.
+	fdSelect := make([]byte, 1+len(glyphs))
 
 	buildTopDict := func(charsetOff, csOff, fdaOff, fdsOff int) []byte {
 		var buf bytes.Buffer
@@ -778,8 +789,15 @@ func TestCFF_CIDKeyedCharsetAndFDSelect(t *testing.T) {
 	out.Write(csIndex)
 	out.Write(fdArray)
 	out.Write(fdSelect)
+	return out.Bytes()
+}
 
-	font, ok := parseCFFFont(out.Bytes())
+// TestCFF_CIDKeyedCharsetAndFDSelect exercises this file's own CID-keyed
+// parsing end to end (not through cid.go, whose own integration is
+// covered separately by cid_test.go's TestLoad_Type0CIDFontType0CFF).
+func TestCFF_CIDKeyedCharsetAndFDSelect(t *testing.T) {
+	data := buildTestCIDCFF(t, [][]byte{{}, squareCharstring()}, []uint16{500})
+	font, ok := parseCFFFont(data)
 	if !ok {
 		t.Fatalf("parseCFFFont failed")
 	}

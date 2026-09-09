@@ -89,6 +89,70 @@ func TestCidGlyphLookup_ExplicitStream(t *testing.T) {
 	}
 }
 
+// TestCidCFFGlyphLookup exercises cidCFFGlyphLookup directly against a
+// fake cffFont (its cidToGID map set up by hand - cff_test.go's own
+// tests already cover building it via a full parseCFFFont round trip).
+func TestCidCFFGlyphLookup(t *testing.T) {
+	t.Parallel()
+	cff := cffFont{isCID: true, cidToGID: map[uint16]uint16{500: 3}}
+	lookup := cidCFFGlyphLookup(&cff)
+
+	if gid, ok := lookup(500); !ok || gid != 3 {
+		t.Errorf("lookup(500) = (%d,%v), want (3,true)", gid, ok)
+	}
+	if _, ok := lookup(1); ok {
+		t.Errorf("lookup(1) found a glyph, want not-found (not in the fake charset)")
+	}
+	if _, ok := lookup(-1); ok {
+		t.Errorf("lookup(-1) found a glyph, want not-found")
+	}
+	if _, ok := lookup(0x10000); ok {
+		t.Errorf("lookup(0x10000) found a glyph, want not-found (out of range)")
+	}
+}
+
+// TestLoad_Type0CIDFontType0CFF is TestLoad_Type0IdentityH's counterpart
+// for a CIDFontType0 descendant (a CID-keyed CFF program via
+// /FontFile3, rather than CIDFontType2's embedded TrueType via
+// /FontFile2): CID 1 must resolve to a real outline via the CFF
+// program's own charset (cff.go's GIDForCID), with no /CIDToGIDMap
+// involved at all (see cidCFFGlyphLookup's doc comment on why a
+// CIDFontType0 descendant never has one).
+func TestLoad_Type0CIDFontType0CFF(t *testing.T) {
+	cffData := buildTestCIDCFF(t, [][]byte{{}, squareCharstring()}, []uint16{1})
+
+	resolver := fakeResolver{objects: map[int]syntax.Object{
+		10: syntax.Stream{Raw: cffData},
+		20: syntax.Dictionary{
+			"Subtype":        syntax.Name("CIDFontType0"),
+			"DW":             syntax.Integer(1000),
+			"W":              syntax.Array{syntax.Integer(1), syntax.Array{syntax.Integer(600)}},
+			"FontDescriptor": syntax.Dictionary{"FontFile3": syntax.Reference{Number: 10}},
+		},
+	}}
+	dict := syntax.Dictionary{
+		"Subtype":         syntax.Name("Type0"),
+		"Encoding":        syntax.Name("Identity-H"),
+		"DescendantFonts": syntax.Array{syntax.Reference{Number: 20}},
+	}
+
+	f, err := Load(dict, resolver)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w := f.Width(1); w != 600 {
+		t.Errorf("Width(CID 1) = %v, want 600", w)
+	}
+	glyph := f.Glyph(1) // CID 1 -> GID 1 via the CFF program's own charset.
+	if glyph == nil || len(glyph.Subpaths) == 0 {
+		t.Fatalf("Glyph(CID 1) did not resolve the embedded CFF square outline")
+	}
+	minX, minY, maxX, maxY := pathBounds(t, glyph)
+	if minX != 100 || minY != 100 || maxX != 800 || maxY != 800 {
+		t.Errorf("glyph bounds = (%v,%v)-(%v,%v), want the embedded square (100,100)-(800,800)", minX, minY, maxX, maxY)
+	}
+}
+
 func TestCidGlyphLookup_UnrecognizedNameFallsBackToIdentity(t *testing.T) {
 	t.Parallel()
 	descendant := syntax.Dictionary{"CIDToGIDMap": syntax.Name("SomeUnknownName")}

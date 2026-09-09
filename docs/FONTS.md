@@ -694,20 +694,31 @@ above:
   here: a CFF font's own built-in Encoding table (16), predefined
   Expert/ExpertSubset charsets (1/2), and the deprecated implicit-`seac`
   4-argument `endchar` form.
-- **3b - wire into `simple.go` for `/FontFile3`: Not started.** Needs
-  `font.go`'s `glyphSource`/`lookupGID` fields generalized to accept
-  either an `*sfntFont` or a `*cffFont` (an interface with
-  `GlyphOutline`/`UnitsPerEm` methods - both types already have the
-  right shape, see 3a above) and a name-based glyph-lookup path
-  alongside `simpleGlyphLookup`'s existing cmap-based one (via
-  `cffFont.GIDForRune`, which already resolves a charset name to a rune
-  the same way `/Differences` array names do - see `glyphNameToRune` in
-  encoding.go).
-- **3c - wire into `cid.go` for CIDFontType0: Not started.** Needs a
-  `cidGlyphLookup`-equivalent built from `cffFont.GIDForCID` instead of
-  `/CIDToGIDMap` (a CIDFontType0 descendant has no such entry per the
-  specification - CID-to-GID mapping comes from the CFF program's own
-  charset instead, which 3a's `cidToGID` map already provides).
+- **3b - wire into `simple.go` for `/FontFile3`: Done.** `font.go`'s
+  `Font.glyphSource` field is now typed as a new `glyphOutlineSource`
+  interface (`GlyphOutline`/`UnitsPerEm`) that both `*sfntFont` and
+  `*cffFont` satisfy - `sfntFont` gained a `UnitsPerEm` method
+  (truetype.go) to match `cffFont`'s. `simple.go`'s `loadSimpleFont` now
+  tries `loadEmbeddedTrueType` (`/FontFile2`) first and
+  `loadEmbeddedCFF` (new - `/FontFile3`, accepting either a bare CFF/
+  Type1C program or an OpenType wrapper whose own `"CFF "` table holds
+  it) second, before falling back to `notdefGlyph`; the stream-reading
+  step both share was factored out as `readFontFileStream`. Glyph
+  lookup for a CFF-backed simple font is `simpleCFFGlyphLookup` (new):
+  code -> rune via the PDF font dictionary's own `/Encoding` (unchanged
+  from the TrueType path) -> GID via `cffFont.GIDForRune`'s charset-name
+  resolution - deliberately with no "symbolic, raw code" fallback (a
+  CFF program's own built-in Encoding table is not read - see cff.go's
+  scope). Verified end to end by `TestLoad_SimpleFontWithEmbeddedCFF`
+  and `TestLoad_SimpleFontWithEmbeddedOpenTypeCFF` (font_test.go).
+- **3c - wire into `cid.go` for CIDFontType0: Done.** `cid.go`'s
+  `loadType0Font` now falls back to `loadEmbeddedCFF` when no embedded
+  TrueType program is found, using a new `cidCFFGlyphLookup` built from
+  `cffFont.GIDForCID` - never `/CIDToGIDMap` (a CIDFontType0 descendant
+  has no such entry per the specification; CID-to-GID mapping comes
+  from the CFF program's own charset instead, via 3a's `cidToGID` map).
+  Verified end to end by `TestLoad_Type0CIDFontType0CFF` (cid_test.go),
+  using a new `buildTestCIDCFF` fixture helper (cff_test.go).
 - **3d - wire into `probe.go`/`FontFace`: Not started.** `HasOutlines`
   should become true for an `OTTO`-tagged face once its `"CFF "` table
   can actually be parsed via 3a's `parseCFFFont`, and `FontFace.Outline`

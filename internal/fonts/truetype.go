@@ -289,6 +289,17 @@ func parseLoca(raw []byte, numGlyphs uint16, format int16) ([]uint32, bool) {
 // composites more than one or two levels deep.
 const maxCompositeDepth = 8
 
+// UnitsPerEm reports how many font design units make up one em in this
+// program's own outline coordinate space - see this type's unitsPerEm
+// field doc comment. It exists (alongside cffFont's identically-shaped
+// method, cff.go) so that font.go's Font type can scale a glyph outline
+// from either kind of embedded font program through one shared
+// glyphOutlineSource interface, without needing to know which one
+// produced it.
+func (f *sfntFont) UnitsPerEm() uint16 {
+	return f.unitsPerEm
+}
+
 // GlyphOutline returns glyph index gid's outline as a graphics.Path in
 // the font's own native "design units" coordinate space (i.e. not yet
 // scaled by unitsPerEm - see Font.Glyph in font.go, which does that

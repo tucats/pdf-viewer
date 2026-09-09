@@ -46,6 +46,31 @@ func TestSimpleGlyphLookup_NonSymbolicFallsBackToRawCode(t *testing.T) {
 	}
 }
 
+// TestSimpleCFFGlyphLookup exercises simpleCFFGlyphLookup directly
+// against a fake cffFont (its runeToGID map set up by hand, rather than
+// via a full parseCFFFont round trip - cff_test.go's own tests already
+// cover that construction step), confirming it resolves a code through
+// the PDF encoding table to a rune and then to a GID.
+func TestSimpleCFFGlyphLookup(t *testing.T) {
+	t.Parallel()
+	cff := cffFont{runeToGID: map[rune]uint16{'A': 7}}
+	encoding := standardEncoding() // covers ASCII, so code 0x41 ('A') resolves without an explicit /Differences array.
+	lookup := simpleCFFGlyphLookup(&cff, encoding)
+
+	if gid, ok := lookup(0x41); !ok || gid != 7 {
+		t.Errorf("lookup('A') = (%d,%v), want (7,true)", gid, ok)
+	}
+	if _, ok := lookup(0x42); ok {
+		t.Errorf("lookup('B') found a glyph, want not-found (not in the fake charset)")
+	}
+	if _, ok := lookup(-1); ok {
+		t.Errorf("lookup(-1) found a glyph, want not-found")
+	}
+	if _, ok := lookup(9999); ok {
+		t.Errorf("lookup(9999) found a glyph, want not-found")
+	}
+}
+
 func TestSimpleGlyphLookup_NotFound(t *testing.T) {
 	t.Parallel()
 	sfnt := sfntFont{cmap: cmapSubtable{entries: map[rune]uint16{}}}

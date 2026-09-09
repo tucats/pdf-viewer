@@ -33,6 +33,31 @@ import (
 // never needs its own separate "what if the glyph can't be found" branch
 // - see docs/capability-matrix.md's Fonts section for exactly which font
 // programs this package can and cannot extract real outlines from.
+// glyphOutlineSource is the small interface both an embedded TrueType
+// program (*sfntFont, truetype.go) and an embedded CFF program
+// (*cffFont, cff.go) satisfy, letting Font (below) extract and scale a
+// real glyph outline without needing to know which of PDF's several
+// embedded-font-program formats actually produced it - simple.go's
+// loadSimpleFont and cid.go's loadType0Font each try a TrueType program
+// first (/FontFile2) and fall back to a CFF one (/FontFile3) before
+// giving up and leaving glyphSource nil (see Font's own doc comment on
+// what happens then).
+type glyphOutlineSource interface {
+	// GlyphOutline returns glyph index gid's outline in the font
+	// program's own native design-units coordinate space, and ok=false
+	// if gid has no usable outline (out of range, or malformed program
+	// data) - see sfntFont.GlyphOutline and cffFont.GlyphOutline's own
+	// doc comments, which this interface method matches exactly.
+	GlyphOutline(gid uint16) (*graphics.Path, bool)
+
+	// UnitsPerEm reports how many font design units make up one em in
+	// this program's own outline coordinate space - see scaleGlyph,
+	// which uses it to rescale an outline into this package's own fixed
+	// 1000-units-per-em glyph space (see the widths field's doc comment
+	// above), regardless of which kind of program supplied it.
+	UnitsPerEm() uint16
+}
+
 type Font struct {
 	// TwoByteCodes is true for a Type0/CID composite font (this package
 	// only supports Identity-H/V encoding - see cid.go - so a "code" for
@@ -50,11 +75,13 @@ type Font struct {
 	widths       map[int]float64
 	defaultWidth float64
 
-	// glyphSource is the parsed embedded TrueType program backing this
-	// font's real glyph outlines, or nil if none is available (no
-	// /FontFile2 was embedded, or it failed to parse - see
-	// parseSfnt) - see Glyph's fallback behavior above.
-	glyphSource *sfntFont
+	// glyphSource is the parsed embedded font program backing this
+	// font's real glyph outlines - either a TrueType program (*sfntFont,
+	// truetype.go, from /FontFile2) or a CFF program (*cffFont, cff.go,
+	// from /FontFile3) - or nil if neither is available (see
+	// glyphOutlineSource's own doc comment for why both kinds share one
+	// interface here) - see Glyph's fallback behavior above.
+	glyphSource glyphOutlineSource
 
 	// lookupGID maps a character code to a glyph index within
 	// glyphSource, or ok=false if no mapping could be found. It is nil
@@ -109,7 +136,7 @@ func (f *Font) Glyph(code int) *graphics.Path {
 					// case at all.
 					return nil
 				}
-				return scaleGlyph(outline, f.glyphSource.unitsPerEm)
+				return scaleGlyph(outline, f.glyphSource.UnitsPerEm())
 			}
 		}
 	}

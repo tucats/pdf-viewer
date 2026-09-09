@@ -108,6 +108,72 @@ func TestLoad_SimpleFontWithEmbeddedTrueType(t *testing.T) {
 	}
 }
 
+// TestLoad_SimpleFontWithEmbeddedCFF is TestLoad_SimpleFontWithEmbeddedTrueType's
+// counterpart for a bare CFF/Type1C /FontFile3 program (cff.go),
+// confirming the same square outline comes back through Font.Glyph
+// regardless of which embedded font program format produced it.
+func TestLoad_SimpleFontWithEmbeddedCFF(t *testing.T) {
+	cffData := buildTestCFF(t, [][]byte{{}, squareCharstring()}, []string{"A"}, nil, nil)
+
+	resolver := fakeResolver{objects: map[int]syntax.Object{
+		10: syntax.Stream{Raw: cffData},
+	}}
+	dict := syntax.Dictionary{
+		"Subtype":   syntax.Name("Type1"),
+		"FirstChar": syntax.Integer(65),
+		"LastChar":  syntax.Integer(65),
+		"Widths":    syntax.Array{syntax.Integer(750)},
+		"FontDescriptor": syntax.Dictionary{
+			"FontFile3": syntax.Reference{Number: 10},
+		},
+	}
+
+	f, err := Load(dict, resolver)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	glyph := f.Glyph(65) // 'A' under the default StandardEncoding.
+	if glyph == nil || len(glyph.Subpaths) == 0 {
+		t.Fatalf("Glyph('A') did not return the embedded CFF outline")
+	}
+	minX, minY, maxX, maxY := pathBounds(t, glyph)
+	if minX != 100 || minY != 100 || maxX != 800 || maxY != 800 {
+		t.Errorf("glyph bounds = (%v,%v)-(%v,%v), want the embedded square (100,100)-(800,800)", minX, minY, maxX, maxY)
+	}
+}
+
+// TestLoad_SimpleFontWithEmbeddedOpenTypeCFF exercises loadEmbeddedCFF's
+// other accepted shape: a /FontFile3 whose bytes are a full sfnt wrapper
+// (an "OpenType/CFF" font) rather than a bare CFF program, with the
+// actual CFF program inside its "CFF " table - see truetype.go's
+// sfntVersionOTTO and loadEmbeddedCFF's own doc comment.
+func TestLoad_SimpleFontWithEmbeddedOpenTypeCFF(t *testing.T) {
+	cffData := buildTestCFF(t, [][]byte{{}, squareCharstring()}, []string{"A"}, nil, nil)
+	wrapped := assembleSfnt(sfntVersionOTTO, []sfntTable{{"CFF ", cffData}}, 0)
+
+	resolver := fakeResolver{objects: map[int]syntax.Object{
+		10: syntax.Stream{Raw: wrapped},
+	}}
+	dict := syntax.Dictionary{
+		"Subtype":   syntax.Name("Type1"),
+		"FirstChar": syntax.Integer(65),
+		"LastChar":  syntax.Integer(65),
+		"Widths":    syntax.Array{syntax.Integer(750)},
+		"FontDescriptor": syntax.Dictionary{
+			"FontFile3": syntax.Reference{Number: 10},
+		},
+	}
+
+	f, err := Load(dict, resolver)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	glyph := f.Glyph(65)
+	if glyph == nil || len(glyph.Subpaths) == 0 {
+		t.Fatalf("Glyph('A') did not return the outline embedded inside the sfnt-wrapped \"CFF \" table")
+	}
+}
+
 func TestLoad_SimpleFontNoEmbeddedProgramFallsBackToNotdef(t *testing.T) {
 	dict := syntax.Dictionary{
 		"Subtype":   syntax.Name("Type1"),

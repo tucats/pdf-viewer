@@ -21,18 +21,19 @@
 //     numerically equal to the glyph's CID - see cid.go's doc comment
 //     for the full rationale on this scope decision).
 //
-// Real glyph *outlines* are extracted only from an embedded TrueType
-// program (/FontFile2 on a simple font's own /FontDescriptor, or on a
-// Type0 font's descendant CIDFontType2's /FontDescriptor - see
-// truetype.go and cmap.go). Type 1 programs (/FontFile), bare CFF/
-// OpenType programs (/FontFile3), and any non-embedded font (no
-// /FontFile* entry at all - there being no system font service this
-// package is permitted to query, see below) all still produce a fully
-// usable Font, just one whose Glyph method paints a small placeholder
-// box (notdefGlyph, in font.go) instead of a real outline - see Font's
-// own doc comment for the complete missing-glyph policy, and
-// docs/capability-matrix.md for the authoritative, up-to-date support
-// matrix.
+// Real glyph *outlines* are extracted from an embedded TrueType program
+// (/FontFile2 on a simple font's own /FontDescriptor, or on a Type0
+// font's descendant CIDFontType2's /FontDescriptor - see truetype.go and
+// cmap.go) or an embedded CFF program (/FontFile3, including an
+// OpenType/CFF wrapper - see cff.go, which also serves a
+// CIDFontType0 descendant's own CFF program). A Type 1 program
+// (/FontFile) and any non-embedded font (no /FontFile* entry at all -
+// there being no system font service this package is permitted to
+// query, see below) still produce a fully usable Font, just one whose
+// Glyph method paints a small placeholder box (notdefGlyph, in font.go)
+// instead of a real outline - see Font's own doc comment for the
+// complete missing-glyph policy, and docs/capability-matrix.md for the
+// authoritative, up-to-date support matrix.
 //
 // # A hard constraint: no system font service
 //

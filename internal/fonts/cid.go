@@ -12,8 +12,8 @@ import (
 // "descendant font" (PDF specification 9.7.4) - almost always
 // /Subtype /CIDFontType2 (a CID-keyed TrueType font, which this package
 // can extract real outlines from - see truetype.go) or
-// /CIDFontType0 (a CID-keyed CFF/Type1C font, which it cannot - see
-// this file's fallback behavior below) - together with an /Encoding
+// /CIDFontType0 (a CID-keyed CFF font, extracted via cff.go - see
+// cidCFFGlyphLookup below) - together with an /Encoding
 // naming how a shown string's raw bytes become character codes, and
 // each descendant font's own /CIDToGIDMap naming how a character code
 // (here, always equal to a CID - see below) becomes a glyph index.
@@ -58,13 +58,17 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	f.widths = parseCIDWidths(descendant["W"], resolver)
 
 	descriptor, _ := dictValue(resolver, descendant, "FontDescriptor")
-	sfnt, ok := loadEmbeddedTrueType(descriptor, resolver)
-	if !ok {
-		diag.Note(resolver, "Type0 font %v has no usable embedded TrueType outline data (no /FontFile2, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"])
+	if sfnt, ok := loadEmbeddedTrueType(descriptor, resolver); ok {
+		f.glyphSource = &sfnt
+		f.lookupGID = cidGlyphLookup(descendant, resolver)
 		return f, nil
 	}
-	f.glyphSource = &sfnt
-	f.lookupGID = cidGlyphLookup(descendant, resolver)
+	if cff, ok := loadEmbeddedCFF(descriptor, resolver); ok {
+		f.glyphSource = &cff
+		f.lookupGID = cidCFFGlyphLookup(&cff)
+		return f, nil
+	}
+	diag.Note(resolver, "Type0 font %v has no usable embedded TrueType or CFF outline data (no /FontFile2 or /FontFile3, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"])
 	return f, nil
 }
 
@@ -213,6 +217,37 @@ func cidGlyphLookup(descendant syntax.Dictionary, resolver Resolver) func(code i
 			return 0, false
 		}
 		return gid, true
+	}
+}
+
+// cidCFFGlyphLookup returns the lookupGID function (see Font's doc
+// comment) for a CID-keyed font backed by an embedded CFF program (a
+// CIDFontType0 descendant's own /FontFile3 - see loadEmbeddedCFF in
+// simple.go, reused here unchanged since parsing a CFF program's bytes
+// doesn't care which PDF font dictionary embedded them). Per this
+// package's scope (see the package-level doc comment above), a "code"
+// reaching this function is already known to be a CID (since only
+// Identity-H/V encodings are supported, where code == CID by
+// definition) - so this simply asks the CFF program's own charset
+// (already inverted from CID -> GID by cff.go's parseCFFFont, into
+// cffFont.GIDForCID) to resolve it.
+//
+// Unlike cidGlyphLookup above, this never falls back to treating code as
+// its own GID: a CIDFontType0 descendant has no /CIDToGIDMap entry at
+// all (PDF specification 9.7.4.2 - that entry only applies to
+// CIDFontType2), since CID-to-GID mapping for a CFF-backed CID font is
+// defined by the CFF program's own charset instead. A CFF program that
+// turns out not to actually be CID-keyed (nonconformant, but not
+// impossible in a real-world file) has no cidToGID map at all, so
+// GIDForCID simply reports every code as not found - correctly falling
+// back to notdefGlyph rather than guessing an identity mapping the
+// specification does not describe for this font kind.
+func cidCFFGlyphLookup(cff *cffFont) func(code int) (uint16, bool) {
+	return func(code int) (uint16, bool) {
+		if code < 0 || code > 0xFFFF {
+			return 0, false
+		}
+		return cff.GIDForCID(uint16(code))
 	}
 }
 

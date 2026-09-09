@@ -9,11 +9,11 @@ import (
 )
 
 // This file exercises Phase 3's image support (referenced XObject
-// images, inline images, image masks, soft masks, and DCTDecode/JPEG)
-// end to end through the public API, against the fixtures
-// tools/genfixtures/main.go's buildImageRGB, buildImageMask,
-// buildImageSMask, buildImageJPEG, buildInlineImage, and
-// buildRotatedPage add - the image counterpart to
+// images, inline images, image masks, soft masks, and DCTDecode/JPEG),
+// plus Phase 8's JBIG2Decode, end to end through the public API, against
+// the fixtures tools/genfixtures/main.go's buildImageRGB,
+// buildImageMask, buildImageSMask, buildImageJPEG, buildImageJBIG2,
+// buildInlineImage, and buildRotatedPage add - the image counterpart to
 // pdfviewer_render_test.go's vector-graphics rendering tests.
 
 // renderPage opens fixture, renders its first page at the default
@@ -115,6 +115,35 @@ func TestRenderJPEGImage(t *testing.T) {
 		t.Fatalf("Render size = %dx%d, want 100x100", b.Dx(), b.Dy())
 	}
 	assertRGB8(t, img, 50, 50, 20, 40, 200, 20)
+}
+
+// TestRenderJBIG2Image confirms a JBIG2Decode-filtered bilevel image
+// (buildImageJBIG2: a 32x32 bitmap, black top-left quadrant and black
+// one-pixel border, otherwise white) decodes and paints correctly end to
+// end - through the real cross-reference/object-resolution pipeline and
+// internal/image's 1-bit sample handling, not just internal/filter's own
+// unit tests.
+//
+// The asserted points are chosen to pin down the two things a bilevel
+// pipeline most easily gets wrong. Black and white being the right way
+// round: JBIG2 defines 1 as black while a 1-bit DeviceGray sample's 0 is
+// black, so the decoder inverts (see jbig2.go's packInverted), and an
+// inversion bug would swap every expectation below. And the image's
+// orientation: only the *top-left* quadrant is black, so a horizontal or
+// vertical flip would move it to a quadrant this test expects to be
+// white.
+func TestRenderJBIG2Image(t *testing.T) {
+	img := renderPage(t, "image-jbig2.pdf")
+	if b := img.Bounds(); b.Dx() != 100 || b.Dy() != 100 {
+		t.Fatalf("Render size = %dx%d, want 100x100", b.Dx(), b.Dy())
+	}
+	assertRGB8(t, img, 25, 25, 0, 0, 0, 2)       // top-left quadrant: black
+	assertRGB8(t, img, 75, 25, 255, 255, 255, 2) // top-right quadrant: white
+	assertRGB8(t, img, 25, 75, 255, 255, 255, 2) // bottom-left quadrant: white
+	assertRGB8(t, img, 75, 75, 255, 255, 255, 2) // bottom-right quadrant: white
+	assertRGB8(t, img, 50, 1, 0, 0, 0, 2)        // top border
+	assertRGB8(t, img, 1, 50, 0, 0, 0, 2)        // left border
+	assertRGB8(t, img, 98, 98, 0, 0, 0, 2)       // bottom-right border corner
 }
 
 // TestRenderInlineImage confirms an inline ("BI"/"ID"/"EI") image

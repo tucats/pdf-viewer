@@ -79,7 +79,9 @@ option and fails with a distinguishable error given a wrong one or none.
 
 ## Phase 8: JBIG2Decode
 
-**Status: 8a and 8b done; 8c in progress.**
+**Status: Done (8a, 8b and 8c).** Generic-region coding only - see
+`docs/capability-matrix.md`'s JBIG2Decode row for exactly which JBIG2
+features are and are not implemented.
 
 JBIG2 is a common compression choice for black-and-white scanned pages
 specifically because it beats CCITT Group 4 (already supported) on
@@ -704,3 +706,48 @@ in order, not rewritten later except to fix mistakes.
     necessarily uses symbol/text regions, which stop this decoder
     first. Phase 8c still owes the `tools/genfixtures` builder, an
     end-to-end render test, and the `docs/capability-matrix.md` update.
+
+### Phase 8c: JBIG2 fixture, render test and documentation — done (2026-09-09)
+
+- **`tools/genfixtures` (`buildImageJBIG2`, new fixture
+    `image-jbig2.pdf`).** A 100x100-point page painting a referenced
+    image XObject with `/Filter /JBIG2Decode`: a 32x32 bilevel bitmap
+    whose top-left quadrant is black and whose other three quadrants are
+    white, inside a one-pixel black border, encoded with typical
+    prediction enabled. The shape is deliberately asymmetric in both
+    axes *and* in black versus white, so a rendering test against it
+    fails under a horizontal flip, a vertical flip, or an inverted
+    black/white mapping - the three mistakes a bilevel image pipeline
+    most easily makes. The JBIG2 bytes come from `internal/filter`'s own
+    encoder at fixture-build time, so unlike `image-jpeg.pdf` (whose
+    bytes depend on the standard library's JPEG encoder) this fixture is
+    fully reproducible from this project's own code.
+- **End-to-end tests.** `TestRenderJBIG2Image`
+    (`pdfviewer_image_test.go`) renders the fixture through the public
+    API and asserts each quadrant's color and three border points;
+    `image-jbig2.pdf` was added to
+    `TestRenderMatchesReferenceImages`'s list, with the golden PNG
+    checked in at `testdata/renderrefs/image-jbig2.png`. Together these
+    exercise the whole path - cross-reference and object resolution,
+    `internal/filter`'s JBIG2 decoding, `internal/image`'s 1-bit sample
+    handling, and rasterization - rather than only `internal/filter`'s
+    own unit tests. `internal/filter`'s `FuzzDecode` gained two JBIG2
+    seed streams (14M executions clean); the root package's
+    `FuzzOpenAndRender` picks the new fixture up as a seed
+    automatically (10M executions clean). Full test suite, `go vet` and
+    the race detector all pass.
+- **Documentation.** `docs/capability-matrix.md`'s JBIG2Decode filter
+    row moved from "Not scheduled / Not started" to "Phase 8 / Partial",
+    listing what is implemented and naming every deliberately
+    unimplemented JBIG2 feature; its images row was split so JBIG2 and
+    JPX no longer share one entry, and the JPXDecode rows now point at
+    Phase 14 rather than saying "same rationale as JBIG2Decode" (a
+    rationale that no longer applies to JBIG2). `FIXTURES.md` documents
+    the new fixture.
+- **What's carried forward.** Phase 8 is complete for generic-region
+    coding. Symbol dictionary and text regions remain the one JBIG2
+    feature likely to matter in practice (they are how the highest
+    compression ratios on large text scans are achieved); a stream using
+    them fails cleanly with `ErrUnsupported` naming the segment type, so
+    the gap is visible rather than silent, and a follow-on phase can add
+    them if real-world files turn out to need it.

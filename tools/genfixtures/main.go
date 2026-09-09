@@ -46,6 +46,7 @@ import (
 	"strings"
 
 	"github.com/tucats/pdf-viewer/internal/crypt"
+	"github.com/tucats/pdf-viewer/internal/filter"
 )
 
 // outputDir is where every generated fixture is written: the
@@ -94,6 +95,7 @@ func main() {
 		{"image-mask.pdf", buildImageMask()},
 		{"image-smask.pdf", buildImageSMask()},
 		{"image-jpeg.pdf", buildImageJPEG()},
+		{"image-jbig2.pdf", buildImageJBIG2()},
 		{"inline-image.pdf", buildInlineImage()},
 		{"rotated-page.pdf", buildRotatedPage()},
 		{"text-simple-truetype.pdf", buildTextSimpleTrueType()},
@@ -820,6 +822,60 @@ func buildImageJPEG() []byte {
 	imgDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 4 /Height 4 "+
 		"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length %d >>", len(jpegData))
 	b.addObject(5, 0, imgDict, jpegData)
+
+	return b.finish(1)
+}
+
+// buildImageJBIG2 returns a single 100x100-point page that paints a
+// referenced image XObject encoded with JBIG2Decode - the filter scanned
+// black-and-white pages commonly use (see docs/PLAN2.md's Phase 8). The
+// image is a 32x32 bilevel bitmap whose top-left quadrant is black and
+// whose remaining three quadrants are white, inside a one-pixel black
+// border.
+//
+// That shape is deliberately asymmetric in both axes: it renders
+// differently from itself under a horizontal flip, a vertical flip, or an
+// inversion of black and white, so a rendered-pixel test against it
+// catches the three mistakes easiest to make in a bilevel image pipeline
+// (JBIG2 defines 1 as black, the opposite of a 1-bit DeviceGray sample -
+// see jbig2.go's packInverted). The border additionally puts foreground
+// pixels along every edge, where the arithmetic coder's context template
+// reads neighbors from outside the bitmap.
+//
+// The JBIG2 bytes are produced at fixture-build time by
+// internal/filter's own encoder (see jbig2mq.go's mqEncoder doc comment
+// for why that encoder exists), which keeps this fixture's provenance
+// identical to every other hand-authored one here - nothing is sourced
+// externally. Unlike buildImageJPEG, the output is fully determined by
+// this project's own code rather than by a standard-library encoder, so
+// it is reproducible in exactly the way the rest of this package is.
+func buildImageJBIG2() []byte {
+	const dim = 32
+	pix := make([]byte, dim*dim)
+	for y := 0; y < dim; y++ {
+		for x := 0; x < dim; x++ {
+			border := x == 0 || y == 0 || x == dim-1 || y == dim-1
+			topLeftQuadrant := x < dim/2 && y < dim/2
+			if border || topLeftQuadrant {
+				pix[y*dim+x] = 1 // JBIG2 foreground, i.e. black.
+			}
+		}
+	}
+	jbig2Data := filter.EncodeJBIG2GenericRegion(dim, dim, pix, true)
+
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n100 0 0 100 0 0 cm\n/Im0 Do\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	imgDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d "+
+		"/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /Length %d >>",
+		dim, dim, len(jbig2Data))
+	b.addObject(5, 0, imgDict, jbig2Data)
 
 	return b.finish(1)
 }

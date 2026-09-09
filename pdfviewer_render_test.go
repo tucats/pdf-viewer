@@ -226,6 +226,7 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"image-mask.pdf",
 		"image-smask.pdf",
 		"image-jpeg.pdf",
+		"image-jbig2.pdf",
 		"inline-image.pdf",
 		"rotated-page.pdf",
 		"text-simple-truetype.pdf",

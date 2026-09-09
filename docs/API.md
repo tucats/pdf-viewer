@@ -22,6 +22,8 @@ walkthrough with worked examples.
 - [Quick start](#quick-start)
 - [Core concepts](#core-concepts)
 - [Opening a document](#opening-a-document)
+- [Diagnostics](#diagnostics)
+- [Font substitution](#font-substitution)
 - [Inspecting a document](#inspecting-a-document)
 - [Rendering a page](#rendering-a-page)
 - [Thumbnails](#thumbnails)
@@ -145,14 +147,129 @@ if err != nil {
 defer doc.Close()
 ```
 
-`opts ...OpenOption` is a reserved extension point for future
-open-time configuration; there are no `OpenOption` values to pass yet, so
-in practice every call today omits it entirely, as in the examples above.
+`opts ...OpenOption` is an extension point for open-time configuration.
+Most calls omit it entirely, as in the examples above; the two values
+currently available are `WithDiagnostics` (see
+[Diagnostics](#diagnostics), directly below) and `WithFontSubstitution`
+(see [Font substitution](#font-substitution)).
 
 Always call `Close` on a successfully opened `Document` once you are
 done with it (typically via `defer`) - see
 [Concurrency](#concurrency) for what `Close` does and does not
 guarantee when other goroutines might be involved.
+
+## Diagnostics
+
+```go
+func WithDiagnostics(d *Diagnostics) OpenOption
+
+type Diagnostics struct{ /* ... */ }
+func (d *Diagnostics) Messages() []string
+```
+
+By default, this package tolerates a lot silently: an unsupported font
+program that falls back to the placeholder box, an unresolvable
+resource name, a malformed field it substituted a default for, and
+similar recoverable situations are simply not surfaced anywhere - only
+content this package cannot tolerate *at all* causes `Render` or
+`Thumbnail` to return an error (see [Error handling](#error-handling)).
+
+`WithDiagnostics` opts a `Document` into recording each of those
+tolerated situations as a human-readable message, in the order they
+occur, for later inspection - a debugging aid, not a substitute for the
+error return:
+
+```go
+diag := &pdfviewer.Diagnostics{}
+doc, err := pdfviewer.OpenFile("input.pdf", pdfviewer.WithDiagnostics(diag))
+if err != nil {
+	log.Fatal(err)
+}
+defer doc.Close()
+
+page, err := doc.Page(0)
+if err != nil {
+	log.Fatal(err)
+}
+img, err := page.Render(context.Background(), pdfviewer.RenderOptions{})
+if err != nil {
+	log.Fatal(err)
+}
+
+for _, msg := range diag.Messages() {
+	fmt.Println(msg)
+}
+```
+
+A single `Diagnostics` is meant for one `Document` at a time - attaching
+it to a second `Document` does not clear what the first already
+recorded, and both go on appending to the same collection. `Messages`
+is safe to call at any time, including before any page has been
+rendered (an empty slice, not `nil`, if nothing has been recorded yet).
+Without this option, none of this bookkeeping happens at all: this
+package behaves exactly as it always has. See `cmd/pdfpreview
+-diagnostics` for this option wired up in a runnable example.
+
+## Font substitution
+
+```go
+func WithFontSubstitution(cfg FontSubstitution) OpenOption
+
+type FontSubstitution struct {
+	Directories           []string
+	DisableSystemDefaults bool
+}
+```
+
+By default, a `Document` never reads anything outside the PDF file
+itself: a font with no usable embedded glyph program (no `/FontFile`,
+`/FontFile2`, or `/FontFile3`, or one that fails to parse) renders every
+glyph of that font as a small hollow placeholder box sized to the
+glyph's own advance width.
+
+Passing `WithFontSubstitution` opts a `Document` into finding a real
+substitute outline for such fonts from a font file on disk, matched
+against the PDF font's own declared family/weight/style:
+
+```go
+doc, err := pdfviewer.OpenFile("input.pdf",
+	pdfviewer.WithFontSubstitution(pdfviewer.FontSubstitution{}),
+)
+```
+
+`FontSubstitution{}` (the zero value) scans this package's own
+GOOS-gated list of common per-platform font directories.
+`Directories` adds specific paths to search first, ahead of those
+defaults (each scanned non-recursively - list every directory that
+should actually be searched if candidate fonts are nested);
+`DisableSystemDefaults` turns off the built-in platform list entirely,
+leaving only `Directories`:
+
+```go
+doc, err := pdfviewer.OpenFile("input.pdf", pdfviewer.WithFontSubstitution(pdfviewer.FontSubstitution{
+	Directories:           []string{"/opt/company-fonts"},
+	DisableSystemDefaults: true, // only ever search /opt/company-fonts
+}))
+```
+
+Substitution never invokes a platform font service (Core Text,
+DirectWrite, fontconfig, or similar) - it only reads ordinary
+`.ttf`/`.ttc`/`.otf` files via `os.ReadDir`/`os.ReadFile`, the same
+approach this package already uses to read the PDF file itself. It is
+purely additive: a font with a usable embedded program is completely
+unaffected, and a font substitution finds no candidate for still falls
+back to the placeholder box exactly as it would without this option.
+
+**Scope**: substitution currently applies only to simple fonts (Type 1,
+TrueType, MMType1), not to Type 0/CID fonts. Matching a font's
+character code to a candidate's own glyph requires resolving that code
+to a Unicode rune, which is only possible from a simple font's
+`/Encoding`; a Type 0 font's CIDs have no known Unicode meaning without
+a `/ToUnicode` CMap, which this package does not currently parse. A
+non-embedded Type 0 font falls back to the placeholder box regardless of
+this option. See [capability-matrix.md](capability-matrix.md)'s "Font
+substitution" row for the exact current status, and `cmd/pdfpreview
+-substitute-fonts` for this option wired up in a runnable example.
 
 ## Inspecting a document
 
@@ -177,13 +294,20 @@ determined once, up front, and is not itself a resource `Close`
 releases) - `Page` is not: it returns `ErrClosed` once the document has
 been closed.
 
-`Page.Bounds` returns the page's box (its `/MediaBox`, with PDF's
-page-attribute inheritance already resolved if the page itself doesn't
-specify one directly) in PDF points. `Rect`'s field names follow PDF's
-own convention (`LLX`/`LLY` lower-left, `URX`/`URY` upper-right); PDF
-does not guarantee the lower-left corner is actually the smaller corner,
-so `Width`/`Height` can be negative for an unusual file - take their
-absolute value if you need a normalized non-negative size.
+`Page.Bounds` returns the page's box in PDF points: its `/CropBox` (with
+PDF's page-attribute inheritance already resolved if the page itself
+doesn't specify one directly, and clipped to lie within `/MediaBox`), or
+`/MediaBox` itself if the page has no `/CropBox` anywhere in its
+ancestry. This is deliberately `/CropBox` rather than `/MediaBox`: PDF
+producers commonly set `/MediaBox` to a whole physical press sheet (crop
+marks, bleed, and other margin content included) and `/CropBox` to the
+smaller region actually meant to be seen, and every mainstream PDF
+viewer displays that smaller region - `Bounds`, `Render`, and
+`Thumbnail` all agree on this same box. `Rect`'s field names follow
+PDF's own convention (`LLX`/`LLY` lower-left, `URX`/`URY` upper-right);
+PDF does not guarantee the lower-left corner is actually the smaller
+corner, so `Width`/`Height` can be negative for an unusual file - take
+their absolute value if you need a normalized non-negative size.
 
 ```go
 for i := 0; i < doc.PageCount(); i++ {
@@ -213,7 +337,7 @@ honoring `RenderOptions`:
 
 - **`Scale`** is device pixels per PDF point. The zero value means the
   default, `1.0`, so a page's rendered pixel dimensions exactly match
-  its `MediaBox` dimensions in points (before `/Rotate` is applied - a
+  `Page.Bounds`' dimensions in points (before `/Rotate` is applied - a
   90 or 270 degree rotated page swaps width and height in the output).
   To render at a specific DPI, compute `Scale` as `dpi/72` - for example,
   `RenderOptions{Scale: 300.0 / 72.0}` for 300 DPI.
@@ -418,19 +542,21 @@ parallel has two supported options:
 ## What gets rendered
 
 This package renders vector graphics (paths, fills, strokes, clipping),
-images (referenced and inline, including JPEG, image masks, and soft
-masks), text with embedded TrueType and Identity-encoded CID fonts,
-transparency (constant alpha and separable blend modes), shading and
-tiling patterns, Form XObjects, and annotation appearance streams.
+images (referenced and inline, including JPEG, CCITT Group 3/4 fax,
+image masks, and soft masks), text with embedded TrueType and
+OpenType/CFF outlines plus Identity-encoded CID fonts, transparency
+(constant alpha and separable blend modes), shading and tiling
+patterns, Form XObjects, and annotation appearance streams.
 
 It does **not** implement any PDF security handler (encrypted documents
 fail with `ErrEncrypted` - see [Error handling](#error-handling)),
-non-embedded system fonts (a missing or unsupported font program falls
-back to a small placeholder box rather than querying a system font
-service), transparency group isolation, or a handful of narrower,
-explicitly out-of-scope features (Type 1/CFF font outlines, non-Identity
-CID encodings, CCITTFax/JBIG2/JPEG2000 images, true ICC color
-management, and others).
+querying a system font service for a non-embedded font (opt in to
+finding a substitute outline from files on disk instead - see
+[Font substitution](#font-substitution) - or a missing/unsupported font
+falls back to a small placeholder box), transparency group isolation,
+or a handful of narrower, explicitly out-of-scope features (Type 1's
+own charstring outline format, non-Identity CID encodings,
+JBIG2/JPEG2000 images, true ICC color management, and others).
 
 For the complete, current, row-by-row breakdown of exactly what is and
 is not supported - which this guide deliberately does not duplicate, so
@@ -475,6 +601,7 @@ example of this package's API - see each `main.go`'s own doc comment.
 This package has not yet been tagged with a version - see PLAN.md's
 Phase 6 entry for what that decision depends on. The public API
 described in this guide (`Open`, `OpenFile`, `Document`, `Page`,
+`OpenOption` and its values (`WithDiagnostics`, `WithFontSubstitution`),
 `RenderOptions`, `ThumbnailOptions`, `Rect`, and the sentinel errors) is
 considered stable in shape following the Phase 6 API-stabilization
 review, but until an actual release is tagged, treat it the way you

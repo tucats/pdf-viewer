@@ -601,7 +601,20 @@ against it and Phase 3 can later fill in the gap without reshaping this
 phase's API. No directory scanning yet (this phase operates on `[]byte`
 already read into memory by its caller/tests).
 
-**Status.** Not started.
+**Status.** Done (this session). See `internal/fonts/probe.go`,
+`internal/fonts/probe_test.go`, and the supporting refactor of
+`internal/fonts/truetype.go`'s `parseTableDirectory`/`parseSfnt` (split
+into a directory-offset-aware `parseTableDirectory`/`parseSfntAt` pair so
+a `.ttc` face's table directory, which does not start at byte 0 of the
+file, can be parsed with the same code an ordinary single-face file
+uses). `ProbeFontFile` returns one `FontFace` per face (handling both a
+plain file and a `.ttc` collection), each with a `FontCharacteristics`
+derived from that face's `name`/`OS/2` tables (falling back to
+`ParsePostScriptName`/`detectStyleTokens`, reusing Phase 1's helpers,
+when a table is absent) and a `HasOutlines` flag that is `false` for an
+`OTTO` (CFF-outline) face per this phase's non-goal. A `FuzzProbeFontFile`
+target was added alongside the existing `FuzzParseSfnt`, covering the new
+`.ttc`/`name`/`OS/2` parsing surface.
 
 ### Phase 3 - CFF / OpenType-CFF (OTTO) outline support
 

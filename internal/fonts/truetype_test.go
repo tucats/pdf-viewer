@@ -174,19 +174,43 @@ func buildTestSfnt(t *testing.T, glyphs [][]byte, cmapTable []byte) []byte {
 		{"glyf", glyf.Bytes()},
 		{"cmap", cmapTable},
 	}
+	return assembleSfnt(sfntVersionTrueType, tables, 0)
+}
+
+// assembleSfnt writes a complete sfnt table directory (version tag,
+// table count, the three "binary search helper" fields real sfnt files
+// carry but this package's own reader never uses, one 16-byte record per
+// table, then the table bytes themselves back to back) from a set of
+// already-encoded tables. It is the shared low-level byte-layout helper
+// behind buildTestSfnt above (a single ordinary font, base=0) and
+// probe_test.go's TrueType Collection fixture builder (several faces
+// concatenated together, each needing its own nonzero base - see base's
+// own doc below).
+//
+// base is added to every table's recorded offset field, without moving
+// where the tables are actually written within this function's own
+// return value (they always start immediately after this directory,
+// i.e. at byte position 12+len(tables)*16 of the returned slice). This
+// is what lets a caller embed this function's output somewhere other
+// than byte 0 of a larger file (a TrueType Collection's second, third,
+// ... face) while still recording table offsets that are correct once
+// so embedded - see truetype.go's parseTableDirectory doc comment for
+// why table offsets are always measured from the whole file's start
+// rather than from one face's own directory.
+func assembleSfnt(version uint32, tables []sfntTable, base uint32) []byte {
 	// A deterministic tag order keeps this helper's output (and any test
 	// that happens to assert on exact byte layout) reproducible.
 	sort.Slice(tables, func(i, j int) bool { return tables[i].tag < tables[j].tag })
 
 	var out bytes.Buffer
-	_ = binary.Write(&out, binary.BigEndian, uint32(0x00010000))
+	_ = binary.Write(&out, binary.BigEndian, version)
 	_ = binary.Write(&out, binary.BigEndian, uint16(len(tables)))
 	_ = binary.Write(&out, binary.BigEndian, uint16(0)) // searchRange (unused by this package's reader)
 	_ = binary.Write(&out, binary.BigEndian, uint16(0)) // entrySelector
 	_ = binary.Write(&out, binary.BigEndian, uint16(0)) // rangeShift
 
 	headerLen := 12 + len(tables)*16
-	offset := uint32(headerLen)
+	offset := base + uint32(headerLen)
 	type placed struct {
 		tag            string
 		offset, length uint32

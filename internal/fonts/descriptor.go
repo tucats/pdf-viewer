@@ -248,6 +248,44 @@ var styleTokens = []styleToken{
 // why they are handled entirely separately from styleTokens above.
 var foundrySuffixes = []string{"PSMT", "MT", "PS"}
 
+// findStyleToken searches name for the first (leftmost) occurrence of any
+// entry in styleTokens, in styleTokens' own list order when more than one
+// would match at the same position - this is what lets a combined token
+// like "BoldItalic" win over the plain "Bold" token it contains, since
+// styleTokens deliberately lists the combined tokens first (see
+// styleTokens' own doc comment). It returns the byte index of the match
+// within name and the matched token itself, or (-1, styleToken{}) if
+// nothing in styleTokens occurs in name at all.
+func findStyleToken(name string) (int, styleToken) {
+	for _, token := range styleTokens {
+		if idx := indexFold(name, token.text); idx >= 0 {
+			return idx, token
+		}
+	}
+	return -1, styleToken{}
+}
+
+// detectStyleTokens reports whether name contains the word "Bold" and/or
+// the word "Italic"/"Oblique" anywhere in it (case-insensitively),
+// checking for each independently rather than picking a single "first
+// match wins" token the way findStyleToken above does. This
+// independent-checks approach is what correctly reads a "name" table
+// subfamily string like "Bold Italic" (two separate words, space
+// -separated) as *both* bold and italic - findStyleToken's combined
+// tokens ("BoldItalic", with no space) exist specifically to parse a
+// concatenated PostScript-style name such as "Arial-BoldItalicMT", and
+// would miss the space-separated case entirely, matching only "Italic"
+// and silently losing "Bold" (styleTokens lists "Italic" as its own
+// separate entry precisely so a name with only italic and no bold still
+// matches something). This function is used by probe.go's
+// characterizeFace as a fallback signal for a face with no "OS/2" table
+// to read bold/italic from directly.
+func detectStyleTokens(name string) (bold, italic bool) {
+	bold = indexFold(name, "Bold") >= 0
+	italic = indexFold(name, "Italic") >= 0 || indexFold(name, "Oblique") >= 0
+	return bold, italic
+}
+
 // subsetTagPattern matches a PDF font subset tag: exactly six uppercase
 // ASCII letters followed by a "+", which a subsetted embedded font's
 // /BaseFont is required (PDF specification, section 9.6.4.3) to be
@@ -295,12 +333,9 @@ var camelBoundaryAfterAcronym = regexp.MustCompile(`([A-Z]+)([A-Z][a-z])`)
 func ParsePostScriptName(name string) (family string, bold, italic bool) {
 	name = subsetTagPattern.ReplaceAllString(name, "")
 
-	for _, token := range styleTokens {
-		if idx := indexFold(name, token.text); idx >= 0 {
-			name = name[:idx] + name[idx+len(token.text):]
-			bold, italic = token.bold, token.italic
-			break
-		}
+	if idx, token := findStyleToken(name); idx >= 0 {
+		name = name[:idx] + name[idx+len(token.text):]
+		bold, italic = token.bold, token.italic
 	}
 
 	name = stripFoundrySuffixes(name)

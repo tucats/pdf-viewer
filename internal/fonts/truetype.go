@@ -50,6 +50,39 @@ import (
 //     through /CIDToGIDMap - see cid.go) rather than assuming they
 //     coincide.
 
+// sfntVersion* are the four-byte "version" tags an sfnt font file can
+// start with, identifying what kind of font program follows. This
+// package reads this tag in two places: parseTableDirectory (below, for
+// an ordinary single-face file) and probe.go's TrueType Collection
+// handling (for a ".ttc" file bundling several faces, each of which
+// starts with one of these same four tags at its own table directory).
+//
+//   - sfntVersionTrueType and sfntVersionAppleTrue both mean "this font's
+//     outlines live in a 'glyf' table" - the only outline format
+//     truetype.go's glyf/loca parsing (below) understands. The Apple
+//     "true" tag is a historical variant of the same on-disk shape,
+//     occasionally still seen from older Mac tools.
+//   - sfntVersionOTTO means "this font's outlines live in a 'CFF' table
+//     instead" (OpenType with PostScript/CFF outlines) - a completely
+//     different outline encoding this package's truetype.go cannot read
+//     (see docs/FONTS.md's Phase 3, not yet implemented). An OTTO file's
+//     other tables ("name", "OS/2") are laid out identically to a
+//     TrueType-flavored file's, though, which is exactly why probe.go
+//     still accepts this tag when just characterizing a candidate font
+//     file rather than extracting its outlines.
+//   - sfntVersionTTC ("ttcf") means "this is not a single font at all,
+//     but a TrueType Collection: a small header listing the byte offset
+//     of each bundled face's own table directory" - see probe.go's
+//     parseTTCHeader. It is checked by the caller before ever reaching
+//     parseTableDirectory, since a TTC header has a different shape than
+//     an ordinary table directory (no table records of its own).
+const (
+	sfntVersionTrueType  = 0x00010000
+	sfntVersionAppleTrue = 0x74727565 // the four ASCII bytes "true"
+	sfntVersionOTTO      = 0x4F54544F // the four ASCII bytes "OTTO"
+	sfntVersionTTC       = 0x74746366 // the four ASCII bytes "ttcf"
+)
+
 // sfntFont holds the parsed subset of an embedded TrueType font program
 // this package uses. A zero-value sfntFont (as returned by parseSfnt on
 // any failure) has no tables and glyf/lookupGID/glyphIndexForRune all
@@ -76,7 +109,20 @@ type sfntFont struct {
 // - exactly the same tolerance internal/content applies to an
 // unrecognized content stream operator.
 func parseSfnt(data []byte) (sfntFont, bool) {
-	tables, ok := parseTableDirectory(data)
+	return parseSfntAt(data, 0)
+}
+
+// parseSfntAt is parseSfnt's more general form, used by probe.go to parse
+// one face out of a TrueType Collection (".ttc") file: dirOffset is the
+// byte offset, within data, of that face's own table directory (0 for an
+// ordinary single-face file, which is exactly what parseSfnt above
+// passes). See parseTableDirectory's doc comment for why every *other*
+// offset this function reads is still measured from the start of data
+// regardless of dirOffset - a ".ttc" face's tables can be shared with
+// other faces in the same file, so they are always addressed relative to
+// the whole file, never relative to one face's own directory.
+func parseSfntAt(data []byte, dirOffset int) (sfntFont, bool) {
+	tables, _, ok := parseTableDirectory(data, dirOffset)
 	if !ok {
 		return sfntFont{}, false
 	}
@@ -125,57 +171,79 @@ func parseSfnt(data []byte) (sfntFont, bool) {
 	}, true
 }
 
-// parseTableDirectory reads an sfnt file's fixed-size header and table
-// directory, returning a map from each table's 4-byte tag to that
-// table's own byte slice (a subslice of data, not a copy). It bounds-
-// checks every offset and length against len(data) before slicing, so a
-// truncated or hostile file cannot cause an out-of-range panic - it is
-// reported as ok=false instead, exactly like every other malformed-input
-// case in this file.
-func parseTableDirectory(data []byte) (map[string][]byte, bool) {
-	if len(data) < 12 {
-		return nil, false
+// parseTableDirectory reads one sfnt table directory - the fixed-size
+// header naming how many tables follow, then one fixed-size record per
+// table - and returns a map from each table's 4-byte tag (like "head" or
+// "glyf") to that table's own byte slice (a subslice of data, not a
+// copy), plus the four-byte version tag the directory itself started
+// with (one of the sfntVersion* constants above; the caller decides what
+// that tag means for its purposes - see, for example, probe.go's
+// HasOutlines).
+//
+// dirOffset is where the directory itself begins within data: 0 for an
+// ordinary single-face sfnt file (parseSfnt's case), or a nonzero byte
+// offset for one face of a TrueType Collection (probe.go's case).
+// Crucially, dirOffset only affects where the *directory* is read from -
+// every table record's own offset field, once read, is still used as a
+// byte position measured from the very start of data (index 0), never
+// relative to dirOffset. This matches how the sfnt/TTC file formats
+// actually lay things out: a TrueType Collection's individual faces can
+// *share* tables (for example, several faces reusing one "glyf" table),
+// which is only possible because every table offset in the whole file
+// addresses the same shared coordinate space rather than being local to
+// one face's own directory.
+//
+// This function bounds-checks every offset and length against len(data)
+// before slicing, so a truncated or hostile file cannot cause an
+// out-of-range panic - it is reported as ok=false instead, exactly like
+// every other malformed-input case in this file.
+func parseTableDirectory(data []byte, dirOffset int) (map[string][]byte, uint32, bool) {
+	if dirOffset < 0 || dirOffset+12 > len(data) {
+		return nil, 0, false
 	}
-	version := binary.BigEndian.Uint32(data[0:4])
-	// 0x00010000 is the standard TrueType-outline sfnt version; "true"
-	// and "typ1" are historical Apple/legacy variants occasionally still
-	// seen. "OTTO" (CFF-outline OpenType) is deliberately not accepted
-	// here - this package only ever parses "glyf" tables, and a font
-	// with "OTTO" has no "glyf" table to find, so it would fail the
-	// "head"/"glyf" lookups below regardless; rejecting it up front just
-	// gives a clearer reason (though functionally OpenType/CFF-outline
-	// fonts are simply unsupported by this package - see font.go's doc
-	// comment on outline-source coverage).
+	version := binary.BigEndian.Uint32(data[dirOffset : dirOffset+4])
+	// sfntVersionTrueType and sfntVersionAppleTrue are the two sfnt
+	// versions whose outlines this package's glyf/loca parsing (below)
+	// can actually read. sfntVersionOTTO (CFF-outline OpenType) is also
+	// accepted at *this* level - its table directory has the exact same
+	// shape as a TrueType-flavored one, so the tables it does share
+	// (like "name" and "OS/2") can still be read out of it by probe.go
+	// for characterizing a candidate font file - but parseSfnt/
+	// parseSfntAt above will still fail once they look for a "glyf"
+	// table an OTTO file never has (see this file's doc comment on
+	// outline-source coverage, and probe.go's HasOutlines field).
 	switch version {
-	case 0x00010000, 0x74727565: // 0x74727565 == "true"
+	case sfntVersionTrueType, sfntVersionAppleTrue, sfntVersionOTTO:
 	default:
-		return nil, false
+		return nil, 0, false
 	}
-	numTables := int(binary.BigEndian.Uint16(data[4:6]))
+	numTables := int(binary.BigEndian.Uint16(data[dirOffset+4 : dirOffset+6]))
 	const recordSize = 16
-	dirEnd := 12 + numTables*recordSize
+	recordsStart := dirOffset + 12
+	dirEnd := recordsStart + numTables*recordSize
 	if numTables < 0 || dirEnd > len(data) {
-		return nil, false
+		return nil, 0, false
 	}
 
 	tables := make(map[string][]byte, numTables)
 	for i := 0; i < numTables; i++ {
-		rec := data[12+i*recordSize : 12+(i+1)*recordSize]
+		rec := data[recordsStart+i*recordSize : recordsStart+(i+1)*recordSize]
 		tag := string(rec[0:4])
 		offset := binary.BigEndian.Uint32(rec[8:12])
 		length := binary.BigEndian.Uint32(rec[12:16])
 		start, end := int64(offset), int64(offset)+int64(length)
 		if start < 0 || end < start || end > int64(len(data)) {
 			// A single bad table record does not doom the whole font -
-			// tables this package never reads (kern, hinting programs,
-			// name, ...) having bogus offsets should not prevent reading
-			// the tables it does need, so this record is simply skipped
-			// rather than failing the whole parse.
+			// tables this package doesn't always need (kern, hinting
+			// programs, and - depending on the caller - even name/OS/2)
+			// having bogus offsets should not prevent reading the tables
+			// it does need, so this record is simply skipped rather than
+			// failing the whole parse.
 			continue
 		}
 		tables[tag] = data[start:end]
 	}
-	return tables, true
+	return tables, version, true
 }
 
 // parseLoca reads the "loca" table into numGlyphs+1 plain uint32 glyph

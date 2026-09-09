@@ -79,7 +79,7 @@ option and fails with a distinguishable error given a wrong one or none.
 
 ## Phase 8: JBIG2Decode
 
-**Status: 8a done; 8b and 8c in progress.**
+**Status: 8a and 8b done; 8c in progress.**
 
 JBIG2 is a common compression choice for black-and-white scanned pages
 specifically because it beats CCITT Group 4 (already supported) on
@@ -622,3 +622,85 @@ in order, not rewritten later except to fix mistakes.
     by the standard's own carry-propagating BYTEOUT construction above,
     which is both correct and O(n) rather than O(256n) per byte - the
     latter mattering because 8c's fixtures encode thousands of pixels.
+
+### Phase 8b: JBIG2 segment parsing and generic-region decoding — done (2026-09-09)
+
+- **`internal/filter/jbig2segment.go` (new).** Segment header parsing
+    (T.88 clause 7.2): segment number, type, and data length, correctly
+    skipping the variable-width parts a generic-region decoder never
+    needs to interpret (short- and long-form referred-to segment counts
+    and their retention flags, the referred-to segment numbers - whose
+    width depends on the *referring* segment's own number - and the 1- or
+    4-byte page association). A long-form count is a 29-bit field, so it
+    is bounded against the remaining data length before any byte count is
+    derived from it, which also keeps the arithmetic from overflowing
+    `int` on a 32-bit platform.
+- **`internal/filter/jbig2generic.go` (new).** The generic region
+    decoding procedure (T.88 6.2):
+    - `codingTemplates`/`defaultATPixels`/`genericContextTemplate` build
+        each GBTEMPLATE's context-pixel layout. The bit ordering is
+        produced by sorting the fixed and adaptive template pixels into
+        raster order, which yields exactly the numbering T.88's own
+        template figures assign whenever the adaptive pixels sit at their
+        default positions - the only arrangement this decoder accepts.
+    - `parseRegionInfo` (T.88 7.4.1) reads each region's size, position
+        and combination operator, bounding size *and* position per axis so
+        that neither an absurd dimension nor an absurd position can drive
+        an oversized allocation.
+    - `decodeGenericRegionSegment` (7.4.6) parses the segment's own flags
+        and AT pixels, rejecting MMR coding and non-default AT positions
+        as `ErrUnsupported` rather than mis-decoding them, and
+        `decodeGenericBitmap` runs the per-pixel arithmetic decode
+        including TPGDON typical prediction (a row identical to the one
+        above coded as a single bit).
+    - `EncodeJBIG2GenericRegion`/`encodeGenericRegionSegment`/
+        `buildGenericRegionSegment`/`buildSegmentHeader`: the matching
+        encode side, test- and fixture-only for the reasons Phase 8a's
+        entry gives, covering both typical-prediction settings and
+        arbitrary region positions and combination operators.
+- **`internal/filter/jbig2.go` (new).** `decodeJBIG2`, the filter entry
+    point: walks the segment stream (PDF's "embedded organization", T.88
+    Annex D.3), composites every generic region onto a page bitmap sized
+    to what the regions actually painted, ignores the segment types a
+    single-page generic-region bitmap does not need (page info,
+    end-of-page, end-of-stripe, end-of-file, tables, extensions), and
+    reports symbol dictionary, text, halftone and refinement region
+    segments as `ErrUnsupported` naming the type. `jbig2Bitmap` keeps one
+    byte per pixel while decoding (random access matters more than
+    compactness there) and `packInverted` produces the bit-packed,
+    MSB-first output the image pipeline expects - inverting as it goes,
+    since JBIG2 defines 1 as black while a `/BitsPerComponent 1`
+    DeviceGray sample's 0 is black.
+- **`internal/filter/filter.go` wiring.** `decodeOne` now dispatches
+    `"JBIG2Decode"` to `decodeJBIG2`; `TestDecodeUnsupportedFilter`
+    switched to `JPXDecode` as its still-unsupported example.
+- **Tests (`internal/filter/jbig2_test.go`, new).** Round trips across
+    five bitmap sizes (including 1x1, and widths that are not multiples
+    of 8) times six patterns times both typical-prediction settings;
+    typical prediction actually compressing an image of repeated rows;
+    the round trip through the public `Decode` entry point, confirming
+    the filter dispatch wiring; three stacked region segments
+    compositing into one page; ignorable segment types being skipped;
+    thirteen malformed or unsupported streams each asserted to produce
+    the right error class; a region positioned past the page limit; and
+    truncated coded data neither panicking nor hanging.
+    `TestJBIG2ContextTemplatesMatchSpecifiedBitLayout` pins all four
+    templates' exact context bit ordering against the specification's
+    figures - deliberately, because that is the one property round-trip
+    testing structurally cannot check: encoder and decoder share
+    `genericContextTemplate`, so a permuted bit order would round-trip
+    perfectly here while decoding every real-world JBIG2 stream to
+    noise. `FuzzDecode` gained two JBIG2 seed streams (without them a
+    random byte string essentially never parses as a valid segment
+    header, so the fuzzer would never reach the arithmetic decoder);
+    a 45-second, 14M-execution run found no panic or hang. Full test
+    suite, `go vet` and the race detector pass clean.
+- **What's carried forward.** Symbol dictionary and text region
+    segments (JBIG2's highest-compression mode for large text scans),
+    halftone and refinement regions, MMR-coded generic regions,
+    non-default AT pixel positions, and unknown-length segments all
+    report `ErrUnsupported` naming the specific feature. `/JBIG2Globals`
+    is consequently not consulted either: a stream that needs it
+    necessarily uses symbol/text regions, which stop this decoder
+    first. Phase 8c still owes the `tools/genfixtures` builder, an
+    end-to-end render test, and the `docs/capability-matrix.md` update.

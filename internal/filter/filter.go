@@ -11,10 +11,12 @@
 //
 // ASCII85Decode, ASCIIHexDecode, RunLengthDecode, LZWDecode, FlateDecode
 // (with PNG and TIFF predictors), DCTDecode (JPEG, via the standard
-// library's image/jpeg - see dct.go), and CCITTFaxDecode (Group 3 and
+// library's image/jpeg - see dct.go), CCITTFaxDecode (Group 3 and
 // Group 4 fax compression, a from-scratch decoder since the standard
-// library has none - see ccitt.go) are implemented. Any other filter
-// name - JBIG2Decode, JPXDecode, and Crypt - returns an error wrapping
+// library has none - see ccitt.go), and JBIG2Decode (generic-region
+// coding only - a from-scratch decoder, see jbig2.go's doc comment for
+// exactly what is and is not implemented) are implemented. Any other
+// filter name - JPXDecode and Crypt - returns an error wrapping
 // pdferror.ErrUnsupported naming the filter, rather than being silently
 // skipped or misread; see docs/capability-matrix.md for the up-to-date
 // status of each.
@@ -192,6 +194,8 @@ func decodeOne(name syntax.Name, parms syntax.Dictionary, data []byte) ([]byte, 
 		return decodeDCT(data)
 	case "CCITTFaxDecode", "CCF":
 		return decodeCCITT(data, parms)
+	case "JBIG2Decode":
+		return decodeJBIG2(data)
 	default:
 		return nil, pdferror.Unsupportedf("stream filter %q", name)
 	}

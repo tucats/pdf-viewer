@@ -214,6 +214,53 @@ type fakeFontSource struct{ faces []FontFace }
 
 func (s fakeFontSource) Candidates() []FontFace { return s.faces }
 
+// fakeSubstitutionProviderResolver is a minimal Resolver that also
+// implements SubstitutionProvider, standing in for
+// *internal/model.Document in tests without this package needing to
+// import that (higher-level) package - see substitute.go's
+// SubstitutionProvider doc comment for why the interface is shaped this
+// way (FontSubstitutionSource returning `any`).
+type fakeSubstitutionProviderResolver struct {
+	fakeResolver
+	source any
+}
+
+func (r fakeSubstitutionProviderResolver) FontSubstitutionSource() any { return r.source }
+
+func TestSubstitutionSourceFor_NotAProvider(t *testing.T) {
+	if _, ok := substitutionSourceFor(fakeResolver{}); ok {
+		t.Fatal("expected ok=false for a Resolver that does not implement SubstitutionProvider at all")
+	}
+}
+
+func TestSubstitutionSourceFor_ProviderWithNoSourceAttached(t *testing.T) {
+	r := fakeSubstitutionProviderResolver{source: nil}
+	if _, ok := substitutionSourceFor(r); ok {
+		t.Fatal("expected ok=false when FontSubstitutionSource returns nil")
+	}
+}
+
+func TestSubstitutionSourceFor_ProviderWithSourceAttached(t *testing.T) {
+	want := fakeFontSource{faces: []FontFace{face("Arial", false, false, false, false, true)}}
+	r := fakeSubstitutionProviderResolver{source: want}
+
+	src, ok := substitutionSourceFor(r)
+	if !ok {
+		t.Fatal("expected ok=true when a real FontSource was attached")
+	}
+	got, ok := matchFace(chars("Arial", false, false, false, false), src.Candidates())
+	if !ok || got.Characteristics.Family != "Arial" {
+		t.Fatalf("expected the resolved FontSource to behave like the original, got %+v ok=%v", got, ok)
+	}
+}
+
+func TestSubstitutionSourceFor_ProviderReturningNonFontSource(t *testing.T) {
+	r := fakeSubstitutionProviderResolver{source: "not a FontSource"}
+	if _, ok := substitutionSourceFor(r); ok {
+		t.Fatal("expected ok=false when FontSubstitutionSource returns something that isn't a FontSource")
+	}
+}
+
 func TestFontSource_Interface(t *testing.T) {
 	var src FontSource = fakeFontSource{faces: []FontFace{face("Arial", false, false, false, false, true)}}
 	got, ok := matchFace(chars("Arial", false, false, false, false), src.Candidates())

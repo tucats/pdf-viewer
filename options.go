@@ -40,7 +40,8 @@ type OpenOption func(*openConfig)
 
 // openConfig holds the settings OpenOption values mutate.
 type openConfig struct {
-	diagnostics *Diagnostics
+	diagnostics      *Diagnostics
+	fontSubstitution *FontSubstitution
 }
 
 // WithDiagnostics attaches d to the Document being opened, so that
@@ -88,6 +89,69 @@ type Diagnostics struct {
 // an empty slice, not nil - see internal/diag.Recorder.Messages).
 func (d *Diagnostics) Messages() []string {
 	return d.recorder.Messages()
+}
+
+// WithFontSubstitution opts a Document into font substitution
+// (docs/FONTS.md's Phase 4): when a PDF font has no usable embedded
+// glyph program at all (no /FontFile2 or /FontFile3, or one that fails
+// to parse - see internal/fonts' package doc comment for the full list
+// of cases this covers), the Document will try to find a real substitute
+// outline from a font file on disk, matched against the PDF font's own
+// declared family/weight/style (via internal/fonts.Characterize),
+// instead of always falling back to notdefGlyph's placeholder box.
+//
+// Substitution only ever happens for a font this package could not
+// otherwise extract an outline from - a font with a usable embedded
+// program is completely unaffected, matching this option is purely
+// additive.
+//
+// Without this option (the default for every Document opened with no
+// options, or with options that do not include it), this package
+// behaves exactly as it always has: it never reads any directory or
+// file outside of the PDF being opened itself. This matters because
+// internal/fonts' own package doc comment documents a hard constraint -
+// "this package must never assume a system font is available and must
+// never silently invoke a platform font service" - and this option is
+// exactly the explicit, opt-in mechanism that constraint's own wording
+// ("never silently") anticipates: FontSubstitution never calls a
+// platform font API (Core Text, DirectWrite, fontconfig, or similar);
+// it only ever reads ordinary files from ordinary directories via
+// os.ReadDir/os.ReadFile, the same standard-library-only approach this
+// project already uses to read the PDF file itself. See
+// docs/FONTS.md's "Scope decision" section for the full rationale this
+// option's design follows.
+func WithFontSubstitution(cfg FontSubstitution) OpenOption {
+	return func(c *openConfig) { c.fontSubstitution = &cfg }
+}
+
+// FontSubstitution configures WithFontSubstitution.
+type FontSubstitution struct {
+	// Directories are explicit paths to scan for candidate font files
+	// (".ttf", ".ttc", ".otf"), checked before any platform-default
+	// directory (highest priority - a directory the caller specifically
+	// asked for should always win over one this package merely guessed
+	// at from the operating system). Each directory is scanned
+	// non-recursively (its own files only, not any subdirectory's) -
+	// pass every directory that should actually be searched if
+	// candidate fonts are nested.
+	Directories []string
+
+	// DisableSystemDefaults, if true, turns off scanning this package's
+	// own built-in, GOOS-gated list of common per-platform font
+	// directories (see internal/fonts' DirectorySource for the exact
+	// list, per operating system), leaving only Directories to search.
+	//
+	// The zero value (false) means platform defaults ARE scanned - this
+	// field is deliberately phrased as an opt-*out* (rather than, say,
+	// an "IncludeSystemDefaults" opt-in) so that a caller who writes
+	// FontSubstitution{} - setting only Directories, or nothing at all -
+	// still gets the generally useful "also look in the usual places"
+	// behavior without needing to say so twice: Go gives every unset
+	// bool field false, and false is what this option needs to mean
+	// "scan the defaults" for that zero-value case to be the useful
+	// default rather than a silently empty configuration. See
+	// docs/FONTS.md's "Configuration" section for the full rationale.
+	DisableSystemDefaults bool
 }
 
 // RenderOptions configures Page.Render.

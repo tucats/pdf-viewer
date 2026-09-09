@@ -100,6 +100,12 @@ type Document struct {
 	// diagnostics is nil unless the root package's WithDiagnostics option
 	// attached one via SetDiagnostics - see that method's doc comment.
 	diagnostics *diag.Recorder
+
+	// fontSource is nil unless the root package's WithFontSubstitution
+	// option attached one via SetFontSource - see that method's doc
+	// comment for why this is typed as `any` rather than a concrete
+	// internal/fonts type.
+	fontSource any
 }
 
 // SetDiagnostics attaches r to d, so that every subsequent call the rest
@@ -110,6 +116,40 @@ type Document struct {
 // restoring the package-wide default of recording nothing.
 func (d *Document) SetDiagnostics(r *diag.Recorder) {
 	d.diagnostics = r
+}
+
+// SetFontSource attaches src - expected to be a *internal/fonts.
+// DirectorySource, or any other value satisfying that package's
+// FontSource interface - to d, so that internal/fonts.Load (via
+// FontSubstitutionSource below and that package's own
+// substitutionSourceFor helper) can find it once d is used as a
+// fonts.Resolver.
+//
+// src is typed as `any` here rather than internal/fonts.FontSource
+// specifically so that this package does not need to import
+// internal/fonts at all just to declare this method's parameter type -
+// internal/model, internal/fonts, and internal/content are kept as
+// independent peer packages within this module, none importing either
+// of the others directly (see, for example, internal/fonts/resolver.go's
+// doc comment on why internal/fonts declares its own Resolver interface
+// rather than importing one), with the root package the only place that
+// imports all of them and wires concrete values from one into another.
+// Passing nil (the default for every Document that never has this
+// method called) restores "no font substitution", exactly like
+// SetDiagnostics(nil) restores "no diagnostics".
+func (d *Document) SetFontSource(src any) {
+	d.fontSource = src
+}
+
+// FontSubstitutionSource implements internal/fonts.SubstitutionProvider
+// structurally (see that interface's own doc comment for the full
+// rationale), returning whatever SetFontSource last attached - nil if it
+// was never called. internal/fonts.Load's callers type-assert this
+// return value back to internal/fonts.FontSource on their own side (via
+// that package's substitutionSourceFor), so this method itself needs no
+// knowledge of that type.
+func (d *Document) FontSubstitutionSource() any {
+	return d.fontSource
 }
 
 // RecordDiagnostic implements diag.Recordable, so any package holding d

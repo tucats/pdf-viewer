@@ -853,10 +853,38 @@ deliverable above:
   reusing `truetype_test.go`/`probe_test.go`'s sfnt-building helpers) -
   no real system font files, and no assertion that any particular
   directory exists on the machine running `go test`.
-- **4c onward - not yet started.** The `WithFontSubstitution`
-  `OpenOption`/wiring a configured `FontSource` down into `Load`'s
-  fallback path, the actual substitution attempt in `simple.go`/`cid.go`,
-  diagnostics, and width-from-substitute remain to be built.
+- **4c - `WithFontSubstitution` option and threading a `FontSource` down
+  to `Load`: Done.** `options.go` adds `FontSubstitution`
+  (`Directories []string`, `DisableSystemDefaults bool`) and
+  `WithFontSubstitution`, exactly as specified in the revised
+  "Configuration" section above; `document.go`'s `Open` builds a
+  `fonts.NewDirectorySource` from it and attaches it to the
+  `*model.Document` via a new `SetFontSource(src any)` method.
+  `internal/fonts` gained `SubstitutionProvider` (an interface with one
+  method, `FontSubstitutionSource() any`) and `substitutionSourceFor`,
+  the `Resolver`-type-assertion helper `loadSimpleFont`/`loadType0Font`
+  will use in the next sub-phase - mirroring `internal/diag.Recordable`'s
+  existing structural-interface pattern exactly. `FontSubstitutionSource`
+  (both the interface method and `model.Document`'s implementation of
+  it) deliberately returns `any` rather than `fonts.FontSource`
+  specifically: `internal/model`, `internal/fonts`, and
+  `internal/content` are independent peer packages in this module - none
+  of them import either of the other two - and typing this any more
+  specifically would have forced `internal/model` to import
+  `internal/fonts` merely to declare a method signature, breaking that
+  existing layering for no functional benefit (the root package is
+  already the one place that imports all three and wires concrete values
+  between them). Verified with unit tests at each layer
+  (`internal/fonts/substitute_test.go`'s `TestSubstitutionSourceFor_*`,
+  `internal/model/fontsource_test.go`, and root-level
+  `pdfviewer_fontsubstitution_test.go` confirming the option can be
+  attached and does not disturb ordinary rendering) - nothing yet
+  observably changes what any font actually renders as, since `Load`'s
+  fallback path does not consume this wiring until the next sub-phase.
+- **4d onward - not yet started.** The actual substitution attempt in
+  `simple.go`'s `loadSimpleFont` fallback path (and, to the extent it can
+  correctly apply - see that sub-phase's notes on `cid.go`), diagnostics,
+  and width-from-substitute remain to be built.
 
 ### Phase 5 - Bundled last-resort font (deferred, not started)
 

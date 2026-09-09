@@ -229,6 +229,50 @@ func categoryOf(fc FontCharacteristics) fontCategory {
 // candidate matching neither Bold nor Italic is still a better outcome
 // than notdefGlyph's placeholder box, per docs/FONTS.md's overall
 // design).
+// SubstitutionProvider is implemented by a Resolver that also knows
+// about a FontSource configured for the document it belongs to - in
+// practice, *internal/model.Document, once the root package's
+// WithFontSubstitution option has attached one via that package's
+// SetFontSource method (see document.go there). Load's callers
+// (loadSimpleFont, in simple.go) type-assert their resolver against
+// this interface to find it, via substitutionSourceFor below, exactly
+// the same "accept interfaces, structurally satisfied, no new parameter
+// threaded through every call site" pattern internal/diag.Note already
+// uses for its own Recordable interface (see resolver.go's doc comment,
+// and internal/diag/diag.go's) - applied here so that opting a
+// *Document into font substitution needs no change to Load's own
+// signature.
+//
+// FontSubstitutionSource returns `any` rather than FontSource directly
+// so that internal/model - which implements this interface structurally,
+// without ever importing this package - does not need to import
+// internal/fonts merely to declare a field/return type; see
+// substitutionSourceFor, which performs the actual type assertion back
+// to FontSource on this package's side instead. This mirrors how
+// internal/model.Document already stores a *diag.Recorder behind
+// diag.Recordable's similarly loosely-typed RecordDiagnostic method
+// without either package needing to import the other.
+type SubstitutionProvider interface {
+	FontSubstitutionSource() any
+}
+
+// substitutionSourceFor returns the FontSource resolver has been
+// configured with, if any. ok is false in the overwhelmingly common
+// case that substitution was never enabled at all (resolver simply
+// doesn't implement SubstitutionProvider - true for every Document
+// opened without pdfviewer.WithFontSubstitution), and also when it does
+// implement the interface but either no source was actually attached
+// (FontSubstitutionSource returned nil) or - defensively, should it ever
+// happen - returned something that is not actually a FontSource.
+func substitutionSourceFor(resolver Resolver) (FontSource, bool) {
+	provider, ok := resolver.(SubstitutionProvider)
+	if !ok {
+		return nil, false
+	}
+	src, ok := provider.FontSubstitutionSource().(FontSource)
+	return src, ok
+}
+
 func bestByStyle(query FontCharacteristics, candidates []FontFace) (FontFace, bool) {
 	bestScore := -1
 	var best FontFace

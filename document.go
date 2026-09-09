@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/tucats/pdf-viewer/internal/content"
+	"github.com/tucats/pdf-viewer/internal/fonts"
 	"github.com/tucats/pdf-viewer/internal/model"
 	"github.com/tucats/pdf-viewer/internal/parser"
 	"github.com/tucats/pdf-viewer/internal/source"
@@ -113,6 +114,12 @@ func Open(r io.ReaderAt, size int64, opts ...OpenOption) (*Document, error) {
 	}
 	if cfg.diagnostics != nil {
 		m.SetDiagnostics(&cfg.diagnostics.recorder)
+	}
+	if cfg.fontSubstitution != nil {
+		m.SetFontSource(fonts.NewDirectorySource(
+			cfg.fontSubstitution.Directories,
+			!cfg.fontSubstitution.DisableSystemDefaults,
+		))
 	}
 	return &Document{model: m, fontCache: content.NewFontCache()}, nil
 }

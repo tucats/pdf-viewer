@@ -79,7 +79,7 @@ option and fails with a distinguishable error given a wrong one or none.
 
 ## Phase 8: JBIG2Decode
 
-**Status: Not started.**
+**Status: 8a done; 8b and 8c in progress.**
 
 JBIG2 is a common compression choice for black-and-white scanned pages
 specifically because it beats CCITT Group 4 (already supported) on
@@ -89,11 +89,20 @@ outright (`ErrUnsupported` propagated from `internal/filter`), a **hard
 failure** for what is likely the most common *remaining* filter gap in
 practice (ahead of JPEG 2000 - see Phase 14).
 
-- Implement generic-region decoding (the common case for scanned text)
-    first; JBIG2's symbol/text-region dictionary-based compression
-    (used for the highest compression ratios on large text scans) can
-    follow as a sub-phase if the generic-region path proves insufficient
-    against real fixtures.
+- **8a: the MQ arithmetic coder** (`internal/filter/jbig2mq.go`), both
+    directions - the decoder JBIG2 needs and a test/fixture-only encoder
+    that exists so the two can be round-trip tested against each other
+    (this project has no independently-produced real-world JBIG2 sample
+    to check against; see that file's doc comments).
+- **8b: segment parsing and generic-region decoding** - the common case
+    for scanned text. JBIG2's symbol/text-region dictionary-based
+    compression (used for the highest compression ratios on large text
+    scans) can follow as a further sub-phase if the generic-region path
+    proves insufficient against real fixtures.
+- **8c: fixtures, end-to-end render test and documentation** - a
+    `tools/genfixtures` JBIG2 builder, a render test proving a
+    JBIG2-encoded page image decodes and draws, and the
+    `docs/capability-matrix.md` row update.
 - No standard-library or already-permitted dependency exists for this
     (same situation CCITT was in - see `internal/filter/ccitt.go`'s
     provenance-documented from-scratch port); plan for a similarly
@@ -555,3 +564,61 @@ in order, not rewritten later except to fix mistakes.
     "Deliberately out of scope" bullet above and
     `docs/capability-matrix.md`'s Encryption section. With 7a and 7b
     both done, Phase 7 as a whole is complete.
+
+### Phase 8a: JBIG2 MQ arithmetic coder — done (2026-09-09)
+
+- **`internal/filter/jbig2mq.go` (new).** A from-scratch Go
+    implementation of the MQ-coder, the binary arithmetic coder ITU-T
+    T.88's JBIG2 arithmetic decoding procedures are built on (the same
+    coder T.82 and, under another name, JPEG 2000 use - but this project
+    needs it only for JBIG2, so it lives in `internal/filter` rather than
+    a shared location):
+    - `qeTable`, T.88 Table E.1's 47-state probability-estimation state
+        machine, and `mqContext`, one adaptive probability estimator
+        (whose Go zero value is deliberately the correct initial state,
+        so a freshly-made slice of them needs no explicit setup).
+    - `mqDecoder` (`newMQDecoder`/`decodeBit`/`byteIn`/`renormalize`),
+        a direct translation of Annex E's INITDEC, DECODE (with
+        MPS_EXCHANGE/LPS_EXCHANGE inlined), BYTEIN and RENORMD
+        procedures, including the "pad a short stream with an endless run
+        of 0xFF" convention that makes truncated input decode to garbage
+        rather than panic.
+    - `mqEncoder` (`newMQEncoder`/`encodeBit`/`renormalize`/`byteOut`/
+        `flush`) plus the `encodeMQSequence` convenience wrapper: the
+        forward direction, from the same annex's CODEMPS, CODELPS,
+        RENORME, BYTEOUT and FLUSH procedures. It is test- and
+        fixture-only (never reachable from real PDF decoding) and exists
+        for the same reason `internal/crypt/hash56.go`'s forward AES-256
+        functions do - this project has no independently-produced
+        real-world JBIG2 sample to validate the decoder against, so
+        encoding a known bitmap and decoding it back is the strongest
+        verification available. Writing the two directions from opposite
+        ends of the standard's own description, rather than deriving one
+        from the other, is what makes a round trip real evidence both are
+        right instead of evidence they share an assumption.
+- **Tests (`internal/filter/jbig2mq_test.go`, new).** Round-trip
+    coverage: all-zeros, all-ones and alternating decisions through a
+    single context; every decision against its own untouched context;
+    skewed random bits through 1/2/5/16 shared contexts; empty and
+    single-decision sequences; and the ctxIndex/bit length-mismatch
+    panic. `TestMQRoundTripManyShapes` adds a 200-seed randomized sweep
+    over lengths, 0/1 balances and context counts specifically to
+    exercise `byteOut`'s carry-propagation and 0xFF bit-stuffing paths,
+    and asserts that a healthy share of the streams it produces actually
+    contain an 0xFF byte, so those paths cannot silently stop being
+    covered. `TestMQRoundTripHighlyCompressible` round-trips 200,000
+    identical decisions and checks they encode into a near-constant
+    handful of bytes (they compress to 2), confirming the coder really
+    does reach qeTable's confident states rather than merely being
+    lossless. `go vet` and the full `internal/filter` suite pass clean.
+- **What's carried forward.** An earlier attempt built the encoder as a
+    search - choose each output byte by asking the decoder whether the
+    bytes so far already reproduce every decision they determine - on the
+    theory that decoding's strictly-forward nature made backtracking
+    unnecessary. That reasoning was wrong (a locally-consistent prefix
+    need not be extensible to a full solution) and even with real
+    backtracking added the search still dead-ended within a few bytes on
+    sequences a correct coder handles easily. It was replaced wholesale
+    by the standard's own carry-propagating BYTEOUT construction above,
+    which is both correct and O(n) rather than O(256n) per byte - the
+    latter mattering because 8c's fixtures encode thousands of pixels.

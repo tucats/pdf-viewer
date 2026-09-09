@@ -111,6 +111,9 @@ func Open(r io.ReaderAt, size int64, opts ...OpenOption) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.diagnostics != nil {
+		m.SetDiagnostics(&cfg.diagnostics.recorder)
+	}
 	return &Document{model: m, fontCache: content.NewFontCache()}, nil
 }
 

@@ -1,6 +1,10 @@
 package pdfviewer
 
-import "image/color"
+import (
+	"image/color"
+
+	"github.com/tucats/pdf-viewer/internal/diag"
+)
 
 // This file declares the option types sketched in the README's "Draft
 // Public API" section: OpenOption for Open and OpenFile, and
@@ -26,17 +30,65 @@ import "image/color"
 // "a convenience for a bounded maximum dimension" sharing full
 // rendering's page interpretation.
 
-// OpenOption configures how Open or OpenFile parses a document. No
-// options are defined yet - this type exists as an extension point for
-// when one is needed (for example, a future limit on how large a file
-// the cross-reference recovery scan documented in internal/parser will
-// attempt, exposed for callers who want stricter or looser bounds than
-// this module's current internal defaults).
+// OpenOption configures how Open or OpenFile parses a document. Most of
+// this extension point remains unused for now (a future limit on how
+// large a file the cross-reference recovery scan documented in
+// internal/parser will attempt, for example, exposed for callers who
+// want stricter or looser bounds than this module's current internal
+// defaults) - WithDiagnostics, below, is its first real use.
 type OpenOption func(*openConfig)
 
-// openConfig holds the settings OpenOption values would mutate. It has
-// no fields yet, matching OpenOption above.
-type openConfig struct{}
+// openConfig holds the settings OpenOption values mutate.
+type openConfig struct {
+	diagnostics *Diagnostics
+}
+
+// WithDiagnostics attaches d to the Document being opened, so that
+// afterward - as pages are rendered - anything this package tolerates
+// rather than rejects (an unsupported font program, an unresolvable
+// resource name, a malformed field it fell back on a default for, and
+// so on) is recorded into d as one human-readable message, in the order
+// each was produced, for a caller to inspect via d.Messages() once
+// rendering finishes.
+//
+// Without this option (the default for every Document opened with no
+// options, or with options that do not include it), none of that
+// bookkeeping happens at all: this package behaves exactly as it always
+// has, silently tolerating the same things it always tolerated, at
+// whatever the cost of "nothing to record into" makes free (see
+// internal/diag.Recorder's doc comment on why a nil Recorder is cheap).
+// Diagnostics exists purely as an opt-in debugging aid - it is not a
+// substitute for Render's own error return, which remains exactly as
+// strict as it always was for content this package cannot tolerate at
+// all (see Page.Render's doc comment on when it returns an error rather
+// than continuing).
+func WithDiagnostics(d *Diagnostics) OpenOption {
+	return func(c *openConfig) { c.diagnostics = d }
+}
+
+// Diagnostics collects the optional messages WithDiagnostics enables -
+// see that option's doc comment for what ends up in it and why nothing
+// does by default. Its zero value is ready to use: create one with
+// &Diagnostics{}, pass it to Open or OpenFile via WithDiagnostics, and
+// call Messages after rendering to see what (if anything) was recorded.
+//
+// A single Diagnostics may be attached to only one Document at a time
+// (attaching it to a second Document does not clear whatever the first
+// already recorded into it, and both will go on appending to the same
+// underlying collection) - the common case of one Diagnostics per
+// Document, created alongside it, avoids ever needing to think about
+// this.
+type Diagnostics struct {
+	recorder diag.Recorder
+}
+
+// Messages returns a copy of every diagnostic message recorded so far,
+// in the order they were produced. It is safe to call at any time,
+// including before any page has been rendered (in which case it returns
+// an empty slice, not nil - see internal/diag.Recorder.Messages).
+func (d *Diagnostics) Messages() []string {
+	return d.recorder.Messages()
+}
 
 // RenderOptions configures Page.Render.
 type RenderOptions struct {

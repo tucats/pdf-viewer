@@ -9,12 +9,22 @@
 //
 // # Usage
 //
-//	go run ./cmd/pdfpreview [-page N] [-scale S] -out preview.png input.pdf
+//	go run ./cmd/pdfpreview [-page N] [-scale S] [-diagnostics] -out preview.png input.pdf
 //
 // Example: render the first page of report.pdf at twice the default
 // resolution to preview.png:
 //
 //	go run ./cmd/pdfpreview -scale 2 -out preview.png report.pdf
+//
+// Adding -diagnostics prints, to stdout, any messages pdfviewer.
+// Diagnostics recorded while opening and rendering the page - one line
+// per unsupported feature, unresolvable resource name, or malformed
+// field this package tolerated rather than rejected outright (see
+// pdfviewer.WithDiagnostics). This is meant as a debugging aid for
+// exactly the situation that motivated it: a page that renders
+// (Render itself returns no error) but looks wrong or unexpectedly
+// blank, where the diagnostics buffer is the tool for finding out what,
+// if anything, was silently skipped along the way.
 package main
 
 import (
@@ -47,6 +57,7 @@ func main() {
 	page := flag.Int("page", 0, "zero-based page index to render")
 	scale := flag.Float64("scale", 1.0, "device pixels per PDF point (1.0 = 72 DPI; e.g. 2.0 for a sharper image)")
 	out := flag.String("out", "preview.png", "path to write the rendered PNG to")
+	diagnostics := flag.Bool("diagnostics", false, "print to stdout any diagnostic messages recorded while opening/rendering (unsupported features, missing resources, ...)")
 	flag.Parse()
 
 	// Everything flag.Parse did not recognize as a "-flag value" pair is
@@ -61,7 +72,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := renderPreviewToFile(args[0], *page, *scale, *out); err != nil {
+	if err := renderPreviewToFile(args[0], *page, *scale, *out, *diagnostics); err != nil {
 		// Printing to os.Stderr (rather than os.Stdout) is the Go
 		// convention for error output, so that a shell pipeline
 		// redirecting stdout to a file still shows errors on the
@@ -80,13 +91,27 @@ func main() {
 // result to outPath as a PNG file. It returns an error instead of
 // exiting the process directly, which is what lets main_test.go call it
 // directly and check the error value itself.
-func renderPreviewToFile(inputPath string, pageIndex int, scale float64, outPath string) error {
+//
+// When showDiagnostics is true, a pdfviewer.Diagnostics is attached to
+// the document via pdfviewer.WithDiagnostics, and whatever messages it
+// collects are printed to stdout - one per line - before this function
+// returns, whether or not opening/rendering ultimately succeeded (a
+// diagnostic recorded before a later, unrelated failure can still be
+// useful context for debugging that failure).
+func renderPreviewToFile(inputPath string, pageIndex int, scale float64, outPath string, showDiagnostics bool) error {
+	var opts []pdfviewer.OpenOption
+	var diagnostics *pdfviewer.Diagnostics
+	if showDiagnostics {
+		diagnostics = &pdfviewer.Diagnostics{}
+		opts = append(opts, pdfviewer.WithDiagnostics(diagnostics))
+	}
+
 	// pdfviewer.OpenFile is the convenience entry point for reading
 	// directly from a named file on disk - see the package's Draft
 	// Public API notes (README.md) for why pdfviewer.Open (which accepts
 	// any io.ReaderAt) is the more general one; a command-line tool
 	// reading a named file is exactly OpenFile's intended use.
-	doc, err := pdfviewer.OpenFile(inputPath)
+	doc, err := pdfviewer.OpenFile(inputPath, opts...)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", inputPath, err)
 	}
@@ -95,6 +120,14 @@ func renderPreviewToFile(inputPath string, pageIndex int, scale float64, outPath
 	// panic unwinds the stack - the idiomatic Go way to guarantee cleanup
 	// code runs exactly once without repeating it before every return.
 	defer doc.Close()
+
+	if diagnostics != nil {
+		// Deferred (rather than called at the bottom of this function)
+		// so that these still print even when a later step returns an
+		// error - see this function's own doc comment on why that
+		// matters.
+		defer printDiagnostics(diagnostics)
+	}
 
 	page, err := doc.Page(pageIndex)
 	if err != nil {
@@ -115,6 +148,20 @@ func renderPreviewToFile(inputPath string, pageIndex int, scale float64, outPath
 	}
 
 	return writePNG(outPath, img)
+}
+
+// printDiagnostics writes each message d has collected so far to
+// stdout, one per line - stdout, rather than stderr, since (unlike an
+// actual error) these are not this program failing; they are exactly
+// the same kind of informational output as the PNG this program
+// otherwise writes, just routed to the terminal instead of a file.
+// Printing nothing when there is nothing to print (a document that
+// triggered no diagnostics at all - the common case) keeps
+// -diagnostics quiet on an unremarkable file.
+func printDiagnostics(d *pdfviewer.Diagnostics) {
+	for _, msg := range d.Messages() {
+		fmt.Println(msg)
+	}
 }
 
 // writePNG encodes img as a PNG file at path, using only the standard

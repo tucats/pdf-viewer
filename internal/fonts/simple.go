@@ -1,6 +1,7 @@
 package fonts
 
 import (
+	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/syntax"
 )
 
@@ -55,6 +56,8 @@ func loadSimpleFont(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	if ok {
 		f.glyphSource = &sfnt
 		f.lookupGID = simpleGlyphLookup(&sfnt, encoding, symbolic)
+	} else {
+		diag.Note(resolver, "font %v (%v) has no usable embedded TrueType outline data (no /FontFile2, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"], dict["Subtype"])
 	}
 	return f, nil
 }

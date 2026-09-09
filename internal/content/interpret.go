@@ -3,6 +3,7 @@ package content
 import (
 	"math"
 
+	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/graphics"
 	pdfimage "github.com/tucats/pdf-viewer/internal/image"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
@@ -165,7 +166,9 @@ func (in *interpreter) exec(op Operator) error {
 		// keep rendering - consistent with this package's general
 		// "skip, don't abort" tolerance for problems that do not prevent
 		// interpreting what follows.
-		_ = in.stack.Pop()
+		if err := in.stack.Pop(); err != nil {
+			diag.Note(in.resolver, "\"Q\" with no matching \"q\": %v; ignoring", err)
+		}
 
 	case "cm":
 		vals, err := requireFloats(op.Operands, 6)

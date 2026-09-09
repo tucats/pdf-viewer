@@ -29,6 +29,7 @@
 package model
 
 import (
+	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/parser"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
 	"github.com/tucats/pdf-viewer/internal/syntax"
@@ -95,6 +96,29 @@ type Rect struct {
 type Document struct {
 	parser *parser.Document
 	pages  []Page
+
+	// diagnostics is nil unless the root package's WithDiagnostics option
+	// attached one via SetDiagnostics - see that method's doc comment.
+	diagnostics *diag.Recorder
+}
+
+// SetDiagnostics attaches r to d, so that every subsequent call the rest
+// of this module makes through d (as a fonts.Resolver, an
+// internal/image.Resolver, or a content-package resolver - d implements
+// all three, structurally) that calls diag.Note on it records into r.
+// Passing nil detaches whatever Recorder was previously attached,
+// restoring the package-wide default of recording nothing.
+func (d *Document) SetDiagnostics(r *diag.Recorder) {
+	d.diagnostics = r
+}
+
+// RecordDiagnostic implements diag.Recordable, so any package holding d
+// as a resolver-shaped interface value can call diag.Note(resolverValue,
+// ...) to record into whatever Recorder SetDiagnostics last attached -
+// or, if none has been, do nothing at the cost of one nil check (see
+// diag.Recorder.Record).
+func (d *Document) RecordDiagnostic(format string, args ...any) {
+	d.diagnostics.Record(format, args...)
 }
 
 // maxPageTreeDepth bounds how deep Open will recurse while walking a

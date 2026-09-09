@@ -1,6 +1,7 @@
 package content
 
 import (
+	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/filter"
 	"github.com/tucats/pdf-viewer/internal/graphics"
 	pdfimage "github.com/tucats/pdf-viewer/internal/image"
@@ -50,6 +51,7 @@ func (in *interpreter) doXObject(st *graphics.State, operands []syntax.Object) e
 		return err
 	}
 	if !found {
+		diag.Note(in.resolver, "XObject %q is not in /Resources /XObject; nothing painted for this \"Do\"", name)
 		return nil
 	}
 
@@ -70,6 +72,7 @@ func (in *interpreter) doXObject(st *graphics.State, operands []syntax.Object) e
 	default:
 		// A dictionary with no/wrong /Subtype - unsupported, but not an
 		// error; see this function's doc comment.
+		diag.Note(in.resolver, "XObject %q has an unsupported or missing /Subtype (found %q); nothing painted for this \"Do\"", name, subtype)
 		return nil
 	}
 }

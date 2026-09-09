@@ -1,6 +1,7 @@
 package content
 
 import (
+	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/function"
 	"github.com/tucats/pdf-viewer/internal/graphics"
 	pdfimage "github.com/tucats/pdf-viewer/internal/image"
@@ -67,6 +68,7 @@ func (in *interpreter) doShading(st *graphics.State, operands []syntax.Object) e
 		return err
 	}
 	if !found {
+		diag.Note(in.resolver, "shading %q is not in /Resources /Shading; nothing painted for this \"sh\"", name)
 		return nil
 	}
 

@@ -1,6 +1,7 @@
 package content
 
 import (
+	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/graphics"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
 	"github.com/tucats/pdf-viewer/internal/syntax"
@@ -60,6 +61,11 @@ func (in *interpreter) applyExtGState(st *graphics.State, operands []syntax.Obje
 			return err
 		}
 		st.BlendMode = mode
+	}
+	if v, ok := dict["SMask"]; ok {
+		if smaskName, isName := v.(syntax.Name); !isName || smaskName != "None" {
+			diag.Note(in.resolver, "ExtGState %q specifies a soft mask (/SMask); soft masks are not supported and are ignored", name)
+		}
 	}
 	return nil
 }

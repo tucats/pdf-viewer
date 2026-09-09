@@ -1,6 +1,7 @@
 package content
 
 import (
+	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/fonts"
 	"github.com/tucats/pdf-viewer/internal/graphics"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
@@ -144,6 +145,7 @@ func (in *interpreter) lookupFont(name syntax.Name) (*fonts.Font, bool) {
 	}
 	entry, ok := fontsDict[name]
 	if !ok {
+		diag.Note(in.resolver, "font %q is not in /Resources /Font; text using it will not be shown", name)
 		return nil, false
 	}
 
@@ -171,6 +173,7 @@ func (in *interpreter) lookupFont(name syntax.Name) (*fonts.Font, bool) {
 
 	f, err := fonts.Load(dict, in.resolver)
 	if err != nil || f == nil {
+		diag.Note(in.resolver, "font %q could not be loaded (%v); text using it will not be shown", name, err)
 		return nil, false
 	}
 	in.cacheFontLocally(name, f)
@@ -312,6 +315,7 @@ func (in *interpreter) showText(st *graphics.State, s []byte) {
 		// comment): nothing can be measured or painted, so this string is
 		// silently skipped, exactly like "Do" with an unresolvable
 		// XObject name.
+		diag.Note(in.resolver, "text shown with no font selected (no successful \"Tf\" yet); skipped")
 		return
 	}
 	for _, code := range decodeCodes(font, s) {

@@ -1,6 +1,7 @@
 package content
 
 import (
+	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/graphics"
 	pdfimage "github.com/tucats/pdf-viewer/internal/image"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
@@ -64,6 +65,8 @@ func (in *interpreter) setColorSpace(st *graphics.State, operands []syntax.Objec
 	case in.resolver != nil:
 		if cs, err := pdfimage.ResolveColorSpace(in.resolver, name, in.resources); err == nil {
 			resolved = cs
+		} else {
+			diag.Note(in.resolver, "color space %q could not be resolved (%v); later sc/scn colors in it will be guessed from component count instead", name, err)
 		}
 	}
 	if fill {

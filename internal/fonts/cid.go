@@ -3,6 +3,7 @@ package fonts
 import (
 	"encoding/binary"
 
+	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/syntax"
 )
 
@@ -47,6 +48,7 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 		// Font (per this package's general "always degrade gracefully"
 		// policy - see font.go's doc comment), just one with nothing
 		// more specific than the bare defaults set above to go on.
+		diag.Note(resolver, "Type0 font %v has no usable /DescendantFonts entry; its glyphs will render as placeholder boxes", dict["BaseFont"])
 		return f, nil
 	}
 
@@ -58,6 +60,7 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	descriptor, _ := dictValue(resolver, descendant, "FontDescriptor")
 	sfnt, ok := loadEmbeddedTrueType(descriptor, resolver)
 	if !ok {
+		diag.Note(resolver, "Type0 font %v has no usable embedded TrueType outline data (no /FontFile2, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"])
 		return f, nil
 	}
 	f.glyphSource = &sfnt

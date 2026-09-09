@@ -7,6 +7,32 @@ import (
 	"testing"
 )
 
+// TestRenderPreviewToFileDiagnosticsFlagDoesNotBreakRendering confirms
+// passing showDiagnostics=true still renders correctly (printDiagnostics
+// runs as a side effect on stdout, which this test does not capture -
+// pdfviewer_diagnostics_test.go, in the root package, is what actually
+// checks diagnostic message content; this test only guards against the
+// diagnostics plumbing here breaking the render path itself, e.g. by
+// passing the wrong OpenOption or holding the Document open incorrectly
+// across the deferred print).
+func TestRenderPreviewToFileDiagnosticsFlagDoesNotBreakRendering(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "preview.png")
+
+	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 1.0, outPath, true); err != nil {
+		t.Fatalf("renderPreviewToFile with showDiagnostics=true: %v", err)
+	}
+
+	f, err := os.Open(outPath)
+	if err != nil {
+		t.Fatalf("opening output file: %v", err)
+	}
+	defer f.Close()
+
+	if _, err := png.DecodeConfig(f); err != nil {
+		t.Fatalf("output file is not a valid PNG: %v", err)
+	}
+}
+
 // fixturePath resolves a fixture file name to its path in the shared
 // testdata/fixtures/handmade corpus (see testdata/fixtures/FIXTURES.md
 // at the repository root) - reused by every fixture-driven test in this
@@ -31,7 +57,7 @@ func fixturePath(t *testing.T, name string) string {
 func TestRenderPreviewToFile(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "preview.png")
 
-	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 1.0, outPath); err != nil {
+	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 1.0, outPath, false); err != nil {
 		t.Fatalf("renderPreviewToFile: %v", err)
 	}
 
@@ -57,7 +83,7 @@ func TestRenderPreviewToFile(t *testing.T) {
 func TestRenderPreviewToFileScale(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "preview.png")
 
-	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 2.0, outPath); err != nil {
+	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 2.0, outPath, false); err != nil {
 		t.Fatalf("renderPreviewToFile: %v", err)
 	}
 
@@ -85,7 +111,7 @@ func TestRenderPreviewToFileScale(t *testing.T) {
 func TestRenderPreviewToFilePageOutOfRange(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "preview.png")
 
-	err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 5, 1.0, outPath)
+	err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 5, 1.0, outPath, false)
 	if err == nil {
 		t.Fatal("renderPreviewToFile with an out-of-range page index succeeded, want an error")
 	}
@@ -96,7 +122,7 @@ func TestRenderPreviewToFilePageOutOfRange(t *testing.T) {
 func TestRenderPreviewToFileMissingInput(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "preview.png")
 
-	err := renderPreviewToFile(filepath.Join(t.TempDir(), "does-not-exist.pdf"), 0, 1.0, outPath)
+	err := renderPreviewToFile(filepath.Join(t.TempDir(), "does-not-exist.pdf"), 0, 1.0, outPath, false)
 	if err == nil {
 		t.Fatal("renderPreviewToFile with a nonexistent input file succeeded, want an error")
 	}

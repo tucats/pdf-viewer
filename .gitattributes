@@ -1,0 +1,23 @@
+# The PDF test fixtures and PNG golden reference images below are
+# binary content, byte-exact by construction (see
+# tools/genfixtures/main.go and pdfviewer_render_test.go). Without this
+# file, Git falls back to each contributor's own core.autocrlf setting -
+# on Windows (where Git for Windows defaults core.autocrlf to true),
+# Git's text-vs-binary heuristic can misjudge a PDF or PNG as text and
+# rewrite LF bytes to CRLF on checkout, corrupting a PDF's byte-exact
+# cross-reference offsets or a PNG's compressed data stream. That
+# corruption is what makes TestGeneratedFixturesMatchCheckedInFiles and
+# TestRenderMatchesReferenceImages fail right after a fresh clone until
+# `go run ./tools/genfixtures` (or `go test -update`) overwrites the
+# corrupted files with correct bytes again - which then looks like a
+# genuine content change to Git, tempting a Windows contributor to
+# commit a CRLF-flavored version of the corpus.
+#
+# Marking these paths "binary" (Git shorthand for "-text -diff") makes
+# Git never transform their bytes on checkout or commit, and never try
+# to diff them as text, regardless of any contributor's autocrlf
+# setting or platform. That is the actual fix: it does not matter
+# whether the corpus was generated on macOS or Windows, because Git no
+# longer touches the bytes either way.
+testdata/fixtures/handmade/*.pdf binary
+testdata/renderrefs/*.png binary

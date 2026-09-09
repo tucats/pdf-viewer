@@ -830,10 +830,33 @@ deliverable above:
   synthetic in-memory `FontFace`/`FontSource` values
   (`internal/fonts/substitute_test.go`) - no real font files or
   filesystem access, per this document's "Testing" section.
-- **4b onward - not yet started.** `DirectorySource` (real directory
-  scanning via Phase 2's `ProbeFontFile`), the `WithFontSubstitution`
-  `OpenOption`/wiring into `Load`'s fallback path, diagnostics, and
-  width-from-substitute remain to be built.
+- **4b - `DirectorySource` and default directory lists: Done.**
+  `internal/fonts/directory_source.go` implements `DirectorySource`
+  (`NewDirectorySource(directories []string, includeSystemDefaults
+  bool)`), which lazily scans its configured directories on the first
+  call to `Candidates` and caches the result for the lifetime of the
+  `DirectorySource`, mirroring `internal/content.FontCache`'s existing
+  build-once-per-`Document` precedent. Each explicit directory is scanned
+  non-recursively; `defaultFontScanDirsFor` (GOOS-gated, tested via an
+  explicit `goos` parameter rather than the real `runtime.GOOS`) supplies
+  the per-platform default list from docs/FONTS.md's "Configuration"
+  section, most-local-first, with every Linux entry marked recursive
+  (distros nest font files by family/package) and every macOS/Windows
+  entry flat. `FontFace` (probe.go) gained a `Path` field, set by
+  `DirectorySource` after `ProbeFontFile` returns, so a later diagnostic
+  can name which file a chosen substitute came from. Scanning is bounded
+  by `maxScannedFontFiles` (20000) against a pathological directory tree,
+  and every filesystem error (a missing directory, an unreadable file, a
+  file `ProbeFontFile` can't parse) is tolerated, not fatal - consistent
+  with this package's "Font never fails" policy. Verified with synthetic
+  fixtures in temporary directories (`internal/fonts/directory_source_test.go`,
+  reusing `truetype_test.go`/`probe_test.go`'s sfnt-building helpers) -
+  no real system font files, and no assertion that any particular
+  directory exists on the machine running `go test`.
+- **4c onward - not yet started.** The `WithFontSubstitution`
+  `OpenOption`/wiring a configured `FontSource` down into `Load`'s
+  fallback path, the actual substitution attempt in `simple.go`/`cid.go`,
+  diagnostics, and width-from-substitute remain to be built.
 
 ### Phase 5 - Bundled last-resort font (deferred, not started)
 

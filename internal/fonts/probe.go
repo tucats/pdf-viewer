@@ -73,6 +73,19 @@ type FontFace struct {
 	// it just cannot select it as a usable substitute source.
 	HasOutlines bool
 
+	// Path is the file this face was probed from, for a face found by
+	// Phase 4's DirectorySource (directory_source.go) - set there, after
+	// ProbeFontFile returns, since ProbeFontFile itself only ever sees
+	// data already read into memory and has no notion of where it came
+	// from (see that function's doc comment). Empty for a face probed
+	// directly via ProbeFontFile with no DirectorySource involved (as in
+	// this file's own tests), and purely informational - nothing in this
+	// package's own matching logic (substitute.go's matchFace) reads it;
+	// it exists so a caller can report *which* file a chosen substitute
+	// came from, e.g. in a diagnostic message (see simple.go's diag.Note
+	// call sites).
+	Path string
+
 	// data is the entire file's bytes this face was probed from (shared
 	// across every face of a TrueType Collection, since a TTC's faces
 	// commonly share tables - see parseTableDirectory's doc comment in

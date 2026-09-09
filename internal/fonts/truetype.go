@@ -64,12 +64,14 @@ import (
 //     occasionally still seen from older Mac tools.
 //   - sfntVersionOTTO means "this font's outlines live in a 'CFF' table
 //     instead" (OpenType with PostScript/CFF outlines) - a completely
-//     different outline encoding this package's truetype.go cannot read
-//     (see docs/FONTS.md's Phase 3, not yet implemented). An OTTO file's
-//     other tables ("name", "OS/2") are laid out identically to a
-//     TrueType-flavored file's, though, which is exactly why probe.go
-//     still accepts this tag when just characterizing a candidate font
-//     file rather than extracting its outlines.
+//     different outline encoding from this file's own glyf/loca parsing
+//     below, read instead by cff.go's separate CFF/Type 2 Charstring
+//     support (see docs/FONTS.md's Phase 3 and probe.go's FontFace.Outline,
+//     which dispatches to whichever of the two a given face actually
+//     has). An OTTO file's other tables ("name", "OS/2") are laid out
+//     identically to a TrueType-flavored file's, though, which is why
+//     probe.go accepts this tag at the table-directory level regardless
+//     of which outline table ends up present.
 //   - sfntVersionTTC ("ttcf") means "this is not a single font at all,
 //     but a TrueType Collection: a small header listing the byte offset
 //     of each bundled face's own table directory" - see probe.go's

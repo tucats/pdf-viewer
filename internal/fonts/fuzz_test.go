@@ -71,8 +71,11 @@ func buildTestSfntForFuzzSeed(glyphs [][]byte, cmapTable []byte) []byte {
 // always terminates" - ProbeFontFile is documented to fail closed (a
 // non-nil error) rather than panic on malformed input, and FontFace's
 // own Outline method (exercised here for every face a successful probe
-// returns) carries the same guarantee via parseSfntAt.
+// returns) carries the same guarantee via parseSfntAt or - since Phase
+// 3 wired cff.go into FontFace.Outline, for an OTTO face with a "CFF "
+// table - parseCFFFont.
 func FuzzProbeFontFile(f *testing.F) {
+	var t testing.T
 	seedGlyphs := [][]byte{{}, unitSquareGlyph()}
 	seedCmap := buildCmapFormat0Table(map[rune]uint16{'A': 1})
 	seedNames := buildNameTable(map[uint16]string{nameIDFamily: "Arial", nameIDPostScript: "Arial-BoldMT"})
@@ -94,6 +97,8 @@ func FuzzProbeFontFile(f *testing.F) {
 		f.Add(assembleSfnt(sfntVersionOTTO, []sfntTable{{"name", seedNames}, {"OS/2", seedOS2}}, 0))
 		f.Add(buildTestTTC([][]sfntTable{plainFace, plainFace}))
 	}
+	cffData := buildTestCFF(&t, [][]byte{{}, squareCharstring()}, nil, nil, nil)
+	f.Add(assembleSfnt(sfntVersionOTTO, []sfntTable{{"name", seedNames}, {"CFF ", cffData}}, 0))
 	f.Add([]byte{})
 	f.Add([]byte("ttcf"))
 

@@ -62,14 +62,15 @@ type FontFace struct {
 	Characteristics FontCharacteristics
 
 	// HasOutlines reports whether Outline (below) can currently succeed
-	// for this face. It is true for a TrueType-outline ("glyf") face and
-	// false for an OpenType/CFF ("OTTO") face - CFF outline extraction is
-	// Phase 3's job (see docs/FONTS.md), not yet implemented. A false
-	// value here does not mean this face is unusable forever, only that
-	// this package cannot yet read its outlines - a caller (Phase 4's
+	// for this face: true for a TrueType-outline ("glyf") face or an
+	// OpenType/CFF ("OTTO") face that actually carries a "CFF " table
+	// (see cffTable below and cff.go's Phase 3 CFF support), false for
+	// anything else this package cannot extract outlines from (for
+	// instance, a structurally valid sfnt face missing both tables). A
+	// false value here does not mean this face is unusable forever, only
+	// that this package cannot read its outlines - a caller (Phase 4's
 	// matcher) should still be able to see and characterize this face,
-	// it just cannot select it as a usable substitute source until
-	// Phase 3 lands.
+	// it just cannot select it as a usable substitute source.
 	HasOutlines bool
 
 	// data is the entire file's bytes this face was probed from (shared
@@ -84,24 +85,48 @@ type FontFace struct {
 	// face, or one of parseTTCHeader's returned offsets for a face
 	// within a ".ttc" file.
 	dirOffset int
+
+	// cffTable, when non-nil, is this face's own "CFF " table bytes
+	// (already sliced out at probe time by probeFace, at negligible
+	// cost - a CFF table's own internal structure is not touched until
+	// Outline is actually called). Its presence, rather than
+	// HasOutlines alone, is what tells Outline which parser to use: a
+	// glyf-outline face has this nil and is read via parseSfntAt
+	// instead - see Outline below.
+	cffTable []byte
 }
 
-// Outline fully parses this face's glyph outline tables ("head", "maxp",
-// "loca", "glyf") on demand, returning the same sfntFont shape this
-// package already uses for an embedded /FontFile2 program - so once a
-// later phase selects a FontFace as a substitute, everything downstream
-// (glyph lookup, scaling, drawing) works identically regardless of
-// whether the outline came from an embedded font or a file found on
-// disk. ok is false if HasOutlines is false, or if the face's outline
-// tables turn out to be malformed despite having looked structurally
-// promising during ProbeFontFile - Outline is intentionally not called
-// eagerly for every candidate (see docs/FONTS.md's Phase 2 goal), only
-// once a candidate is actually chosen.
-func (f FontFace) Outline() (sfntFont, bool) {
+// Outline fully parses this face's glyph outline data on demand -
+// either "head"/"maxp"/"loca"/"glyf" for a TrueType-outline face, or the
+// "CFF " table alone for a CFF-outline one (see the cffTable field's doc
+// comment for how Outline tells the two apart) - returning the same
+// glyphOutlineSource interface font.go's Font type already uses for an
+// embedded font program (satisfied by both *sfntFont and *cffFont), so
+// once a later phase selects a FontFace as a substitute, everything
+// downstream (glyph lookup, scaling, drawing) works identically
+// regardless of which outline format the face actually uses or whether
+// it came from an embedded font program or a file found on disk. ok is
+// false if HasOutlines is false, or if the face's outline data turns out
+// to be malformed despite having looked structurally promising during
+// ProbeFontFile - Outline is intentionally not called eagerly for every
+// candidate (see docs/FONTS.md's Phase 2 goal), only once a candidate is
+// actually chosen.
+func (f FontFace) Outline() (glyphOutlineSource, bool) {
 	if !f.HasOutlines {
-		return sfntFont{}, false
+		return nil, false
 	}
-	return parseSfntAt(f.data, f.dirOffset)
+	if f.cffTable != nil {
+		cff, ok := parseCFFFont(f.cffTable)
+		if !ok {
+			return nil, false
+		}
+		return &cff, true
+	}
+	sfnt, ok := parseSfntAt(f.data, f.dirOffset)
+	if !ok {
+		return nil, false
+	}
+	return &sfnt, true
 }
 
 // maxTTCFaces bounds how many faces ProbeFontFile will ever try to read
@@ -163,19 +188,21 @@ func ProbeFontFile(data []byte) ([]FontFace, error) {
 
 // probeFace reads just enough of one face's table directory (starting at
 // dirOffset within data - see parseTableDirectory's doc comment) to build
-// a FontFace: whether it has a usable "glyf" outline table, and its
-// FontCharacteristics as derived from whatever "name"/"OS/2" tables it
-// has. ok is false only when dirOffset does not even point at a
-// structurally valid sfnt table directory (see parseTableDirectory) - a
-// valid directory that merely lacks a "name" or "OS/2" table still
+// a FontFace: whether it has a usable "glyf" or "CFF " outline table,
+// and its FontCharacteristics as derived from whatever "name"/"OS/2"
+// tables it has. ok is false only when dirOffset does not even point at
+// a structurally valid sfnt table directory (see parseTableDirectory) -
+// a valid directory that merely lacks a "name" or "OS/2" table still
 // succeeds, just with a less confident Characteristics value (see
-// characterizeFace).
+// characterizeFace); likewise, a valid directory lacking both "glyf"
+// and "CFF " still succeeds, just with HasOutlines false.
 func probeFace(data []byte, dirOffset int) (FontFace, bool) {
 	tables, _, ok := parseTableDirectory(data, dirOffset)
 	if !ok {
 		return FontFace{}, false
 	}
 	_, hasGlyf := tables["glyf"]
+	cffTable, hasCFF := tables["CFF "]
 
 	var names []nameTableEntry
 	if nameRaw, ok := tables["name"]; ok {
@@ -187,12 +214,16 @@ func probeFace(data []byte, dirOffset int) (FontFace, bool) {
 		os2, hasOS2 = parseOS2Table(os2Raw)
 	}
 
-	return FontFace{
+	face := FontFace{
 		Characteristics: characterizeFace(names, os2, hasOS2),
-		HasOutlines:     hasGlyf,
+		HasOutlines:     hasGlyf || hasCFF,
 		data:            data,
 		dirOffset:       dirOffset,
-	}, true
+	}
+	if hasCFF {
+		face.cffTable = cffTable
+	}
+	return face, true
 }
 
 // parseTTCHeader parses a TrueType Collection's own header - four bytes

@@ -719,16 +719,24 @@ above:
   from the CFF program's own charset instead, via 3a's `cidToGID` map).
   Verified end to end by `TestLoad_Type0CIDFontType0CFF` (cid_test.go),
   using a new `buildTestCIDCFF` fixture helper (cff_test.go).
-- **3d - wire into `probe.go`/`FontFace`: Not started.** `HasOutlines`
-  should become true for an `OTTO`-tagged face once its `"CFF "` table
-  can actually be parsed via 3a's `parseCFFFont`, and `FontFace.Outline`
-  needs a `cffFont`-returning counterpart alongside its existing
-  `sfntFont` one (`probe_test.go`'s
-  `TestProbeFontFile_OTTOStillCharacterizedButNoOutlines` will need
-  updating to match the new, no-longer-"no outlines" behavior).
+- **3d - wire into `probe.go`/`FontFace`: Done.** `probeFace` now also
+  checks for a `"CFF "` table (alongside `"glyf"`) when computing
+  `HasOutlines`, and stores that table's bytes on `FontFace` (a new
+  unexported `cffTable` field). `FontFace.Outline`'s signature changed
+  from returning a bare `sfntFont` to returning the same
+  `glyphOutlineSource` interface 3b introduced in font.go, dispatching
+  to `parseCFFFont` when `cffTable` is set and to the existing
+  `parseSfntAt` path otherwise - so a later phase's matcher can treat
+  every candidate face identically regardless of outline format. Renamed
+  `probe_test.go`'s `TestProbeFontFile_OTTOStillCharacterizedButNoOutlines`
+  to `TestProbeFontFile_OTTOWithoutCFFTableHasNoOutlines` (still valid:
+  its fixture has no `"CFF "` table) and added
+  `TestProbeFontFile_OTTOWithCFFTableHasOutlines` for the new path;
+  `FuzzProbeFontFile`'s seed corpus gained an OTTO+`"CFF "` seed too
+  (20s local fuzz run after the change surfaced no crashes).
 - **3e - `docs/capability-matrix.md` update: Not started.** Flip
-  "OpenType/CFF (Type1C, CIDFontType0C)" once 3b-3d land, as a single
-  small commit rather than staying reserved for later.
+  "OpenType/CFF (Type1C, CIDFontType0C)" and the CIDFontType0 note in
+  "Composite fonts: Type 0 / CID", now that 3a-3d are all done.
 
 ### Phase 4 - Font source, matching, and wiring
 

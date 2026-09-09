@@ -179,12 +179,23 @@ func TestProbeFontFile_PlainTrueType(t *testing.T) {
 	if !ok {
 		t.Fatalf("Outline() failed for a valid glyf-flavored face")
 	}
-	if outline.numGlyphs != 2 {
-		t.Errorf("Outline().numGlyphs = %d, want 2", outline.numGlyphs)
+	glyph, ok := outline.GlyphOutline(1) // glyphs[1] is unitSquareGlyph.
+	if !ok {
+		t.Fatalf("Outline().GlyphOutline(1) failed")
+	}
+	minX, minY, maxX, maxY := pathBounds(t, glyph)
+	if minX != 100 || minY != 100 || maxX != 800 || maxY != 800 {
+		t.Errorf("bounds = (%v,%v)-(%v,%v), want (100,100)-(800,800)", minX, minY, maxX, maxY)
 	}
 }
 
-func TestProbeFontFile_OTTOStillCharacterizedButNoOutlines(t *testing.T) {
+// TestProbeFontFile_OTTOWithoutCFFTableHasNoOutlines exercises an OTTO
+// (OpenType/CFF) face missing its own "CFF " table - a structurally odd
+// but not impossible file (or, in this test, simply a fixture that
+// omits it on purpose): still fully characterized via "name"/"OS/2" (see
+// probeFace), but with no outline data of either kind, so HasOutlines
+// must stay false and Outline must report ok=false rather than guessing.
+func TestProbeFontFile_OTTOWithoutCFFTableHasNoOutlines(t *testing.T) {
 	name := buildNameTable(map[uint16]string{
 		nameIDFamily: "Times New Roman",
 	})
@@ -192,10 +203,6 @@ func TestProbeFontFile_OTTOStillCharacterizedButNoOutlines(t *testing.T) {
 	tables := []sfntTable{
 		{"name", name},
 		{"OS/2", os2},
-		// A real OTTO file would also have a "CFF " table; omitted here
-		// since probe.go never reads glyph outline data at probe time
-		// (see FontFace.Outline, and this phase's non-goal of CFF outline
-		// extraction).
 	}
 	data := assembleSfnt(sfntVersionOTTO, tables, 0)
 
@@ -209,7 +216,7 @@ func TestProbeFontFile_OTTOStillCharacterizedButNoOutlines(t *testing.T) {
 	face := faces[0]
 
 	if face.HasOutlines {
-		t.Errorf("HasOutlines = true for an OTTO (CFF-outline) face, want false")
+		t.Errorf("HasOutlines = true for an OTTO face with no \"CFF \" table, want false")
 	}
 	if face.Characteristics.Family != "Times New Roman" {
 		t.Errorf("Family = %q, want %q", face.Characteristics.Family, "Times New Roman")
@@ -222,7 +229,48 @@ func TestProbeFontFile_OTTOStillCharacterizedButNoOutlines(t *testing.T) {
 	}
 
 	if _, ok := face.Outline(); ok {
-		t.Errorf("Outline() succeeded for an OTTO face, want ok=false (no glyf table)")
+		t.Errorf("Outline() succeeded for an OTTO face with no \"CFF \" table, want ok=false")
+	}
+}
+
+// TestProbeFontFile_OTTOWithCFFTableHasOutlines is this file's
+// counterpart to TestProbeFontFile_OTTOWithoutCFFTableHasNoOutlines,
+// this time with a real "CFF " table present (the common real-world
+// shape for an OTTO/OpenType-CFF font file) - Phase 3's cff.go support
+// should make this face's outlines fully extractable via Outline, just
+// like a glyf-flavored face already is.
+func TestProbeFontFile_OTTOWithCFFTableHasOutlines(t *testing.T) {
+	cffData := buildTestCFF(t, [][]byte{{}, squareCharstring()}, nil, nil, nil)
+	name := buildNameTable(map[uint16]string{nameIDFamily: "Test CFF"})
+	tables := []sfntTable{
+		{"name", name},
+		{"CFF ", cffData},
+	}
+	data := assembleSfnt(sfntVersionOTTO, tables, 0)
+
+	faces, err := ProbeFontFile(data)
+	if err != nil {
+		t.Fatalf("ProbeFontFile failed: %v", err)
+	}
+	if len(faces) != 1 {
+		t.Fatalf("got %d faces, want 1", len(faces))
+	}
+	face := faces[0]
+
+	if !face.HasOutlines {
+		t.Errorf("HasOutlines = false for an OTTO face with a \"CFF \" table, want true")
+	}
+	outline, ok := face.Outline()
+	if !ok {
+		t.Fatalf("Outline() failed for a valid CFF-flavored face")
+	}
+	glyph, ok := outline.GlyphOutline(1)
+	if !ok {
+		t.Fatalf("Outline().GlyphOutline(1) failed")
+	}
+	minX, minY, maxX, maxY := pathBounds(t, glyph)
+	if minX != 100 || minY != 100 || maxX != 800 || maxY != 800 {
+		t.Errorf("bounds = (%v,%v)-(%v,%v), want (100,100)-(800,800)", minX, minY, maxX, maxY)
 	}
 }
 

@@ -342,7 +342,7 @@ func TestJBIG2TextRegionRefCornersAndTransposed(t *testing.T) {
 			enc.encodeIAID(iaid, 0)
 			enc.encodeOOB(iads)
 
-			region, err := decodeTextRegionBitmap(newMQDecoder(enc.flush()), p, symbols)
+			region, err := decodeTextRegionBitmap(newMQDecoder(enc.flush()), p, symbols, nil)
 			if err != nil {
 				t.Fatalf("decodeTextRegionBitmap: %v", err)
 			}
@@ -394,7 +394,7 @@ func TestJBIG2TextRegionMultiRowStrips(t *testing.T) {
 		}
 		enc.encodeOOB(iads)
 
-		region, err := decodeTextRegionBitmap(newMQDecoder(enc.flush()), p, symbols)
+		region, err := decodeTextRegionBitmap(newMQDecoder(enc.flush()), p, symbols, nil)
 		if err != nil {
 			t.Fatalf("strip size %d: decodeTextRegionBitmap: %v", stripSize, err)
 		}
@@ -441,14 +441,6 @@ func TestJBIG2SymbolTextMalformedStreams(t *testing.T) {
 			},
 		},
 		{
-			name:    "refinement/aggregate symbol dictionary",
-			wantErr: pdferror.ErrUnsupported,
-			edit: func(dict, text []byte) []byte {
-				dict[12] |= 0x02 // SDREFAGG.
-				return append(dict, text...)
-			},
-		},
-		{
 			name:    "Huffman-coded text region",
 			wantErr: pdferror.ErrUnsupported,
 			edit: func(dict, text []byte) []byte {
@@ -457,8 +449,12 @@ func TestJBIG2SymbolTextMalformedStreams(t *testing.T) {
 			},
 		},
 		{
-			name:    "refined text region",
-			wantErr: pdferror.ErrUnsupported,
+			// Turning SBREFINE on after the fact leaves the segment
+			// missing the four refinement AT bytes that flag requires, so
+			// every field after the flags is misread - the point being
+			// that this is caught rather than decoded as nonsense.
+			name:    "refinement flag without the fields it implies",
+			wantErr: pdferror.ErrMalformed,
 			edit: func(dict, text []byte) []byte {
 				text[textFlagsLow] |= 0x02 // SBREFINE.
 				return append(dict, text...)

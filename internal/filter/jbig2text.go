@@ -89,7 +89,49 @@ type textRegionParams struct {
 	dsOffset     int // SBDSOFFSET: a constant added to every inter-symbol gap.
 	numInstances int
 
+	// refine (SBREFINE) allows an individual symbol instance to be
+	// corrected against the dictionary's copy of that symbol - see
+	// jbig2refine.go. refineTemplate and refineAT are that refinement's
+	// GRTEMPLATE and adaptive pixels.
+	refine         bool
+	refineTemplate int
+	refineAT       []jbig2Point
+
 	dataStart int
+}
+
+// textContexts is every adaptive context set one text region decoding
+// pass needs. It is a named group rather than a dozen locals because a
+// symbol dictionary using aggregate coding (jbig2symbol.go) decodes
+// several text regions that must all *share* one set of these, along
+// with the dictionary's own coded stream - each aggregate symbol
+// continues adapting where the previous one left off.
+type textContexts struct {
+	iadt, iafs, iads, iait           arithIntCtx
+	iari, iardw, iardh, iardx, iardy arithIntCtx
+	iaid                             *arithIAIDCtx
+	// refinement holds the pixel-level contexts an SBREFINE instance's
+	// refinement decodes against, allocated lazily since most regions
+	// never refine anything.
+	refinement []mqContext
+}
+
+func newTextContexts(symbolCodeLen int) *textContexts {
+	return &textContexts{
+		iadt: newArithIntCtx(), iafs: newArithIntCtx(), iads: newArithIntCtx(), iait: newArithIntCtx(),
+		iari: newArithIntCtx(), iardw: newArithIntCtx(), iardh: newArithIntCtx(),
+		iardx: newArithIntCtx(), iardy: newArithIntCtx(),
+		iaid: newArithIAIDCtx(symbolCodeLen),
+	}
+}
+
+// refinementContexts returns the refinement context set, allocating it
+// on first use.
+func (c *textContexts) refinementContexts(template int) []mqContext {
+	if c.refinement == nil {
+		c.refinement = make([]mqContext, refinementContextSize(template))
+	}
+	return c.refinement
 }
 
 // parseTextRegionHeader parses the fixed fields at the start of a text
@@ -111,13 +153,13 @@ func parseTextRegionHeader(segData []byte) (textRegionParams, error) {
 	pos += 2
 
 	huff := flags&0x0001 != 0
-	refine := flags&0x0002 != 0
+	p.refine = flags&0x0002 != 0
 	logStripSize := int(flags>>2) & 0x03
 	p.refCorner = int(flags>>4) & 0x03
 	p.transposed = flags&0x0040 != 0
 	p.combOp = combineOp(int(flags>>7) & 0x03)
 	p.defaultPixel = byte(flags>>9) & 0x01
-	refinementTemplate := int(flags>>15) & 0x01
+	p.refineTemplate = int(flags>>15) & 0x01
 
 	// SBDSOFFSET is a 5-bit *signed* field (T.88 7.4.4.1.1): a constant
 	// nudge applied to every inter-symbol gap, letting an encoder shift
@@ -133,13 +175,11 @@ func parseTextRegionHeader(segData []byte) (textRegionParams, error) {
 	if huff {
 		return p, pdferror.Unsupportedf("JBIG2Decode: Huffman-coded text regions are not implemented, only arithmetic coding")
 	}
-	if refine {
-		if refinementTemplate == 0 {
-			if _, pos, err = parseATPixels(segData, pos, 2); err != nil {
-				return p, err
-			}
+	p.refineAT = defaultRefinementAT
+	if p.refine && p.refineTemplate == 0 {
+		if p.refineAT, pos, err = parseATPixels(segData, pos, 2); err != nil {
+			return p, err
 		}
-		return p, pdferror.Unsupportedf("JBIG2Decode: refinement of text region symbol instances (SBREFINE) is not implemented")
 	}
 
 	if len(segData) < pos+4 {
@@ -170,7 +210,7 @@ func decodeTextRegionSegment(segData []byte, symbols []*jbig2Bitmap) (bitmap *jb
 	}
 
 	dec := newMQDecoder(segData[p.dataStart:])
-	region, err := decodeTextRegionBitmap(dec, &p, symbols)
+	region, err := decodeTextRegionBitmap(dec, &p, symbols, nil)
 	if err != nil {
 		return nil, 0, 0, 0, err
 	}
@@ -180,9 +220,16 @@ func decodeTextRegionSegment(segData []byte, symbols []*jbig2Bitmap) (bitmap *jb
 // decodeTextRegionBitmap runs T.88's text region decoding procedure
 // (6.4.5) against an already-positioned decoder, producing the region's
 // bitmap.
-func decodeTextRegionBitmap(dec *mqDecoder, p *textRegionParams, symbols []*jbig2Bitmap) (*jbig2Bitmap, error) {
-	iadt, iafs, iads, iait := newArithIntCtx(), newArithIntCtx(), newArithIntCtx(), newArithIntCtx()
-	iaid := newArithIAIDCtx(symbolCodeLength(len(symbols)))
+//
+// cx may be nil, in which case fresh contexts sized for this symbol list
+// are used - the right thing for a standalone text region segment. A
+// symbol dictionary's aggregate coding instead passes its own shared
+// set; see textContexts.
+func decodeTextRegionBitmap(dec *mqDecoder, p *textRegionParams, symbols []*jbig2Bitmap, cx *textContexts) (*jbig2Bitmap, error) {
+	if cx == nil {
+		cx = newTextContexts(symbolCodeLength(len(symbols)))
+	}
+	iadt, iafs, iads, iait := cx.iadt, cx.iafs, cx.iads, cx.iait
 
 	region := newJBIG2Bitmap(p.width, p.height, p.defaultPixel)
 
@@ -240,16 +287,64 @@ func decodeTextRegionBitmap(dec *mqDecoder, p *textRegionParams, symbols []*jbig
 				}
 			}
 
-			id := dec.decodeIAID(iaid)
+			id := dec.decodeIAID(cx.iaid)
 			if id < 0 || id >= len(symbols) {
 				return nil, pdferror.Malformedf("JBIG2Decode: text region refers to symbol %d, but only %d symbols are available", id, len(symbols))
 			}
 
-			curS = drawTextSymbol(region, symbols[id], p, curS, stripT+curT)
+			symbol := symbols[id]
+			if p.refine {
+				refined, err := refineTextSymbol(dec, p, cx, symbol)
+				if err != nil {
+					return nil, err
+				}
+				symbol = refined
+			}
+
+			curS = drawTextSymbol(region, symbol, p, curS, stripT+curT)
 			instances++
 		}
 	}
 	return region, nil
+}
+
+// refineTextSymbol handles one instance's optional refinement (T.88
+// 6.4.11): a leading flag says whether this instance is refined at all,
+// and if it is, four more values give the refined bitmap's size change
+// and the reference's offset within it. The dictionary's symbol is
+// returned unchanged when the flag says no refinement, which is the
+// common case even in a stream that enables refinement at all.
+func refineTextSymbol(dec *mqDecoder, p *textRegionParams, cx *textContexts, symbol *jbig2Bitmap) (*jbig2Bitmap, error) {
+	ri, ok, bad := dec.decodeInt(cx.iari)
+	if !ok || bad {
+		return nil, pdferror.Malformedf("JBIG2Decode: text region refinement flag is missing or out of range")
+	}
+	if ri == 0 {
+		return symbol, nil
+	}
+
+	values := make([]int, 4)
+	for i, ctx := range []arithIntCtx{cx.iardw, cx.iardh, cx.iardx, cx.iardy} {
+		v, ok, bad := dec.decodeInt(ctx)
+		if !ok || bad {
+			return nil, pdferror.Malformedf("JBIG2Decode: text region refinement parameter is missing or out of range")
+		}
+		values[i] = v
+	}
+	rdw, rdh, rdx, rdy := values[0], values[1], values[2], values[3]
+
+	width, height := symbol.width+rdw, symbol.height+rdh
+	if width <= 0 || height <= 0 || width > maxGenericRegionDimension || height > maxGenericRegionDimension || width*height > maxGenericRegionPixels {
+		return nil, pdferror.Malformedf("JBIG2Decode: refined symbol size %dx%d is out of range", width, height)
+	}
+
+	// The reference sits centered in whatever extra space the size
+	// change created, then shifted by RDX/RDY. The halving rounds toward
+	// negative infinity (an arithmetic shift, not a division), which is
+	// what T.88 specifies and what matters when a refinement makes a
+	// symbol smaller.
+	return decodeRefinementBitmap(dec, cx.refinementContexts(p.refineTemplate), width, height,
+		p.refineTemplate, p.refineAT, symbol, (rdw>>1)+rdx, (rdh>>1)+rdy, false), nil
 }
 
 // drawTextSymbol composites one symbol instance onto the region at the

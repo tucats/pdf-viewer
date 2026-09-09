@@ -326,10 +326,18 @@ func (d *jbig2Decoder) processSegments(data []byte) error {
 				return err
 			}
 
+		case segTypeRefinementRegionIntermediate, segTypeRefinementRegionImmediate, segTypeRefinementRegionImmediateLossless:
+			region, x0, y0, op, err := decodeRefinementRegionSegment(segData, d.page)
+			if err != nil {
+				return err
+			}
+			if err := d.compositeOntoPage(hdr, region, x0, y0, op); err != nil {
+				return err
+			}
+
 		case segTypeHalftoneRegionIntermediate, segTypeHalftoneRegionImmediate, segTypeHalftoneRegionImmediateLossless,
-			segTypeRefinementRegionIntermediate, segTypeRefinementRegionImmediate, segTypeRefinementRegionImmediateLossless,
 			segTypePatternDictionary:
-			return pdferror.Unsupportedf("JBIG2Decode: segment type %d (halftone or refinement region) is not implemented", hdr.segmentType)
+			return pdferror.Unsupportedf("JBIG2Decode: segment type %d (halftone region or pattern dictionary) is not implemented", hdr.segmentType)
 
 		default:
 			// Page info, end-of-page, end-of-stripe, end-of-file, table,

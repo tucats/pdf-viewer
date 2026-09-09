@@ -72,6 +72,13 @@ type symbolDictParams struct {
 	at        []jbig2Point
 	numExSyms int
 	numNewSym int
+	// refAgg (SDREFAGG) allows a new symbol to be coded as a refinement
+	// of symbols already in the dictionary rather than from scratch -
+	// see jbig2refine.go. refineTemplate and refineAT are that
+	// refinement's GRTEMPLATE and adaptive pixels.
+	refAgg         bool
+	refineTemplate int
+	refineAT       []jbig2Point
 	// dataStart is where the arithmetic-coded symbol data begins within
 	// the segment's data bytes.
 	dataStart int
@@ -89,10 +96,10 @@ func parseSymbolDictHeader(segData []byte) (symbolDictParams, error) {
 	pos := 2
 
 	huff := flags&0x0001 != 0
-	refAgg := flags&0x0002 != 0
+	p.refAgg = flags&0x0002 != 0
 	contextUsed := flags&0x0100 != 0
 	p.template = int(flags>>10) & 0x03
-	refinementTemplate := int(flags>>12) & 0x01
+	p.refineTemplate = int(flags>>12) & 0x01
 
 	if huff {
 		return p, pdferror.Unsupportedf("JBIG2Decode: Huffman-coded symbol dictionaries are not implemented, only arithmetic coding")
@@ -112,16 +119,11 @@ func parseSymbolDictHeader(segData []byte) (symbolDictParams, error) {
 	if err != nil {
 		return p, err
 	}
-	if refAgg {
-		if refinementTemplate == 0 {
-			// The refinement template's own two AT pixels, which this
-			// package skips past rather than uses - see the refAgg check
-			// below.
-			if _, pos, err = parseATPixels(segData, pos, 2); err != nil {
-				return p, err
-			}
+	p.refineAT = defaultRefinementAT
+	if p.refAgg && p.refineTemplate == 0 {
+		if p.refineAT, pos, err = parseATPixels(segData, pos, 2); err != nil {
+			return p, err
 		}
-		return p, pdferror.Unsupportedf("JBIG2Decode: refinement/aggregate symbol coding (SDREFAGG) is not implemented")
 	}
 
 	if len(segData) < pos+8 {
@@ -160,7 +162,16 @@ func decodeSymbolDictSegment(segData []byte, inputSymbols []*jbig2Bitmap) ([]*jb
 	// One context set, shared by every symbol bitmap this dictionary
 	// decodes - see this file's doc comment.
 	gbContexts := newGenericContexts(p.template)
-	iadh, iadw, iaex := newArithIntCtx(), newArithIntCtx(), newArithIntCtx()
+	iadh, iadw, iaex, iaai := newArithIntCtx(), newArithIntCtx(), newArithIntCtx(), newArithIntCtx()
+
+	// Aggregate coding decodes a whole miniature text region per symbol,
+	// and every one of those shares a single set of text-region contexts
+	// with the others (T.88 6.5.8.2). The symbol code length covers the
+	// dictionary's full eventual size, not how many symbols exist so far.
+	var textCx *textContexts
+	if p.refAgg {
+		textCx = newTextContexts(symbolCodeLength(len(inputSymbols) + p.numNewSym))
+	}
 
 	newSymbols := make([]*jbig2Bitmap, 0, p.numNewSym)
 	totalPixels := 0
@@ -201,6 +212,15 @@ func decodeSymbolDictSegment(segData []byte, inputSymbols []*jbig2Bitmap) ([]*jb
 				return nil, pdferror.Unsupportedf("JBIG2Decode: symbol dictionary's symbols exceed this package's %d-pixel limit", maxSymbolPixelsPerDictionary)
 			}
 
+			if p.refAgg {
+				symbol, err := decodeAggregateSymbol(dec, &p, textCx, iaai, inputSymbols, newSymbols, width, height)
+				if err != nil {
+					return nil, err
+				}
+				newSymbols = append(newSymbols, symbol)
+				continue
+			}
+
 			// Symbol bitmaps never use typical prediction: TPGDON codes a
 			// row identical to the one above it as a single bit, which pays
 			// off over a whole page but not over a bitmap a dozen rows tall.
@@ -209,6 +229,62 @@ func decodeSymbolDictSegment(segData []byte, inputSymbols []*jbig2Bitmap) ([]*jb
 	}
 
 	return exportSymbols(dec, iaex, inputSymbols, newSymbols, p.numExSyms)
+}
+
+// decodeAggregateSymbol decodes one new symbol under refinement/
+// aggregate coding (T.88 6.5.8.2): instead of coding the symbol's pixels
+// from nothing, the stream says how many existing symbol instances it is
+// built from.
+//
+// One instance - overwhelmingly the common case, and the only one a
+// real-world encoder is likely to emit - means "this symbol is that
+// symbol, corrected", and is coded as a symbol ID, an offset, and a
+// refinement. More than one means the symbol is a little collage of
+// existing symbols, coded as a miniature text region drawn onto the new
+// symbol's own bitmap - which is why the text region procedure has to be
+// reachable from here, sharing this dictionary's coded stream and
+// contexts.
+func decodeAggregateSymbol(dec *mqDecoder, p *symbolDictParams, textCx *textContexts, iaai arithIntCtx, inputSymbols, newSymbols []*jbig2Bitmap, width, height int) (*jbig2Bitmap, error) {
+	instances, ok, bad := dec.decodeInt(iaai)
+	if !ok || bad || instances <= 0 {
+		return nil, pdferror.Malformedf("JBIG2Decode: symbol dictionary aggregate instance count is missing or out of range")
+	}
+
+	// The symbols available as references are everything this dictionary
+	// holds so far: what it imported, plus what it has already decoded.
+	available := make([]*jbig2Bitmap, 0, len(inputSymbols)+len(newSymbols))
+	available = append(available, inputSymbols...)
+	available = append(available, newSymbols...)
+
+	if instances == 1 {
+		id := dec.decodeIAID(textCx.iaid)
+		if id < 0 || id >= len(available) {
+			return nil, pdferror.Malformedf("JBIG2Decode: aggregate symbol refines symbol %d, which is not (yet) defined", id)
+		}
+		rdx, ok, bad := dec.decodeInt(textCx.iardx)
+		if !ok || bad {
+			return nil, pdferror.Malformedf("JBIG2Decode: aggregate symbol X offset is missing or out of range")
+		}
+		rdy, ok, bad := dec.decodeInt(textCx.iardy)
+		if !ok || bad {
+			return nil, pdferror.Malformedf("JBIG2Decode: aggregate symbol Y offset is missing or out of range")
+		}
+		return decodeRefinementBitmap(dec, textCx.refinementContexts(p.refineTemplate), width, height,
+			p.refineTemplate, p.refineAT, available[id], rdx, rdy, false), nil
+	}
+
+	// A collage: a text region exactly the size of the new symbol, in
+	// the fixed configuration T.88 6.5.8.2.1 prescribes for this use.
+	region := &textRegionParams{
+		width: width, height: height,
+		combOp:    combOpOr,
+		stripSize: 1, refCorner: refCornerTopLeft,
+		numInstances:   instances,
+		refine:         true,
+		refineTemplate: p.refineTemplate,
+		refineAT:       p.refineAT,
+	}
+	return decodeTextRegionBitmap(dec, region, available, textCx)
 }
 
 // exportSymbols runs T.88's export flag procedure (6.5.10). A dictionary

@@ -343,18 +343,10 @@ func TestJBIG2UnsupportedAndMalformedStreams(t *testing.T) {
 			},
 		},
 		{
-			name:    "refinement region segment",
-			wantErr: pdferror.ErrUnsupported,
-			edit: func(s []byte) []byte {
-				// Keep the type's other flag bits, replace the type itself.
-				s[segmentTypeOffset] = s[segmentTypeOffset]&^0x3F | byte(segTypeRefinementRegionImmediate)
-				return s
-			},
-		},
-		{
 			name:    "halftone region segment",
 			wantErr: pdferror.ErrUnsupported,
 			edit: func(s []byte) []byte {
+				// Keep the type's other flag bits, replace the type itself.
 				s[segmentTypeOffset] = s[segmentTypeOffset]&^0x3F | byte(segTypeHalftoneRegionImmediate)
 				return s
 			},

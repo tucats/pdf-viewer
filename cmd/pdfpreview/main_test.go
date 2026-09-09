@@ -18,8 +18,36 @@ import (
 func TestRenderPreviewToFileDiagnosticsFlagDoesNotBreakRendering(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "preview.png")
 
-	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 1.0, outPath, true); err != nil {
+	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 1.0, outPath, true, false); err != nil {
 		t.Fatalf("renderPreviewToFile with showDiagnostics=true: %v", err)
+	}
+
+	f, err := os.Open(outPath)
+	if err != nil {
+		t.Fatalf("opening output file: %v", err)
+	}
+	defer f.Close()
+
+	if _, err := png.DecodeConfig(f); err != nil {
+		t.Fatalf("output file is not a valid PNG: %v", err)
+	}
+}
+
+// TestRenderPreviewToFileSubstituteFontsFlagDoesNotBreakRendering
+// mirrors TestRenderPreviewToFileDiagnosticsFlagDoesNotBreakRendering
+// above for the -substitute-fonts flag (docs/FONTS.md's Phase 4): this
+// fixture's font is already embedded and fully resolvable, so opting
+// into substitution should have no visible effect - this only guards
+// against the plumbing itself (the WithFontSubstitution OpenOption)
+// breaking the render path, e.g. by scanning a directory that doesn't
+// exist on the machine running this test and treating that as fatal
+// instead of tolerating it (see internal/fonts/directory_source.go's
+// own documented tolerance for exactly that).
+func TestRenderPreviewToFileSubstituteFontsFlagDoesNotBreakRendering(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "preview.png")
+
+	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 1.0, outPath, false, true); err != nil {
+		t.Fatalf("renderPreviewToFile with substituteFonts=true: %v", err)
 	}
 
 	f, err := os.Open(outPath)
@@ -57,7 +85,7 @@ func fixturePath(t *testing.T, name string) string {
 func TestRenderPreviewToFile(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "preview.png")
 
-	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 1.0, outPath, false); err != nil {
+	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 1.0, outPath, false, false); err != nil {
 		t.Fatalf("renderPreviewToFile: %v", err)
 	}
 
@@ -83,7 +111,7 @@ func TestRenderPreviewToFile(t *testing.T) {
 func TestRenderPreviewToFileScale(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "preview.png")
 
-	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 2.0, outPath, false); err != nil {
+	if err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 0, 2.0, outPath, false, false); err != nil {
 		t.Fatalf("renderPreviewToFile: %v", err)
 	}
 
@@ -111,7 +139,7 @@ func TestRenderPreviewToFileScale(t *testing.T) {
 func TestRenderPreviewToFilePageOutOfRange(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "preview.png")
 
-	err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 5, 1.0, outPath, false)
+	err := renderPreviewToFile(fixturePath(t, "filled-rect.pdf"), 5, 1.0, outPath, false, false)
 	if err == nil {
 		t.Fatal("renderPreviewToFile with an out-of-range page index succeeded, want an error")
 	}
@@ -122,7 +150,7 @@ func TestRenderPreviewToFilePageOutOfRange(t *testing.T) {
 func TestRenderPreviewToFileMissingInput(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "preview.png")
 
-	err := renderPreviewToFile(filepath.Join(t.TempDir(), "does-not-exist.pdf"), 0, 1.0, outPath, false)
+	err := renderPreviewToFile(filepath.Join(t.TempDir(), "does-not-exist.pdf"), 0, 1.0, outPath, false, false)
 	if err == nil {
 		t.Fatal("renderPreviewToFile with a nonexistent input file succeeded, want an error")
 	}

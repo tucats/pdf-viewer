@@ -9,7 +9,7 @@
 //
 // # Usage
 //
-//	go run ./cmd/pdfpreview [-page N] [-scale S] [-diagnostics] -out preview.png input.pdf
+//	go run ./cmd/pdfpreview [-page N] [-scale S] [-diagnostics] [-substitute-fonts] -out preview.png input.pdf
 //
 // Example: render the first page of report.pdf at twice the default
 // resolution to preview.png:
@@ -25,6 +25,20 @@
 // (Render itself returns no error) but looks wrong or unexpectedly
 // blank, where the diagnostics buffer is the tool for finding out what,
 // if anything, was silently skipped along the way.
+//
+// Adding -substitute-fonts opts the document into docs/FONTS.md's Phase
+// 4 font substitution (pdfviewer.WithFontSubstitution, with its
+// zero-value FontSubstitution - see that type's own doc comment for why
+// the zero value already means "scan this machine's usual platform font
+// directories"): a PDF font this package cannot extract a real embedded
+// outline from (most commonly a non-embedded standard font like Arial or
+// Times New Roman, expecting whatever renders the page to supply it) is
+// matched against real font files found on disk instead of always
+// falling back to a placeholder box. Combined with -diagnostics, this is
+// the manual, not-committed-as-a-test sanity check docs/FONTS.md's Phase
+// 4 "Status" section describes: confirm on a real machine that a
+// previously-reported "font ... was not found, and was substituted for
+// placeholder box characters" case now resolves to a real outline.
 package main
 
 import (
@@ -58,6 +72,7 @@ func main() {
 	scale := flag.Float64("scale", 1.0, "device pixels per PDF point (1.0 = 72 DPI; e.g. 2.0 for a sharper image)")
 	out := flag.String("out", "preview.png", "path to write the rendered PNG to")
 	diagnostics := flag.Bool("diagnostics", false, "print to stdout any diagnostic messages recorded while opening/rendering (unsupported features, missing resources, ...)")
+	substituteFonts := flag.Bool("substitute-fonts", false, "find a real substitute outline (via this machine's installed fonts) for a font this package cannot extract an embedded outline from, instead of always falling back to a placeholder box")
 	flag.Parse()
 
 	// Everything flag.Parse did not recognize as a "-flag value" pair is
@@ -68,11 +83,11 @@ func main() {
 	// the idiomatic way to say "I expect exactly one input file."
 	args := flag.Args()
 	if len(args) != 1 {
-		fmt.Fprintf(os.Stderr, "usage: pdfpreview [-page N] [-scale S] -out preview.png input.pdf\n")
+		fmt.Fprintf(os.Stderr, "usage: pdfpreview [-page N] [-scale S] [-diagnostics] [-substitute-fonts] -out preview.png input.pdf\n")
 		os.Exit(2)
 	}
 
-	if err := renderPreviewToFile(args[0], *page, *scale, *out, *diagnostics); err != nil {
+	if err := renderPreviewToFile(args[0], *page, *scale, *out, *diagnostics, *substituteFonts); err != nil {
 		// Printing to os.Stderr (rather than os.Stdout) is the Go
 		// convention for error output, so that a shell pipeline
 		// redirecting stdout to a file still shows errors on the
@@ -98,12 +113,24 @@ func main() {
 // returns, whether or not opening/rendering ultimately succeeded (a
 // diagnostic recorded before a later, unrelated failure can still be
 // useful context for debugging that failure).
-func renderPreviewToFile(inputPath string, pageIndex int, scale float64, outPath string, showDiagnostics bool) error {
+//
+// When substituteFonts is true, the document is opened with
+// pdfviewer.WithFontSubstitution(pdfviewer.FontSubstitution{}) - the
+// zero-value configuration, which (per that type's own doc comment)
+// already means "scan this machine's usual platform font directories,"
+// exactly what a command-line preview tool run interactively on a real
+// machine wants, as opposed to a caller embedding this package in a
+// server or other environment that should decide its own font
+// directories explicitly.
+func renderPreviewToFile(inputPath string, pageIndex int, scale float64, outPath string, showDiagnostics, substituteFonts bool) error {
 	var opts []pdfviewer.OpenOption
 	var diagnostics *pdfviewer.Diagnostics
 	if showDiagnostics {
 		diagnostics = &pdfviewer.Diagnostics{}
 		opts = append(opts, pdfviewer.WithDiagnostics(diagnostics))
+	}
+	if substituteFonts {
+		opts = append(opts, pdfviewer.WithFontSubstitution(pdfviewer.FontSubstitution{}))
 	}
 
 	// pdfviewer.OpenFile is the convenience entry point for reading

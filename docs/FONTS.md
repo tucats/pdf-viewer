@@ -807,9 +807,10 @@ below) - Phase 4's `FontSource` design should not preclude adding one
 later (an in-memory/embedded `FontSource` implementation should fit the
 same interface as `DirectorySource`), but does not include one itself.
 
-**Status.** In progress, landed as independently committable sub-phases
-(4a onward, mirroring Phase 3's 3a-3e precedent), each covering one
-deliverable above:
+**Status.** Done for simple fonts (Type1/TrueType/MMType1); deliberately
+not implemented for Type0/CID fonts (see sub-phase 4d below for why) -
+landed as independently committable sub-phases (4a-4f, mirroring Phase
+3's 3a-3e precedent), each covering one deliverable above:
 
 - **4a - matching algorithm: Done.** `internal/fonts/substitute.go`
   implements `FontSource` (the interface a later sub-phase's
@@ -958,9 +959,30 @@ deliverable above:
   to carry a real `hhea`/`hmtx` table pair). A 15s local fuzz run of both
   `FuzzParseSfnt` and `FuzzProbeFontFile` after this change surfaced no
   crashes.
-- **4f onward - not yet started.** The `docs/capability-matrix.md` "Font
-  substitution" row (documenting the finished feature) remains to be
-  written, along with a final read-through of this whole phase.
+- **4f - `docs/capability-matrix.md` update, plus a CLI flag for the
+  manual sanity check: Done.** "Non-embedded font fallback" updated to
+  mention substitution as a source of a real outline/advance width when
+  enabled; a new "Font substitution" row added, status "Done for simple
+  fonts; Partial for Type 0/CID" - matching this section's own summary
+  above. `cmd/pdfpreview` gained a `-substitute-fonts` flag (opting into
+  `WithFontSubstitution` with its zero-value config, i.e. this machine's
+  platform-default directories) so the manual sanity check this section
+  describes below is actually runnable as written, rather than needing a
+  one-off throwaway program.
+
+Phase 4 (sub-phases 4a-4f) is now complete, with one deliberate scope
+narrowing worth the user's attention: substitution applies to simple
+fonts only, not Type0/CID fonts (see 4d's notes on why - no
+`/ToUnicode` support to translate a CID into the Unicode rune a
+substitute font would need). As a manual sanity check (not a committed
+test - see the "Depends on"/"Testing" sections above on why this
+project's own test suite must not depend on real installed fonts), it
+is worth re-running the reported repro command with the new
+`-substitute-fonts` flag (4f) added
+(`go run ./cmd/pdfpreview -scale 4 -diagnostics -substitute-fonts -out ...
+'2017 Pond Inspecttion.pdf'`) to confirm the five Arial/Times fonts it
+originally reported now resolve to real outlines on a real machine with
+those fonts installed.
 
 ### Phase 5 - Bundled last-resort font (deferred, not started)
 

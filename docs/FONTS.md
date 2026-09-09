@@ -881,10 +881,54 @@ deliverable above:
   attached and does not disturb ordinary rendering) - nothing yet
   observably changes what any font actually renders as, since `Load`'s
   fallback path does not consume this wiring until the next sub-phase.
-- **4d onward - not yet started.** The actual substitution attempt in
-  `simple.go`'s `loadSimpleFont` fallback path (and, to the extent it can
-  correctly apply - see that sub-phase's notes on `cid.go`), diagnostics,
-  and width-from-substitute remain to be built.
+- **4d - wiring the substitution attempt into `loadSimpleFont`, plus
+  diagnostics: Done.** `simple.go`'s `loadSimpleFont` now tries
+  `trySubstitute` (new) as its last resort, after the embedded TrueType
+  and CFF attempts, before falling back to `notdefGlyph`'s diagnostic:
+  `trySubstitute` asks `substitutionSourceFor` (4c) for a configured
+  `FontSource`, characterizes `dict` via Phase 1's `Characterize`, calls
+  `matchFace` (4a) against `source.Candidates()` (4b), and - on a match -
+  extracts its outline via `FontFace.Outline` and builds a `lookupGID`
+  from it. Doing that last step needed a way to look a *rune* up in
+  either outline format generically: `font.go` gained a `runeGlyphSource`
+  interface (`glyphOutlineSource` plus `GIDForRune`), and `truetype.go`'s
+  `sfntFont` gained a `GIDForRune` method (mirroring `cffFont`'s
+  existing one) so both satisfy it. `simple.go`'s old
+  `simpleCFFGlyphLookup` was generalized into `simpleRuneGlyphLookup`
+  (taking a `runeGlyphSource` instead of a bare `*cffFont`) and is now
+  shared by both the embedded-CFF path and the new substitute path - the
+  same rune-via-`/Encoding` lookup strategy applies identically to
+  either. A successful substitution records a diagnostic naming the
+  chosen family and, when known, source file path (`FontFace.Path`, 4b)
+  instead of the old "no usable outline data" message.
+  `cid.go`'s `loadType0Font` is deliberately left functionally
+  unchanged (only a new doc comment explaining why) - see that file's
+  updated comment: substitution needs to resolve a code to a *Unicode
+  rune* to ask an unrelated substitute font "what glyph do you have for
+  this character," but a Type0/CID font's codes have no known Unicode
+  meaning without a `/ToUnicode` CMap, which this package does not parse
+  (a separate, not-yet-scheduled capability - see `doc.go`). Reusing a
+  CID numerically against a substitute font's own unrelated glyph
+  ordering would not degrade gracefully the way a bold/italic mismatch
+  does for a simple font - it would select essentially arbitrary wrong
+  glyphs - so `notdefGlyph` remains the honest outcome for a
+  non-embedded Type0 font even with substitution enabled. This is a
+  scope decision worth the user's attention when reviewing this
+  sub-phase, since it means Phase 4 substitution applies to simple fonts
+  only (Type1/TrueType/MMType1), not Type0/CID ones.
+  Verified with new unit tests
+  (`internal/fonts/substitute_wiring_test.go`'s `TestTrySubstitute_*`
+  and `TestLoadSimpleFont_*`, all using synthetic in-memory candidates)
+  and a new full end-to-end, disk-backed integration test at the public
+  API level (`pdfviewer_fontsubstitution_test.go`'s
+  `TestSubstitutedGlyphIsUsedInsteadOfNotdefFallback`, reusing the
+  existing `text-notdef-fallback.pdf` fixture - a non-embedded
+  `/BaseFont /Helvetica` font - with a real, hand-built candidate
+  `.ttf` file written to a temporary directory, confirming the
+  diagnostic changes from "placeholder boxes" to "substituted").
+- **4e onward - not yet started.** Width-from-substitute and the
+  `docs/capability-matrix.md` "Font substitution" row remain to be
+  built.
 
 ### Phase 5 - Bundled last-resort font (deferred, not started)
 

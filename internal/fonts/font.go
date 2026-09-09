@@ -58,6 +58,32 @@ type glyphOutlineSource interface {
 	UnitsPerEm() uint16
 }
 
+// runeGlyphSource extends glyphOutlineSource with a rune-keyed glyph
+// lookup, GIDForRune - both *sfntFont (truetype.go) and *cffFont
+// (cff.go) already implement this exact method (added to *sfntFont
+// specifically to satisfy this interface - see that type's own
+// GIDForRune doc comment), so any glyphOutlineSource this package
+// produces from a real font program (embedded or, per Phase 4, a
+// substitute found on disk) can be asked "what glyph, if any, does this
+// Unicode rune map to" the same way regardless of its underlying
+// outline format.
+//
+// substitute.go's substitution wiring (simple.go's trySubstitute) is
+// the only place this interface is actually used: once Phase 4's
+// matchFace has chosen a candidate FontFace, its Outline method only
+// promises a glyphOutlineSource - this interface is what lets
+// trySubstitute then also build a lookupGID function for it (via a type
+// assertion - see runeGlyphSource's use in simple.go), the same way
+// simpleCFFGlyphLookup already does for an *embedded* CFF program's own
+// GIDForRune method.
+type runeGlyphSource interface {
+	glyphOutlineSource
+
+	// GIDForRune looks up a GID by Unicode rune, ok=false if r has no
+	// mapping in this font program at all.
+	GIDForRune(r rune) (uint16, bool)
+}
+
 type Font struct {
 	// TwoByteCodes is true for a Type0/CID composite font (this package
 	// only supports Identity-H/V encoding - see cid.go - so a "code" for

@@ -71,11 +71,72 @@ func loadSimpleFont(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 		f.lookupGID = simpleGlyphLookup(&sfnt, encoding, symbolic)
 	} else if cff, ok := loadEmbeddedCFF(descriptor, resolver); ok {
 		f.glyphSource = &cff
-		f.lookupGID = simpleCFFGlyphLookup(&cff, encoding)
-	} else {
+		f.lookupGID = simpleRuneGlyphLookup(&cff, encoding)
+	} else if !trySubstitute(f, dict, resolver, encoding) {
 		diag.Note(resolver, "font %v (%v) has no usable embedded TrueType or CFF outline data (no /FontFile2 or /FontFile3, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"], dict["Subtype"])
 	}
 	return f, nil
+}
+
+// trySubstitute is Phase 4 of docs/FONTS.md's font-substitution work:
+// the last thing loadSimpleFont tries before giving up and leaving f
+// with no glyphSource at all (i.e. falling back to notdefGlyph for
+// every code - see font.go's doc comment). It reports ok=false, having
+// changed nothing on f, in every case that should still fall through to
+// loadSimpleFont's existing "no usable outline data" diagnostic exactly
+// as if this function did not exist:
+//
+//   - Font substitution was never enabled for this document at all (the
+//     overwhelmingly common case - see substitutionSourceFor) - resolver
+//     simply doesn't carry a configured FontSource.
+//   - A FontSource is configured, but none of its candidates are a good
+//     enough match for dict's own characteristics (see Characterize and
+//     matchFace) - nothing installed looks anything like what this font
+//     asked for.
+//   - A candidate was matched, but its outline data turns out to be
+//     unusable despite having looked structurally promising when it was
+//     probed (FontFace.Outline's own documented failure case - a
+//     malformed candidate file), or it turns out not to support the
+//     rune-keyed glyph lookup this function needs (see runeGlyphSource -
+//     true for every outline format Outline can currently produce, so
+//     this is only a defensive fallback, not a case expected to occur in
+//     practice).
+//
+// When it does succeed, it sets f.glyphSource and f.lookupGID exactly as
+// the embedded-font-program cases above it do, and separately records a
+// diagnostic naming which substitute was chosen (family and, when known,
+// source file path - see FontFace.Path) - a different message than the
+// "no usable outline data" one, since a substitute was in fact used.
+func trySubstitute(f *Font, dict syntax.Dictionary, resolver Resolver, encoding runeTable) bool {
+	source, ok := substitutionSourceFor(resolver)
+	if !ok {
+		return false
+	}
+
+	query := Characterize(dict, resolver)
+	candidate, ok := matchFace(query, source.Candidates())
+	if !ok {
+		return false
+	}
+
+	outline, ok := candidate.Outline()
+	if !ok {
+		return false
+	}
+	runeSource, ok := outline.(runeGlyphSource)
+	if !ok {
+		return false
+	}
+
+	f.glyphSource = runeSource
+	f.lookupGID = simpleRuneGlyphLookup(runeSource, encoding)
+
+	if candidate.Path != "" {
+		diag.Note(resolver, "font %v (%v) has no usable embedded outline data; substituted %q from %s", dict["BaseFont"], dict["Subtype"], candidate.Characteristics.Family, candidate.Path)
+	} else {
+		diag.Note(resolver, "font %v (%v) has no usable embedded outline data; substituted %q", dict["BaseFont"], dict["Subtype"], candidate.Characteristics.Family)
+	}
+	return true
 }
 
 // simpleWidths reads a simple font's /Widths array (indexed from
@@ -252,27 +313,35 @@ func simpleGlyphLookup(sfnt *sfntFont, encoding runeTable, symbolic bool) func(c
 	}
 }
 
-// simpleCFFGlyphLookup returns the lookupGID function (see Font's doc
-// comment) for a simple font backed by an embedded CFF program: for
-// each code, it resolves the PDF font dictionary's own /Encoding-
-// derived rune (encoding.go's BuildSimpleEncoding) and looks that rune
-// up via the CFF program's own charset names (cffFont.GIDForRune) - the
-// path PDF's specification (9.6.6.2) describes for a non-symbolic
-// simple font backed by a Type 1/CFF program: a character code maps to
-// a glyph *name* via /Encoding, and that name is then looked up in the
-// font program's own charset to find its GID.
+// simpleRuneGlyphLookup returns the lookupGID function (see Font's doc
+// comment) for a simple font backed by any runeGlyphSource (font.go) -
+// an embedded CFF program (*cffFont, cff.go), or, per Phase 4's
+// substitution wiring (trySubstitute below), a substitute font found on
+// disk (whichever concrete outline format FontFace.Outline actually
+// produced for it - see that method's own doc comment): for each code,
+// it resolves the PDF font dictionary's own /Encoding-derived rune
+// (encoding.go's BuildSimpleEncoding) and looks that rune up via src's
+// own GIDForRune - the path PDF's specification (9.6.6.2) describes for
+// a non-symbolic simple font backed by a Type 1/CFF program: a character
+// code maps to a glyph *name* via /Encoding, and that name (or, for a
+// substitute font, simply the Unicode rune the PDF's own /Encoding
+// resolves the code to) is then looked up in the font program's own
+// charset/cmap to find its GID.
 //
-// Unlike simpleGlyphLookup's TrueType counterpart above, this has no
-// "symbolic, look up by raw code" fallback path: a CFF program's own
-// built-in Encoding table (a second, separate code-to-GID table the CFF
-// format also defines, distinct from the charset) is not read by this
-// package - see cff.go's doc comment on scope. A symbolic CFF font
-// whose codes are only meaningful through that built-in table therefore
-// still falls back to notdefGlyph for those codes - a narrow, documented
-// gap that leaves the overwhelmingly common case (a non-symbolic
-// embedded Latin-text font using /Encoding, or relying on its default
+// Unlike simpleGlyphLookup's TrueType-*embedded*-font counterpart above,
+// this has no "symbolic, look up by raw code" fallback path: for an
+// embedded CFF program, its own built-in Encoding table (a second,
+// separate code-to-GID table the CFF format also defines, distinct from
+// the charset) is not read by this package at all - see cff.go's doc
+// comment on scope; for a substitute font (which was never the font this
+// PDF's codes were actually authored against in the first place), a raw
+// code number has no meaning to fall back to. A symbolic font whose
+// codes are only meaningful through such a built-in/raw mapping
+// therefore still falls back to notdefGlyph for those codes - a narrow,
+// documented gap that leaves the overwhelmingly common case (a
+// non-symbolic font using /Encoding, or relying on its default
 // StandardEncoding) unaffected.
-func simpleCFFGlyphLookup(cff *cffFont, encoding runeTable) func(code int) (uint16, bool) {
+func simpleRuneGlyphLookup(src runeGlyphSource, encoding runeTable) func(code int) (uint16, bool) {
 	return func(code int) (uint16, bool) {
 		if code < 0 || code > 255 {
 			return 0, false
@@ -281,6 +350,6 @@ func simpleCFFGlyphLookup(cff *cffFont, encoding runeTable) func(code int) (uint
 		if r == 0 {
 			return 0, false
 		}
-		return cff.GIDForRune(r)
+		return src.GIDForRune(r)
 	}
 }

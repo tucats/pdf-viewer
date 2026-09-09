@@ -302,6 +302,17 @@ func (f *sfntFont) UnitsPerEm() uint16 {
 	return f.unitsPerEm
 }
 
+// GIDForRune looks up a GID by Unicode rune via this font's own cmap
+// table - see the cmap field's doc comment and cmapSubtable.Lookup.
+// Added alongside cffFont's identically-shaped method (cff.go) so that
+// font.go's runeGlyphSource interface is satisfied by either kind of
+// embedded or substitute font program, letting Phase 4's substitution
+// wiring (simple.go's trySubstitute) look a rune up the same way
+// regardless of which one it is working with.
+func (f *sfntFont) GIDForRune(r rune) (uint16, bool) {
+	return f.cmap.Lookup(r)
+}
+
 // GlyphOutline returns glyph index gid's outline as a graphics.Path in
 // the font's own native "design units" coordinate space (i.e. not yet
 // scaled by unitsPerEm - see Font.Glyph in font.go, which does that

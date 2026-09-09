@@ -68,6 +68,27 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 		f.lookupGID = cidCFFGlyphLookup(&cff)
 		return f, nil
 	}
+	// Unlike loadSimpleFont (simple.go), this does not attempt Phase 4's
+	// font substitution (docs/FONTS.md) even when one is configured for
+	// the current document - a deliberate scope decision, not an
+	// oversight. Substitution needs to know which *Unicode rune* a code
+	// means (see simple.go's trySubstitute, which resolves a code to a
+	// rune via the PDF font's own /Encoding and looks that rune up in
+	// the substitute's own cmap/charset) so it can ask a completely
+	// different, substitute font program "what glyph do you have for
+	// this character" - but per this file's own package doc comment,
+	// this package parses no /ToUnicode CMap, so for a Type0 font a code
+	// (here, a CID) has no known Unicode meaning at all. A CID is only
+	// ever meaningful as an index into the *specific* font program that
+	// originally defined it (its own glyph ordering, or - per this
+	// package's Identity-H/V scope - directly as a glyph index into it);
+	// reusing that same numeric value against an unrelated substitute
+	// font's own, unrelated glyph ordering would not "approximately"
+	// work the way a bold/italic mismatch does for a simple font's
+	// substitute - it would pick essentially arbitrary, wrong glyphs.
+	// notdefGlyph is the honest outcome here until this package parses
+	// /ToUnicode (a separate, not-yet-scheduled capability - see
+	// doc.go's "Text extraction is a separate, later capability").
 	diag.Note(resolver, "Type0 font %v has no usable embedded TrueType or CFF outline data (no /FontFile2 or /FontFile3, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"])
 	return f, nil
 }

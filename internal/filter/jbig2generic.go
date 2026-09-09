@@ -2,7 +2,6 @@ package filter
 
 import (
 	"encoding/binary"
-	"sort"
 
 	"github.com/tucats/pdf-viewer/internal/pdferror"
 )
@@ -21,39 +20,67 @@ import (
 // pixel's arithmetic-coding context.
 type jbig2Point struct{ dx, dy int }
 
-// codingTemplates lists each GBTEMPLATE's fixed (non-adaptive) context
-// pixel offsets - ITU-T T.88 Figures 7-10, "context used for coding the
-// generic region" - in the order the specification's own figures show
-// them (not yet sorted into final bit order - see
-// genericContextTemplate).
-var codingTemplates = [4][]jbig2Point{
+// templateSlot is one bit position in a GBTEMPLATE's context, in the
+// order T.88's own template figures number them (most significant bit
+// first). A slot is either a fixed neighboring pixel or one of the
+// segment's adaptive-template (AT) pixels, whose *bit position* is fixed
+// by the figure even though the pixel it reads from is chosen by the
+// encoder.
+type templateSlot struct {
+	// point is the neighbor offset this slot reads, for a fixed slot.
+	point jbig2Point
+	// atIndex is -1 for a fixed slot, or the index into the segment's AT
+	// pixel list (A1 is index 0) for an adaptive one.
+	atIndex int
+}
+
+// fixedSlot and atSlot are small constructors that keep the template
+// tables below readable.
+func fixedSlot(dx, dy int) templateSlot { return templateSlot{point: jbig2Point{dx, dy}, atIndex: -1} }
+func atSlot(i int) templateSlot         { return templateSlot{atIndex: i} }
+
+// codingTemplates lists each GBTEMPLATE's context bit layout - ITU-T
+// T.88 Figures 4-7, "template used when GBTEMPLATE is 0/1/2/3" - in the
+// order those figures number the bits: raster order (top row first, left
+// to right within a row) *with each AT pixel counted at its nominal
+// position*, most significant bit first.
+//
+// That "nominal position" is the subtlety worth spelling out. Each AT
+// pixel's default position (defaultATPixels below) is exactly where the
+// figure draws it, so for a stream using the defaults these tables
+// describe plain raster order over the whole neighborhood. An encoder
+// may move an AT pixel somewhere else entirely to help compression on
+// unusual content, and when it does, the moved pixel keeps the *bit
+// position* the figure gave it while reading from its new location -
+// which is why the layout is written out as an explicit ordered list
+// here rather than derived by sorting the combined points.
+var codingTemplates = [4][]templateSlot{
 	0: {
-		{-1, -2}, {0, -2}, {1, -2},
-		{-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {2, -1},
-		{-4, 0}, {-3, 0}, {-2, 0}, {-1, 0},
+		atSlot(3), fixedSlot(-1, -2), fixedSlot(0, -2), fixedSlot(1, -2), atSlot(2),
+		atSlot(1), fixedSlot(-2, -1), fixedSlot(-1, -1), fixedSlot(0, -1), fixedSlot(1, -1), fixedSlot(2, -1), atSlot(0),
+		fixedSlot(-4, 0), fixedSlot(-3, 0), fixedSlot(-2, 0), fixedSlot(-1, 0),
 	},
 	1: {
-		{-1, -2}, {0, -2}, {1, -2}, {2, -2},
-		{-2, -1}, {-1, -1}, {0, -1}, {1, -1}, {2, -1},
-		{-3, 0}, {-2, 0}, {-1, 0},
+		fixedSlot(-1, -2), fixedSlot(0, -2), fixedSlot(1, -2), fixedSlot(2, -2),
+		fixedSlot(-2, -1), fixedSlot(-1, -1), fixedSlot(0, -1), fixedSlot(1, -1), fixedSlot(2, -1), atSlot(0),
+		fixedSlot(-3, 0), fixedSlot(-2, 0), fixedSlot(-1, 0),
 	},
 	2: {
-		{-1, -2}, {0, -2}, {1, -2},
-		{-2, -1}, {-1, -1}, {0, -1}, {1, -1},
-		{-2, 0}, {-1, 0},
+		fixedSlot(-1, -2), fixedSlot(0, -2), fixedSlot(1, -2),
+		fixedSlot(-2, -1), fixedSlot(-1, -1), fixedSlot(0, -1), fixedSlot(1, -1), atSlot(0),
+		fixedSlot(-2, 0), fixedSlot(-1, 0),
 	},
 	3: {
-		{-3, -1}, {-2, -1}, {-1, -1}, {0, -1}, {1, -1},
-		{-4, 0}, {-3, 0}, {-2, 0}, {-1, 0},
+		fixedSlot(-3, -1), fixedSlot(-2, -1), fixedSlot(-1, -1), fixedSlot(0, -1), fixedSlot(1, -1), atSlot(0),
+		fixedSlot(-4, 0), fixedSlot(-3, 0), fixedSlot(-2, 0), fixedSlot(-1, 0),
 	},
 }
 
 // defaultATPixels gives each GBTEMPLATE's default adaptive-template (AT)
-// pixel offset(s) - T.88's own recommended defaults, and, per this
-// package's documented scope limitation (see jbig2.go's doc comment),
-// the *only* AT positions this decoder accepts; a real encoder is
-// allowed to move these to help compression on unusual content, but
-// doing so is rare in practice.
+// pixel offset(s) - the positions T.88's template figures draw them at,
+// which are also what real encoders overwhelmingly use. A segment states
+// its own AT positions explicitly, so these are needed only by this
+// package's encoder (which always uses the defaults) and by tests.
 var defaultATPixels = [4][]jbig2Point{
 	0: {{3, -1}, {-3, -1}, {2, -2}, {-2, -2}},
 	1: {{3, -1}},
@@ -70,49 +97,36 @@ var defaultATPixels = [4][]jbig2Point{
 // "this row is identical to the previous one" cheaply.
 var reusedContext = [4]int{0x9B25, 0x0795, 0x00E5, 0x0195}
 
-// genericContextTemplate returns GBTEMPLATE t's combined (fixed + AT)
-// context points, sorted into raster order (top row to bottom, and left
-// to right within a row). This sort is not itself part of the
-// specification - T.88 assigns each context point a fixed bit position
-// directly from its own figures - but produces the identical bit
-// assignment those figures show whenever the AT pixels are at their
-// default positions (the only case this package supports, see
-// defaultATPixels' doc comment): the default AT positions were chosen
-// specifically so that they already fall into raster order among the
-// fixed points, which is what makes this sort-based construction and
-// the specification's own fixed diagram produce the same context number
-// for the same neighborhood.
-func genericContextTemplate(t int) []jbig2Point {
-	fixed := codingTemplates[t]
-	at := defaultATPixels[t]
-	combined := make([]jbig2Point, 0, len(fixed)+len(at))
-	combined = append(combined, fixed...)
-	combined = append(combined, at...)
-	sort.Slice(combined, func(i, j int) bool {
-		if combined[i].dy != combined[j].dy {
-			return combined[i].dy < combined[j].dy
+// genericContextTemplate resolves GBTEMPLATE t's bit layout against the
+// AT pixel positions at (as read from a real segment, or
+// defaultATPixels[t] for this package's own encoder) into a flat list of
+// neighbor offsets, most significant context bit first - the form
+// decodeGenericBitmap walks once per pixel.
+//
+// at must have at least as many entries as template t has AT slots (4
+// for GBTEMPLATE 0, 1 for the others); callers read that count straight
+// out of the segment, so a short list is a caller bug rather than
+// malformed input.
+func genericContextTemplate(t int, at []jbig2Point) []jbig2Point {
+	slots := codingTemplates[t]
+	points := make([]jbig2Point, len(slots))
+	for i, s := range slots {
+		if s.atIndex < 0 {
+			points[i] = s.point
+			continue
 		}
-		return combined[i].dx < combined[j].dx
-	})
-	return combined
+		points[i] = at[s.atIndex]
+	}
+	return points
 }
 
-// atPixelsAreDefault reports whether at (as read from a real generic
-// region segment's own AT pixel fields) exactly matches GBTEMPLATE
-// template's default positions - see defaultATPixels' doc comment for
-// why a non-default arrangement is rejected as unsupported rather than
-// decoded (potentially incorrectly).
-func atPixelsAreDefault(template int, at []jbig2Point) bool {
-	def := defaultATPixels[template]
-	if len(at) != len(def) {
-		return false
+// atSlotCount returns how many adaptive-template pixels GBTEMPLATE t
+// uses: 4 for GBTEMPLATE 0, 1 for every other template.
+func atSlotCount(t int) int {
+	if t == 0 {
+		return 4
 	}
-	for i := range at {
-		if at[i] != def[i] {
-			return false
-		}
-	}
-	return true
+	return 1
 }
 
 // maxGenericRegionPixels bounds a single generic region's width*height -
@@ -194,36 +208,57 @@ func decodeGenericRegionSegment(segData []byte) (bitmap *jbig2Bitmap, x, y int, 
 		return nil, 0, 0, 0, pdferror.Unsupportedf("JBIG2Decode: MMR-coded generic regions are not implemented, only arithmetic coding")
 	}
 
-	atCount := 1
-	if template == 0 {
-		atCount = 4
-	}
-	if len(segData) < pos+2*atCount {
-		return nil, 0, 0, 0, pdferror.Malformedf("JBIG2Decode: truncated generic region AT pixels")
-	}
-	at := make([]jbig2Point, atCount)
-	for i := 0; i < atCount; i++ {
-		// AT coordinates are signed bytes (T.88 7.4.6.3).
-		at[i] = jbig2Point{dx: int(int8(segData[pos])), dy: int(int8(segData[pos+1]))}
-		pos += 2
-	}
-	if !atPixelsAreDefault(template, at) {
-		return nil, 0, 0, 0, pdferror.Unsupportedf("JBIG2Decode: non-default adaptive-template (AT) pixel positions are not implemented")
+	at, pos, err := parseATPixels(segData, pos, atSlotCount(template))
+	if err != nil {
+		return nil, 0, 0, 0, err
 	}
 
-	bitmap = decodeGenericBitmap(segData[pos:], width, height, template, tpgdon)
+	bitmap = decodeGenericBitmap(newMQDecoder(segData[pos:]), newGenericContexts(template), width, height, template, at, tpgdon)
 	return bitmap, x, y, op, nil
 }
 
+// parseATPixels reads count adaptive-template pixel positions starting
+// at data[pos], returning them and the position just past them. AT
+// coordinates are signed bytes (T.88 7.4.6.3), one x/y pair each.
+func parseATPixels(data []byte, pos, count int) ([]jbig2Point, int, error) {
+	if len(data) < pos+2*count {
+		return nil, 0, pdferror.Malformedf("JBIG2Decode: truncated adaptive-template (AT) pixel positions")
+	}
+	at := make([]jbig2Point, count)
+	for i := 0; i < count; i++ {
+		at[i] = jbig2Point{dx: int(int8(data[pos])), dy: int(int8(data[pos+1]))}
+		pos += 2
+	}
+	return at, pos, nil
+}
+
+// newGenericContexts allocates the context set GBTEMPLATE template's
+// bit layout needs: one per possible value of its context bits.
+//
+// A symbol dictionary decodes many small bitmaps from one coded stream
+// and must carry a single such set across all of them (that shared,
+// continuously-adapting probability state is most of why a dictionary of
+// similar-looking glyphs compresses so well), which is why allocating
+// the set is separate from decoding a bitmap with it.
+func newGenericContexts(template int) []mqContext {
+	return make([]mqContext, 1<<uint(len(codingTemplates[template])))
+}
+
 // decodeGenericBitmap runs T.88's generic region decoding procedure
-// (6.2) over coded, producing a width x height jbig2Bitmap. Every pixel
-// is decoded in raster order (top-to-bottom, left-to-right), building
-// each one's arithmetic-coding context from its already-decoded
-// neighbors per genericContextTemplate(template) - a pixel outside the
-// bitmap (the first couple of rows' "row -1"/"row -2" neighbors, or a
-// few pixels' worth of "column -1..-4" on the left edge) reads as 0
+// (6.2), reading from dec and producing a width x height jbig2Bitmap.
+// Every pixel is decoded in raster order (top-to-bottom, left-to-right),
+// building each one's arithmetic-coding context from its already-decoded
+// neighbors per genericContextTemplate(template, at) - a pixel outside
+// the bitmap (the first couple of rows' "row -1"/"row -2" neighbors, or
+// a few pixels' worth of "column -1..-4" on the left edge) reads as 0
 // (background), exactly matching jbig2Bitmap.get's own out-of-bounds
 // behavior.
+//
+// dec and contexts are passed in rather than created here because a
+// symbol dictionary decodes every one of its symbol bitmaps from a
+// single continuing coded stream with a single continuing context set;
+// a standalone generic region segment just hands in a decoder over its
+// own data and a fresh newGenericContexts(template).
 //
 // When tpgdon is set, each row first decodes one extra "typical
 // prediction" bit (against the fixed reusedContext pseudo-pixel context,
@@ -233,10 +268,8 @@ func decodeGenericRegionSegment(segData []byte) (bitmap *jbig2Bitmap, x, y int, 
 // many consecutive rows of a text line's or a wide margin's white space
 // really are identical - letting the encoder skip coding that row's
 // pixels individually at all.
-func decodeGenericBitmap(coded []byte, width, height, template int, tpgdon bool) *jbig2Bitmap {
-	tmpl := genericContextTemplate(template)
-	contexts := make([]mqContext, 1<<uint(len(tmpl)))
-	dec := newMQDecoder(coded)
+func decodeGenericBitmap(dec *mqDecoder, contexts []mqContext, width, height, template int, at []jbig2Point, tpgdon bool) *jbig2Bitmap {
+	tmpl := genericContextTemplate(template, at)
 	bitmap := newJBIG2Bitmap(width, height, 0)
 
 	ltp := 0
@@ -294,41 +327,55 @@ func EncodeJBIG2GenericRegion(width, height int, pix []byte, tpgdon bool) []byte
 // multi-region streams a scanner emitting a page in horizontal strips
 // would produce.
 func encodeGenericRegionSegment(width, height int, pix []byte, tpgdon bool, originX, originY int, op combineOp) []byte {
+	return encodeGenericRegionSegmentAT(width, height, pix, tpgdon, originX, originY, op, 0, defaultATPixels[0])
+}
+
+// encodeGenericRegionSegmentAT is encodeGenericRegionSegment's fully
+// general form, additionally choosing the GBTEMPLATE and its AT pixel
+// positions - which this package's fixtures never need (they always use
+// GBTEMPLATE 0 at its defaults) but its tests do, to cover the decoder's
+// other three templates and the case of an encoder that has moved an AT
+// pixel away from its default position.
+func encodeGenericRegionSegmentAT(width, height int, pix []byte, tpgdon bool, originX, originY int, op combineOp, template int, at []jbig2Point) []byte {
 	if len(pix) != width*height {
 		panic("filter: encodeGenericRegionSegment: len(pix) does not match width*height")
 	}
-	const template = 0
-	tmpl := genericContextTemplate(template)
-	contexts := make([]mqContext, 1<<uint(len(tmpl)))
 	enc := newMQEncoder()
-
-	// get mirrors jbig2Bitmap.get's out-of-bounds behavior exactly (a
-	// neighbor above the first row or left of the first column reads as
-	// background), which is what keeps the contexts computed here
-	// identical to the ones decodeGenericBitmap will compute. Every
-	// context here comes purely from pix's own known pixel values - for
-	// an encoder, a pixel's "already-decoded neighbors" are simply the
-	// same input pixels - never from anything the arithmetic coder
-	// produces.
-	get := func(x, y int) byte {
+	encodeGenericBitmap(enc, newGenericContexts(template), width, height, template, at, tpgdon, func(x, y int) byte {
 		if x < 0 || x >= width || y < 0 || y >= height {
 			return 0
 		}
 		return pix[y*width+x]
-	}
+	})
+	return buildGenericRegionSegment(width, height, template, tpgdon, originX, originY, op, at, enc.flush())
+}
+
+// encodeGenericBitmap is decodeGenericBitmap's mirror image: it encodes
+// a width x height bitmap's pixels (read through get, which must return
+// 0 for any out-of-bounds coordinate, exactly as jbig2Bitmap.get does)
+// as the same sequence of decisions, in the same order, against the same
+// contexts the decoder will replay them with.
+//
+// Like the decoder, it takes enc and contexts from its caller rather
+// than creating them, so a symbol dictionary can encode many small
+// bitmaps into one continuing stream.
+//
+// Every context here comes purely from the source bitmap's own known
+// pixel values - for an encoder, a pixel's "already-decoded neighbors"
+// are simply the same input pixels - never from anything the arithmetic
+// coder produces.
+func encodeGenericBitmap(enc *mqEncoder, contexts []mqContext, width, height, template int, at []jbig2Point, tpgdon bool, get func(x, y int) byte) {
+	tmpl := genericContextTemplate(template, at)
 
 	rowsIdentical := func(y0, y1 int) bool {
 		for x := 0; x < width; x++ {
-			if pix[y0*width+x] != pix[y1*width+x] {
+			if get(x, y0) != get(x, y1) {
 				return false
 			}
 		}
 		return true
 	}
 
-	// Decisions are encoded in exactly the raster order (and, with
-	// tpgdon, with exactly the same per-row extra SLTP decision)
-	// decodeGenericBitmap replays them in.
 	ltp := 0
 	for y := 0; y < height; y++ {
 		if tpgdon {
@@ -354,8 +401,6 @@ func encodeGenericRegionSegment(width, height int, pix []byte, tpgdon bool, orig
 			enc.encodeBit(&contexts[ctx], int(get(x, y)))
 		}
 	}
-
-	return buildGenericRegionSegment(width, height, template, tpgdon, originX, originY, op, enc.flush())
 }
 
 // buildGenericRegionSegment wraps coded (already-MQ-encoded generic
@@ -366,8 +411,8 @@ func encodeGenericRegionSegment(width, height int, pix []byte, tpgdon bool, orig
 // parseSegmentHeader), producing a complete, self-contained embedded-
 // organization JBIG2 byte stream ready to use as a JBIG2Decode stream's
 // raw bytes.
-func buildGenericRegionSegment(width, height, template int, tpgdon bool, originX, originY int, op combineOp, coded []byte) []byte {
-	region := make([]byte, 0, 17+1+2*len(defaultATPixels[template])+len(coded))
+func buildGenericRegionSegment(width, height, template int, tpgdon bool, originX, originY int, op combineOp, at []jbig2Point, coded []byte) []byte {
+	region := make([]byte, 0, 17+1+2*len(at)+len(coded))
 	region = appendBE32(region, uint32(width))
 	region = appendBE32(region, uint32(height))
 	region = appendBE32(region, uint32(originX))
@@ -379,7 +424,7 @@ func buildGenericRegionSegment(width, height, template int, tpgdon bool, originX
 		flags |= 0x08
 	}
 	region = append(region, flags)
-	for _, p := range defaultATPixels[template] {
+	for _, p := range at {
 		region = append(region, byte(int8(p.dx)), byte(int8(p.dy)))
 	}
 	region = append(region, coded...)

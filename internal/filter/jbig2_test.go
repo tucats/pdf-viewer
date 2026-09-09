@@ -89,6 +89,14 @@ func TestJBIG2ContextTemplatesMatchSpecifiedBitLayout(t *testing.T) {
 	// left of the one being coded. The expected point lists below are that
 	// ordering, read off the specification's own template figures with the
 	// adaptive pixels at their default positions.
+	//
+	// Resolved against the default AT positions, the layout is plain
+	// raster order, which is what makes it checkable this way at all - an
+	// AT pixel moved elsewhere keeps its bit position rather than being
+	// re-sorted into its new location, so only the default case has a
+	// simple expected form to compare against. TestJBIG2NonDefaultATPixels
+	// covers the moved case from the other direction, by round-tripping
+	// it.
 	tests := []struct {
 		template int
 		// perRow is how many context pixels each of the template's rows
@@ -135,7 +143,7 @@ func TestJBIG2ContextTemplatesMatchSpecifiedBitLayout(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		got := genericContextTemplate(tc.template)
+		got := genericContextTemplate(tc.template, defaultATPixels[tc.template])
 		if len(got) != len(tc.points) {
 			t.Errorf("GBTEMPLATE %d: %d context pixels, want %d", tc.template, len(got), len(tc.points))
 			continue
@@ -314,7 +322,6 @@ func TestJBIG2UnsupportedAndMalformedStreams(t *testing.T) {
 		headerLen     = 11
 		regionInfoLen = 17
 		flagsOffset   = headerLen + regionInfoLen
-		atOffset      = flagsOffset + 1
 		// Within the segment header: 4-byte number, then the flags byte
 		// whose low 6 bits are the segment type.
 		segmentTypeOffset = 4
@@ -332,14 +339,6 @@ func TestJBIG2UnsupportedAndMalformedStreams(t *testing.T) {
 			wantErr: pdferror.ErrUnsupported,
 			edit: func(s []byte) []byte {
 				s[flagsOffset] |= 0x01 // MMR bit.
-				return s
-			},
-		},
-		{
-			name:    "non-default AT pixel",
-			wantErr: pdferror.ErrUnsupported,
-			edit: func(s []byte) []byte {
-				s[atOffset] = 0x7F // AT1's dx, normally +3.
 				return s
 			},
 		},
@@ -442,6 +441,55 @@ func TestJBIG2UnsupportedAndMalformedStreams(t *testing.T) {
 			_, err := decodeJBIG2(stream)
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("decodeJBIG2: got %v, want an error wrapping %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestJBIG2AllTemplatesAndNonDefaultATPixels(t *testing.T) {
+	// GBTEMPLATE 0's four AT pixels and the other templates' single one
+	// may each be moved anywhere the encoder likes, and a moved pixel
+	// keeps the context bit position its template figure assigns it
+	// rather than being re-sorted into raster order at its new location.
+	// Only a round trip can check that, since the expected bit layout for
+	// a moved pixel has no simple "read it off the figure" form -
+	// TestJBIG2ContextTemplatesMatchSpecifiedBitLayout covers the
+	// default, unmoved case from the other direction.
+	//
+	// The positions used below are all still causal (strictly above the
+	// current row, or to its left on the same row), which is what a real
+	// encoder must choose: a template pixel below or to the right of the
+	// pixel being coded would not yet be decoded when the decoder needs
+	// it.
+	const width, height = 29, 23
+	pix := jbig2TestPattern("diagonalsAndBlock", width, height)
+
+	tests := []struct {
+		name     string
+		template int
+		at       []jbig2Point
+	}{
+		{"template 0 defaults", 0, defaultATPixels[0]},
+		{"template 1 defaults", 1, defaultATPixels[1]},
+		{"template 2 defaults", 2, defaultATPixels[2]},
+		{"template 3 defaults", 3, defaultATPixels[3]},
+		{"template 0 moved", 0, []jbig2Point{{-2, -1}, {1, -2}, {-4, -1}, {3, -3}}},
+		{"template 1 moved", 1, []jbig2Point{{-5, 0}}},
+		{"template 2 moved", 2, []jbig2Point{{2, -3}}},
+		{"template 3 moved", 3, []jbig2Point{{-6, -1}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, tpgdon := range []bool{false, true} {
+				stream := encodeGenericRegionSegmentAT(width, height, pix, tpgdon, 0, 0, combOpOr, tc.template, tc.at)
+				got, err := decodeJBIG2(stream)
+				if err != nil {
+					t.Fatalf("tpgdon=%v: decodeJBIG2: %v", tpgdon, err)
+				}
+				if !bytes.Equal(unpackJBIG2Output(t, got, width, height), pix) {
+					t.Fatalf("tpgdon=%v: decoded bitmap does not match the encoded one", tpgdon)
+				}
 			}
 		})
 	}

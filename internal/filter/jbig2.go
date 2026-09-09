@@ -71,11 +71,6 @@ import (
 //     because it compresses better, which is the entire point of using
 //     JBIG2 over CCITTFaxDecode in the first place, so MMR-coded generic
 //     regions are vanishingly rare in practice.
-//   - Only the default adaptive-template (AT) pixel positions are
-//     supported (see decodeGenericRegion's atPositionsAreDefault check) -
-//     again the overwhelmingly common real-world case; a non-default AT
-//     position is reported as unsupported rather than silently
-//     mis-decoded.
 //   - Symbol dictionary and text region segments (and the rarer halftone
 //     and refinement region segments) are reported as
 //     pdferror.ErrUnsupported - see docs/PLAN2.md's Phase 8 note on

@@ -165,3 +165,110 @@ func TestGlyphOutline_OutOfRangeGID(t *testing.T) {
 		t.Errorf("GlyphOutline accepted an out-of-range glyph index on a zero-value sfntFont")
 	}
 }
+
+// buildHhea builds a minimal (36-byte) "hhea" table carrying only the
+// one field parseHmtx reads: numberOfHMetrics, at its fixed byte offset
+// 34 (see parseHmtx's own doc comment for why that offset is fixed
+// regardless of which hhea table version a real font uses).
+func buildHhea(numberOfHMetrics uint16) []byte {
+	data := make([]byte, 36)
+	binary.BigEndian.PutUint16(data[34:36], numberOfHMetrics)
+	return data
+}
+
+// buildHmtx builds an "hmtx" table from fullMetrics (each becoming a
+// 4-byte {advanceWidth, lsb} record, lsb always 0 since this package
+// never reads it) followed by trailingLSBOnly bare 2-byte lsb-only
+// entries (also always 0) - see parseHmtx's doc comment for what the
+// two parts of this table mean.
+func buildHmtx(fullMetrics []uint16, trailingLSBOnly int) []byte {
+	var buf bytes.Buffer
+	for _, w := range fullMetrics {
+		_ = binary.Write(&buf, binary.BigEndian, w)
+		_ = binary.Write(&buf, binary.BigEndian, int16(0)) // lsb, unused
+	}
+	for i := 0; i < trailingLSBOnly; i++ {
+		_ = binary.Write(&buf, binary.BigEndian, int16(0)) // lsb, unused
+	}
+	return buf.Bytes()
+}
+
+func TestParseHmtx_AllGlyphsHaveFullMetrics(t *testing.T) {
+	t.Parallel()
+	hhea := buildHhea(3)
+	hmtx := buildHmtx([]uint16{500, 600, 700}, 0)
+
+	widths, ok := parseHmtx(hhea, hmtx, 3)
+	if !ok {
+		t.Fatal("parseHmtx failed on well-formed input")
+	}
+	want := []uint16{500, 600, 700}
+	for i, w := range want {
+		if widths[i] != w {
+			t.Errorf("widths[%d] = %d, want %d", i, widths[i], w)
+		}
+	}
+}
+
+// TestParseHmtx_TrailingGlyphsReuseLastFullMetric confirms the "hmtx"
+// format's own space-saving convention (see parseHmtx's doc comment): a
+// glyph past numberOfHMetrics reuses the last full record's advance
+// width, not zero or some other default.
+func TestParseHmtx_TrailingGlyphsReuseLastFullMetric(t *testing.T) {
+	t.Parallel()
+	hhea := buildHhea(2)
+	hmtx := buildHmtx([]uint16{500, 600}, 3) // glyphs 2,3,4 all reuse 600
+
+	widths, ok := parseHmtx(hhea, hmtx, 5)
+	if !ok {
+		t.Fatal("parseHmtx failed on well-formed input")
+	}
+	want := []uint16{500, 600, 600, 600, 600}
+	for i, w := range want {
+		if widths[i] != w {
+			t.Errorf("widths[%d] = %d, want %d", i, widths[i], w)
+		}
+	}
+}
+
+func TestParseHmtx_RejectsMalformedInput(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		hhea      []byte
+		hmtx      []byte
+		numGlyphs uint16
+	}{
+		{"hhea too short", []byte{0, 1, 2}, buildHmtx([]uint16{500}, 0), 1},
+		{"numberOfHMetrics zero", buildHhea(0), buildHmtx(nil, 0), 1},
+		{"numberOfHMetrics exceeds numGlyphs", buildHhea(5), buildHmtx([]uint16{1, 2, 3, 4, 5}, 0), 3},
+		{"hmtx too short for declared metrics", buildHhea(3), buildHmtx([]uint16{500, 600}, 0), 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, ok := parseHmtx(tt.hhea, tt.hmtx, tt.numGlyphs); ok {
+				t.Errorf("parseHmtx accepted malformed input (%s)", tt.name)
+			}
+		})
+	}
+}
+
+func TestSfntFont_AdvanceWidth(t *testing.T) {
+	t.Parallel()
+	sfnt := sfntFont{hmtx: []uint16{500, 600, 700}}
+
+	if w, ok := sfnt.AdvanceWidth(1); !ok || w != 600 {
+		t.Errorf("AdvanceWidth(1) = (%d,%v), want (600,true)", w, ok)
+	}
+	if _, ok := sfnt.AdvanceWidth(3); ok {
+		t.Error("AdvanceWidth accepted an out-of-range glyph index")
+	}
+}
+
+func TestSfntFont_AdvanceWidth_NoHmtxData(t *testing.T) {
+	t.Parallel()
+	var sfnt sfntFont
+	if _, ok := sfnt.AdvanceWidth(0); ok {
+		t.Error("AdvanceWidth on a font with no hmtx table should report ok=false")
+	}
+}

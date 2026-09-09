@@ -98,6 +98,16 @@ type sfntFont struct {
 	loca       []uint32 // numGlyphs+1 entries; glyf offsets
 	glyfData   []byte
 	cmap       cmapSubtable
+
+	// hmtx holds one advance width per glyph (numGlyphs entries, in this
+	// font's own design units - not yet scaled to glyph space), or nil
+	// if this font had no "hhea"/"hmtx" table pair, or either failed to
+	// parse - see parseHmtx and AdvanceWidth below. Only ever read for
+	// Phase 4's width-from-substitute feature (font.go's
+	// advanceWidthSource); an *embedded* font's widths always come from
+	// the PDF's own /Widths or /W array instead (see this file's package
+	// doc comment), so this field is left unused (nil) for that case.
+	hmtx []uint16
 }
 
 // parseSfnt parses data (an already filter-decoded /FontFile2 stream's
@@ -164,13 +174,83 @@ func parseSfntAt(data []byte, dirOffset int) (sfntFont, bool) {
 		cmap, _ = parseCmap(cmapRaw)
 	}
 
+	// "hmtx" (per-glyph advance widths) is optional to this package for
+	// the same reason cmap is: only Phase 4's width-from-substitute
+	// feature (font.go's advanceWidthSource, consulted by
+	// simple.go's trySubstitute) ever reads it - a font with no
+	// "hhea"/"hmtx" table, or one that fails to parse, still parses
+	// successfully here, it just cannot supply a substitute width later
+	// (see parseHmtx's own doc comment).
+	var hmtx []uint16
+	if hheaRaw, ok := tables["hhea"]; ok {
+		if hmtxRaw, ok := tables["hmtx"]; ok {
+			hmtx, _ = parseHmtx(hheaRaw, hmtxRaw, numGlyphs)
+		}
+	}
+
 	return sfntFont{
 		unitsPerEm: unitsPerEm,
 		numGlyphs:  numGlyphs,
 		loca:       loca,
 		glyfData:   glyf,
 		cmap:       cmap,
+		hmtx:       hmtx,
 	}, true
+}
+
+// parseHmtx decodes an sfnt "hmtx" table into one advance width per
+// glyph (always exactly numGlyphs entries, one way or another - see
+// below), given hhea (the "hhea" table's raw bytes, which "hmtx" itself
+// cannot be interpreted without) and hmtxRaw (the "hmtx" table's own raw
+// bytes). ok=false if hhea is too short to even reach its
+// numberOfHMetrics field, that field is nonsensical (zero, or claiming
+// more metrics than the font has glyphs at all), or hmtxRaw is too short
+// to hold that many metrics - every case treated the same as any other
+// malformed-input case in this file: reported, not panicked on, and
+// simply means no substitute width will ever be available for this font
+// (see this file's package doc comment on why hmtx is optional here).
+//
+// # The "hmtx" table's on-disk shape, for readers new to font formats
+//
+// "hmtx" packs each glyph's horizontal metrics as a 4-byte record
+// (2-byte advance width, 2-byte left side bearing) - but, since a great
+// many glyphs in a typical font share the exact same advance width as
+// the glyph before them (most obviously a run of same-width Latin
+// letters in a monospace font, but common even in proportional fonts),
+// the format lets the *trailing* run of glyphs omit their own advance
+// width and store only a 2-byte left side bearing instead, implicitly
+// reusing the last glyph that did store one. "hhea"'s numberOfHMetrics
+// field says how many glyphs (starting from glyph 0) actually have a
+// full 4-byte record; every later glyph index reuses the last of those
+// records' advance width, which is exactly what the second loop below
+// implements. This package has no use for left side bearing (only the
+// advance width itself, for Font.Width - see font.go's
+// advanceWidthSource), so it is read from a full record but simply
+// never read at all from a bare trailing one.
+func parseHmtx(hhea, hmtxRaw []byte, numGlyphs uint16) ([]uint16, bool) {
+	const hheaMinLen = 36 // large enough to reach numberOfHMetrics at byte offset 34
+	if len(hhea) < hheaMinLen {
+		return nil, false
+	}
+	numberOfHMetrics := binary.BigEndian.Uint16(hhea[34:36])
+	if numberOfHMetrics == 0 || numberOfHMetrics > numGlyphs {
+		return nil, false
+	}
+	const fullRecordSize = 4
+	if len(hmtxRaw) < int(numberOfHMetrics)*fullRecordSize {
+		return nil, false
+	}
+
+	widths := make([]uint16, numGlyphs)
+	var lastWidth uint16
+	for gid := uint16(0); gid < numberOfHMetrics; gid++ {
+		lastWidth = binary.BigEndian.Uint16(hmtxRaw[int(gid)*fullRecordSize : int(gid)*fullRecordSize+2])
+		widths[gid] = lastWidth
+	}
+	for gid := numberOfHMetrics; gid < numGlyphs; gid++ {
+		widths[gid] = lastWidth
+	}
+	return widths, true
 }
 
 // parseTableDirectory reads one sfnt table directory - the fixed-size
@@ -311,6 +391,22 @@ func (f *sfntFont) UnitsPerEm() uint16 {
 // regardless of which one it is working with.
 func (f *sfntFont) GIDForRune(r rune) (uint16, bool) {
 	return f.cmap.Lookup(r)
+}
+
+// AdvanceWidth returns glyph index gid's own advance width, in this
+// font's native design units (not yet scaled to glyph space - see
+// font.go's Font.substituteWidth, which does that scaling the same way
+// scaleGlyph does for an outline), and ok=false if this font has no
+// "hmtx" data at all (see the hmtx field's doc comment) or gid is out of
+// range. This satisfies font.go's advanceWidthSource interface, used
+// only by Phase 4's width-from-substitute wiring (simple.go's
+// trySubstitute) - never for an *embedded* TrueType program, whose
+// widths always come from the PDF's own /Widths array instead.
+func (f *sfntFont) AdvanceWidth(gid uint16) (uint16, bool) {
+	if int(gid) >= len(f.hmtx) {
+		return 0, false
+	}
+	return f.hmtx[gid], true
 }
 
 // GlyphOutline returns glyph index gid's outline as a graphics.Path in

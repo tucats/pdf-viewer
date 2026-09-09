@@ -926,9 +926,41 @@ deliverable above:
   `/BaseFont /Helvetica` font - with a real, hand-built candidate
   `.ttf` file written to a temporary directory, confirming the
   diagnostic changes from "placeholder boxes" to "substituted").
-- **4e onward - not yet started.** Width-from-substitute and the
-  `docs/capability-matrix.md` "Font substitution" row remain to be
-  built.
+- **4e - width-from-substitute: Done.** `truetype.go`'s `sfntFont`
+  gained a `hmtx` field and `AdvanceWidth(gid uint16) (uint16, bool)`
+  method, filled in by a new `parseHmtx` (reads the `hhea` table's
+  `numberOfHMetrics` field plus the `hmtx` table itself, including its
+  trailing lsb-only-entries space-saving convention). `font.go` gained
+  an `advanceWidthSource` interface (deliberately implemented only by
+  `*sfntFont`, not `*cffFont` - see that interface's doc comment for why
+  reusing CFF's Type 2 Charstring width value, deliberately discarded by
+  Phase 3's `takeWidth`, is out of scope here) and a `Font.
+  substituteWidths` field/`substituteWidth` helper: `Width` now prefers a
+  substitute's real per-glyph advance width (scaled into glyph space)
+  over `defaultWidth`'s generic constant, but only when both (a) the
+  code has no explicit per-code `/Widths` entry and (b) `substituteWidths`
+  is true. `simple.go`'s `trySubstitute` sets that flag (via a new
+  `applySubstituteWidths` helper) only when dict's own `/Widths` array is
+  completely absent *and* the chosen substitute actually carries advance
+  width data - a PDF that does supply `/Widths` is never overridden
+  (that data reflects what the rest of the page was actually laid out
+  against), and a CFF-outline substitute never contributes a width
+  (only an outline), per `advanceWidthSource`'s scope. Taking effect
+  records its own diagnostic, separate from the outline-substitution one,
+  per this package's "no silent behavior change" philosophy. Verified
+  with unit tests at every layer: `truetype_more_test.go`'s
+  `TestParseHmtx_*`/`TestSfntFont_AdvanceWidth*`, `font_width_test.go`'s
+  `TestFont_Width_*` (against fake `advanceWidthSource`/outline-only
+  sources, covering the full precedence rule), and
+  `substitute_wiring_test.go`'s `TestLoadSimpleFont_SubstituteWidthUsedWhenDictHasNoWidths`/
+  `TestLoadSimpleFont_PDFWidthsAlwaysWinOverSubstitute` (end to end
+  through `loadSimpleFont`, with `buildSubstituteCandidateSfnt` extended
+  to carry a real `hhea`/`hmtx` table pair). A 15s local fuzz run of both
+  `FuzzParseSfnt` and `FuzzProbeFontFile` after this change surfaced no
+  crashes.
+- **4f onward - not yet started.** The `docs/capability-matrix.md` "Font
+  substitution" row (documenting the finished feature) remains to be
+  written, along with a final read-through of this whole phase.
 
 ### Phase 5 - Bundled last-resort font (deferred, not started)
 

@@ -62,11 +62,16 @@ func buildSubstituteCandidateSfnt(family string, bold, italic bool) []byte {
 		binary.BigEndian.PutUint32(locaBuf[i*4:i*4+4], off)
 	}
 
+	hhea := buildHhea(2)
+	hmtx := buildHmtx([]uint16{250, 1234}, 0) // gid 0 (.notdef): 250; gid 1 ('A' square): 1234
+
 	tables := []sfntTable{
 		{"head", head},
 		{"maxp", maxp},
 		{"loca", locaBuf},
 		{"glyf", glyf},
+		{"hhea", hhea},
+		{"hmtx", hmtx},
 		{"cmap", cmapTable},
 		{"name", buildNameTable(map[uint16]string{nameIDFamily: family})},
 		{"OS/2", buildOS2Table(400, fsSelection, 0)},
@@ -176,5 +181,66 @@ func TestLoadSimpleFont_FallsBackToNotdefWithoutSubstitution(t *testing.T) {
 	// own minWidth threshold, so this should be non-nil.
 	if glyph := f.Glyph(int('A')); glyph == nil {
 		t.Fatal("expected the notdefGlyph placeholder box with no substitution configured")
+	}
+}
+
+// TestLoadSimpleFont_SubstituteWidthUsedWhenDictHasNoWidths confirms
+// sub-phase 4e's width-from-substitute wiring end to end: a font
+// dictionary with no /Widths array at all gets its advance widths from
+// the chosen substitute's own "hmtx" data (buildSubstituteCandidateSfnt
+// gives gid 1 - the 'A' square - an advance width of 1234, deliberately
+// distinct from defaultMissingWidth's generic 500) instead of the
+// generic default.
+func TestLoadSimpleFont_SubstituteWidthUsedWhenDictHasNoWidths(t *testing.T) {
+	data := buildSubstituteCandidateSfnt("Arial", false, false)
+	faces, err := ProbeFontFile(data)
+	if err != nil || len(faces) != 1 {
+		t.Fatalf("ProbeFontFile: %d faces, err=%v", len(faces), err)
+	}
+
+	resolver := fakeSubstitutionProviderResolver{source: fakeFontSource{faces: faces}}
+	dict := syntax.Dictionary{
+		"Subtype":  syntax.Name("TrueType"),
+		"BaseFont": syntax.Name("Arial"),
+		// deliberately no /Widths or /FirstChar entry at all
+	}
+
+	f, err := loadSimpleFont(dict, resolver)
+	if err != nil {
+		t.Fatalf("loadSimpleFont: %v", err)
+	}
+	if w := f.Width(int('A')); w != 1234 {
+		t.Errorf("Width('A') = %v, want 1234 (the substitute font's own hmtx advance width)", w)
+	}
+}
+
+// TestLoadSimpleFont_PDFWidthsAlwaysWinOverSubstitute confirms the other
+// half of applySubstituteWidths' precedence rule: when the PDF *does*
+// supply /Widths, that data is trusted exactly as before, never
+// overridden by a substitute's own advance widths (see
+// docs/FONTS.md's "Widths vs. outlines" - the PDF's declared widths
+// reflect what the rest of the page was actually laid out against).
+func TestLoadSimpleFont_PDFWidthsAlwaysWinOverSubstitute(t *testing.T) {
+	data := buildSubstituteCandidateSfnt("Arial", false, false)
+	faces, err := ProbeFontFile(data)
+	if err != nil || len(faces) != 1 {
+		t.Fatalf("ProbeFontFile: %d faces, err=%v", len(faces), err)
+	}
+
+	resolver := fakeSubstitutionProviderResolver{source: fakeFontSource{faces: faces}}
+	dict := syntax.Dictionary{
+		"Subtype":   syntax.Name("TrueType"),
+		"BaseFont":  syntax.Name("Arial"),
+		"FirstChar": syntax.Integer(65),
+		"LastChar":  syntax.Integer(65),
+		"Widths":    syntax.Array{syntax.Integer(700)},
+	}
+
+	f, err := loadSimpleFont(dict, resolver)
+	if err != nil {
+		t.Fatalf("loadSimpleFont: %v", err)
+	}
+	if w := f.Width(int('A')); w != 700 {
+		t.Errorf("Width('A') = %v, want 700 (the PDF's own /Widths entry, never overridden by the substitute)", w)
 	}
 }

@@ -84,6 +84,33 @@ type runeGlyphSource interface {
 	GIDForRune(r rune) (uint16, bool)
 }
 
+// advanceWidthSource is implemented by a glyphOutlineSource that can
+// also report one of its own glyphs' advance width - currently only
+// *sfntFont (truetype.go, via its parsed "hmtx" table). *cffFont
+// deliberately does not implement this: cff.go's Type 2 Charstring
+// interpreter parses each charstring's optional leading width operand
+// only far enough to skip it correctly, and does not keep the value
+// (see that file's takeWidth doc comment) - a Phase 3 scope decision
+// this phase does not revisit, so a CFF-backed substitute never
+// contributes a width, only an outline (see trySubstitute in simple.go,
+// which checks for this interface and simply does nothing extra when a
+// chosen substitute does not implement it).
+//
+// This is used only by Phase 4's width-from-substitute feature
+// (docs/FONTS.md's "Widths vs. outlines" section) - never for an
+// *embedded* font's own widths, which always come from the PDF's own
+// /Widths or /W array or the generic default (see Width below); it only
+// ever matters for a *substitute* font found on disk, and only when the
+// PDF itself supplied no /Widths at all.
+type advanceWidthSource interface {
+	// AdvanceWidth returns gid's own advance width in this font
+	// program's native design units (not yet scaled to glyph space -
+	// see Font.substituteWidth, which does that scaling the same way
+	// scaleGlyph does for an outline), and ok=false if gid is out of
+	// range or this font has no advance-width data at all.
+	AdvanceWidth(gid uint16) (uint16, bool)
+}
+
 type Font struct {
 	// TwoByteCodes is true for a Type0/CID composite font (this package
 	// only supports Identity-H/V encoding - see cid.go - so a "code" for
@@ -100,6 +127,23 @@ type Font struct {
 	// no entry here uses defaultWidth instead (see Width).
 	widths       map[int]float64
 	defaultWidth float64
+
+	// substituteWidths is true only for a simple font whose glyph
+	// outlines came from Phase 4's substitution (trySubstitute, in
+	// simple.go) *and* whose PDF font dictionary supplied no /Widths
+	// array at all - see Width below and docs/FONTS.md's "Widths vs.
+	// outlines" section. It is the signal that widths/defaultWidth above
+	// (built from a /Widths array that, in this specific case, does not
+	// exist) should be treated as a last resort rather than the first
+	// answer: a substitute font's own real per-glyph advance widths
+	// (when available - see advanceWidthSource) are a strictly better
+	// answer than defaultWidth's generic constant for this narrow case.
+	// false for every other font (including a substituted font whose PDF
+	// dictionary *did* supply /Widths, in which case that PDF-declared
+	// data is trusted exactly as before - it reflects the original
+	// font's actual layout, which is what everything else on the page
+	// was positioned against).
+	substituteWidths bool
 
 	// glyphSource is the parsed embedded font program backing this
 	// font's real glyph outlines - either a TrueType program (*sfntFont,
@@ -140,7 +184,45 @@ func (f *Font) Width(code int) float64 {
 	if w, ok := f.widths[code]; ok {
 		return w
 	}
+	if f.substituteWidths {
+		if w, ok := f.substituteWidth(code); ok {
+			return w
+		}
+	}
 	return f.defaultWidth
+}
+
+// substituteWidth is Width's helper for the substituteWidths case (see
+// that field's doc comment): it resolves code to a glyph index the same
+// way Glyph does (via lookupGID) and, if the resulting glyphSource
+// implements advanceWidthSource, asks it for that glyph's own advance
+// width, scaled from the substitute font's native design units into
+// glyph space (1000 units per em) exactly the way scaleGlyph rescales an
+// outline - so a substitute width and a substitute outline always agree
+// on which coordinate space they're expressed in. ok=false for every
+// reason this can't produce an answer (no glyphSource/lookupGID, the
+// code has no mapped glyph, glyphSource doesn't carry advance-width data
+// at all - see advanceWidthSource's own doc comment on why a CFF-backed
+// substitute always hits this case), in which case Width falls back to
+// defaultWidth exactly as if substituteWidths were false.
+func (f *Font) substituteWidth(code int) (float64, bool) {
+	if f.glyphSource == nil || f.lookupGID == nil {
+		return 0, false
+	}
+	src, ok := f.glyphSource.(advanceWidthSource)
+	if !ok {
+		return 0, false
+	}
+	gid, ok := f.lookupGID(code)
+	if !ok {
+		return 0, false
+	}
+	raw, ok := src.AdvanceWidth(gid)
+	if !ok {
+		return 0, false
+	}
+	scale := 1000 / float64(f.glyphSource.UnitsPerEm())
+	return float64(raw) * scale, true
 }
 
 // Glyph returns code's glyph outline as a graphics.Path in glyph space

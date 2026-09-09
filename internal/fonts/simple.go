@@ -136,7 +136,36 @@ func trySubstitute(f *Font, dict syntax.Dictionary, resolver Resolver, encoding 
 	} else {
 		diag.Note(resolver, "font %v (%v) has no usable embedded outline data; substituted %q", dict["BaseFont"], dict["Subtype"], candidate.Characteristics.Family)
 	}
+
+	applySubstituteWidths(f, dict, runeSource, resolver)
 	return true
+}
+
+// applySubstituteWidths is trySubstitute's width-from-substitute step
+// (docs/FONTS.md's "Widths vs. outlines" section): when dict's own
+// /Widths array is absent entirely - the same "no idea what the widths
+// should be" case simpleWidths already falls back to
+// defaultMissingWidth's generic constant for - and the substitute
+// glyphSource trySubstitute just chose happens to carry real advance
+// widths of its own (see advanceWidthSource; true for a TrueType-outline
+// substitute, never for a CFF-outline one - see that interface's own
+// doc comment on why), this sets f.substituteWidths so Font.Width
+// prefers those real widths over the generic default (see that field's
+// doc comment for the full precedence rule, including that a PDF
+// supplying its own /Widths is never overridden). Always records its
+// own diagnostic when it does take effect, since this measurably changes
+// text positioning versus this package's previous behavior - never a
+// silent change, per this package's own doc comment on making every
+// fallback an explicit, documented decision.
+func applySubstituteWidths(f *Font, dict syntax.Dictionary, glyphSource glyphOutlineSource, resolver Resolver) {
+	if arr, ok := dict["Widths"].(syntax.Array); ok && len(arr) > 0 {
+		return
+	}
+	if _, ok := glyphSource.(advanceWidthSource); !ok {
+		return
+	}
+	f.substituteWidths = true
+	diag.Note(resolver, "font %v (%v) has no /Widths; using the substitute font's own advance widths instead of the generic default", dict["BaseFont"], dict["Subtype"])
 }
 
 // simpleWidths reads a simple font's /Widths array (indexed from

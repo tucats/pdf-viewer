@@ -666,7 +666,58 @@ those operators' operands when interpreting a charstring - actual
 hinting/grid-fitting is out of scope, matching this project's existing
 "no hinting" precedent for TrueType outlines.
 
-**Status.** Not started.
+**Status.** In progress - split into independently committable
+sub-phases (3a-3e) as the work landed, each covering one deliverable
+above:
+
+- **3a - CFF core parsing and the Type 2 Charstring interpreter: Done.**
+  `internal/fonts/cff.go` implements INDEX/DICT parsing (including the
+  DICT nibble-encoded real-number form), predefined/custom charset
+  parsing (formats 0/1/2), FDSelect parsing (formats 0/3) and per-FD
+  Private DICT/local-subroutine loading for CID-keyed fonts, the full
+  391-entry standard strings table, and `charstringInterp` - a Type 2
+  Charstring virtual machine covering every path-construction operator
+  (including all four flex variants), the arithmetic/storage/stack
+  escape operators, subroutine calls (with correct bias, and bounded
+  call depth/step count against a hostile or self-referential
+  charstring), and the width/hint-mask parsing rules the specification's
+  "first stack-clearing operator" convention requires. `cffFont` exposes
+  `GlyphOutline`, `UnitsPerEm`, `GIDForRune` (via charset names, for a
+  non-CID font), and `GIDForCID` (via the charset's inverted CID map),
+  deliberately shaped to mirror `sfntFont`'s own equivalents so Phase
+  3b can unify them behind one interface. Not yet wired into anything
+  else in this package - see `internal/fonts/cff_test.go` (hand-built
+  synthetic CFF fixtures, following `truetype_test.go`'s existing
+  precedent) and `FuzzParseCFFFont` in `fuzz_test.go` (45s/33M-exec
+  local fuzz run surfaced no crashes) for how it is verified standalone.
+  Deliberate non-goals recorded in code comments rather than repeated
+  here: a CFF font's own built-in Encoding table (16), predefined
+  Expert/ExpertSubset charsets (1/2), and the deprecated implicit-`seac`
+  4-argument `endchar` form.
+- **3b - wire into `simple.go` for `/FontFile3`: Not started.** Needs
+  `font.go`'s `glyphSource`/`lookupGID` fields generalized to accept
+  either an `*sfntFont` or a `*cffFont` (an interface with
+  `GlyphOutline`/`UnitsPerEm` methods - both types already have the
+  right shape, see 3a above) and a name-based glyph-lookup path
+  alongside `simpleGlyphLookup`'s existing cmap-based one (via
+  `cffFont.GIDForRune`, which already resolves a charset name to a rune
+  the same way `/Differences` array names do - see `glyphNameToRune` in
+  encoding.go).
+- **3c - wire into `cid.go` for CIDFontType0: Not started.** Needs a
+  `cidGlyphLookup`-equivalent built from `cffFont.GIDForCID` instead of
+  `/CIDToGIDMap` (a CIDFontType0 descendant has no such entry per the
+  specification - CID-to-GID mapping comes from the CFF program's own
+  charset instead, which 3a's `cidToGID` map already provides).
+- **3d - wire into `probe.go`/`FontFace`: Not started.** `HasOutlines`
+  should become true for an `OTTO`-tagged face once its `"CFF "` table
+  can actually be parsed via 3a's `parseCFFFont`, and `FontFace.Outline`
+  needs a `cffFont`-returning counterpart alongside its existing
+  `sfntFont` one (`probe_test.go`'s
+  `TestProbeFontFile_OTTOStillCharacterizedButNoOutlines` will need
+  updating to match the new, no-longer-"no outlines" behavior).
+- **3e - `docs/capability-matrix.md` update: Not started.** Flip
+  "OpenType/CFF (Type1C, CIDFontType0C)" once 3b-3d land, as a single
+  small commit rather than staying reserved for later.
 
 ### Phase 4 - Font source, matching, and wiring
 

@@ -107,3 +107,44 @@ func FuzzProbeFontFile(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseCFFFont is cff.go's counterpart to FuzzParseSfnt and
+// FuzzProbeFontFile above: it feeds arbitrary byte slices into
+// parseCFFFont and, for every GID a successful parse reports, into the
+// Type 2 Charstring interpreter (cffFont.GlyphOutline) that parse
+// unlocks - the same "never panics, always terminates" property those
+// two fuzz targets check, applied to this file's own parsing surface
+// (INDEX/DICT/charset/FDSelect structure) and, in particular, to
+// charstringInterp.exec's bytecode interpreter, which is by far this
+// package's largest new attack surface for hostile or corrupted input:
+// unlike a fixed-layout table, a charstring is a small program the
+// fuzzer's mutations can turn into deeply (though boundedly - see
+// maxCharstringCallDepth and maxCharstringSteps) self-referential
+// subroutine calls.
+func FuzzParseCFFFont(f *testing.F) {
+	var t testing.T
+	square := squareCharstring()
+	f.Add(buildTestCFF(&t, [][]byte{{}, square}, nil, nil, nil))
+	f.Add(buildTestCFF(&t, [][]byte{{}, square}, []string{"A"}, nil, nil))
+
+	selfCall := new(csBuilder).num(-107).op(csCallsubr).bytes()
+	recursiveTop := new(csBuilder).num(-107).op(csCallsubr).op(csEndchar).bytes()
+	f.Add(buildTestCFF(&t, [][]byte{{}, recursiveTop}, nil, nil, [][]byte{selfCall}))
+
+	f.Add([]byte{})
+	f.Add([]byte{1, 0, 4, 4})
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		font, ok := parseCFFFont(data)
+		if !ok {
+			return
+		}
+		limit := len(font.charStrings)
+		if limit > 4096 {
+			limit = 4096
+		}
+		for gid := 0; gid < limit; gid++ {
+			font.GlyphOutline(uint16(gid)) //nolint:errcheck // only absence of a panic/hang is under test
+		}
+	})
+}

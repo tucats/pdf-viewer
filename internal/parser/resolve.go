@@ -254,8 +254,40 @@ func (d *Document) ResolveDictionary(dict syntax.Dictionary) (syntax.Dictionary,
 // ResolveDictionary (its /Filter and /DecodeParms entries are, in the
 // vast majority of real files, direct values already - but PDF
 // technically permits them to be indirect references too) and hands the
-// result to internal/filter.Decode.
+// result to internal/filter.
+//
+// The Document is passed along as the filter package's StreamResolver,
+// which one filter needs: a JBIG2Decode stream's /DecodeParms may name a
+// /JBIG2Globals stream holding the symbol dictionary the image's own
+// segments refer to, and reaching that second stream needs this
+// Document's cross-reference table.
 func (d *Document) DecodeStream(s syntax.Stream) ([]byte, error) {
+	dict, err := d.ResolveDictionary(s.Dict)
+	if err != nil {
+		return nil, err
+	}
+	return filter.DecodeWith(dict, s.Raw, d)
+}
+
+// DecodeReferencedStream implements internal/filter.StreamResolver: it
+// resolves obj - a reference to, or directly, a stream object - and
+// returns that stream's decoded bytes.
+//
+// It deliberately decodes through filter.Decode rather than
+// DecodeStream, so the stream it returns cannot itself pull in a third
+// stream. Nothing legitimate needs that (a /JBIG2Globals stream is
+// Flate-compressed or raw, never JBIG2-coded itself), and refusing to
+// follow the chain is what keeps a hostile file whose globals stream
+// names itself from recursing without end.
+func (d *Document) DecodeReferencedStream(obj syntax.Object) ([]byte, error) {
+	resolved, err := d.resolveIfReference(obj)
+	if err != nil {
+		return nil, err
+	}
+	s, ok := resolved.(syntax.Stream)
+	if !ok {
+		return nil, pdferror.Malformedf("expected a stream, found %T", resolved)
+	}
 	dict, err := d.ResolveDictionary(s.Dict)
 	if err != nil {
 		return nil, err

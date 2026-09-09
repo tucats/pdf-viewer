@@ -73,11 +73,40 @@ import (
 // package doc comment's "Bounded decompression" section.
 const maxDecodedSize = 256 << 20
 
+// StreamResolver supplies the decoded bytes of a *second* stream that a
+// /DecodeParms entry points at. Exactly one filter needs this:
+// JBIG2Decode's /JBIG2Globals, an indirect reference to a stream of
+// JBIG2 segments (in practice a symbol dictionary) shared by several
+// images in the same document, without which such an image cannot be
+// decoded at all.
+//
+// This package cannot follow an indirect reference itself - that needs a
+// cross-reference table, which is internal/parser's job (see the package
+// doc comment's note on indirect references) - so the interface is
+// defined here and satisfied there, keeping the dependency pointing the
+// same way it already does.
+type StreamResolver interface {
+	// DecodeReferencedStream resolves obj (a reference to, or directly,
+	// a stream object) and returns that stream's fully decoded bytes.
+	DecodeReferencedStream(obj syntax.Object) ([]byte, error)
+}
+
 // Decode returns the fully-decoded bytes of a stream whose dictionary is
 // dict and whose still-encoded bytes are raw, applying every filter
 // named in dict's /Filter entry in order. If dict has no /Filter entry
 // at all, raw is returned unchanged - not every stream is filtered.
+//
+// A stream whose /DecodeParms refers to another stream (only
+// JBIG2Decode's /JBIG2Globals does) cannot be decoded this way; use
+// DecodeWith for those.
 func Decode(dict syntax.Dictionary, raw []byte) ([]byte, error) {
+	return DecodeWith(dict, raw, nil)
+}
+
+// DecodeWith is Decode with a resolver for the one /DecodeParms entry
+// that points at another stream - see StreamResolver. A nil resolver
+// behaves exactly like Decode.
+func DecodeWith(dict syntax.Dictionary, raw []byte, resolver StreamResolver) ([]byte, error) {
 	names, err := filterNames(dict)
 	if err != nil {
 		return nil, err
@@ -93,7 +122,7 @@ func Decode(dict syntax.Dictionary, raw []byte) ([]byte, error) {
 
 	data := raw
 	for i, name := range names {
-		data, err = decodeOne(name, parmsList[i], data)
+		data, err = decodeOne(name, parmsList[i], data, resolver)
 		if err != nil {
 			return nil, fmt.Errorf("filter %q: %w", name, err)
 		}
@@ -178,7 +207,7 @@ func decodeParmsList(dict syntax.Dictionary, n int) ([]syntax.Dictionary, error)
 
 // decodeOne applies the single filter named name (with parameters parms,
 // which is nil if none were given) to data.
-func decodeOne(name syntax.Name, parms syntax.Dictionary, data []byte) ([]byte, error) {
+func decodeOne(name syntax.Name, parms syntax.Dictionary, data []byte, resolver StreamResolver) ([]byte, error) {
 	switch name {
 	case "ASCII85Decode", "A85":
 		return decodeASCII85(data)
@@ -195,7 +224,11 @@ func decodeOne(name syntax.Name, parms syntax.Dictionary, data []byte) ([]byte, 
 	case "CCITTFaxDecode", "CCF":
 		return decodeCCITT(data, parms)
 	case "JBIG2Decode":
-		return decodeJBIG2(data, nil)
+		globals, err := jbig2Globals(parms, resolver)
+		if err != nil {
+			return nil, err
+		}
+		return decodeJBIG2(data, globals)
 	default:
 		return nil, pdferror.Unsupportedf("stream filter %q", name)
 	}

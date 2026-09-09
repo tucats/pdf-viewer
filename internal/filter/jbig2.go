@@ -1,7 +1,10 @@
 package filter
 
 import (
+	"fmt"
+
 	"github.com/tucats/pdf-viewer/internal/pdferror"
+	"github.com/tucats/pdf-viewer/internal/syntax"
 )
 
 // This file implements decodeJBIG2, reversing PDF's JBIG2Decode filter -
@@ -103,6 +106,41 @@ func decodeJBIG2(data, globals []byte) ([]byte, error) {
 		return nil, pdferror.Malformedf("JBIG2Decode: no region segment found")
 	}
 	return d.page.packInverted(), nil
+}
+
+// jbig2Globals reads a JBIG2Decode stream's /JBIG2Globals parameter: an
+// indirect reference to a second stream of JBIG2 segments (see
+// decodeJBIG2's own handling of the bytes this returns). Returns nil,
+// nil when the parameter is absent, which is the common case - a stream
+// that carries its own symbol dictionary, or uses none at all, needs no
+// globals.
+func jbig2Globals(parms syntax.Dictionary, resolver StreamResolver) ([]byte, error) {
+	if parms == nil {
+		return nil, nil
+	}
+	v, ok := parms["JBIG2Globals"]
+	if !ok {
+		return nil, nil
+	}
+	if _, isNull := v.(syntax.Null); isNull {
+		return nil, nil
+	}
+
+	if resolver == nil {
+		// Reaching another stream needs a cross-reference table this
+		// package does not have; saying so is better than decoding an
+		// image whose symbols are missing and silently producing a blank
+		// or partial page. In practice every JBIG2 image this project
+		// renders arrives through internal/parser.Document.DecodeStream,
+		// which does supply a resolver.
+		return nil, pdferror.Unsupportedf("JBIG2Decode: /JBIG2Globals cannot be read in this context")
+	}
+
+	globals, err := resolver.DecodeReferencedStream(v)
+	if err != nil {
+		return nil, fmt.Errorf("JBIG2Decode: /JBIG2Globals: %w", err)
+	}
+	return globals, nil
 }
 
 // jbig2Decoder holds the state one JBIG2Decode stream's segments build

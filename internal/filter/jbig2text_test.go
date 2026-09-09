@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/tucats/pdf-viewer/internal/pdferror"
+	"github.com/tucats/pdf-viewer/internal/syntax"
 )
 
 // The tests in this file round-trip a whole symbol-mode JBIG2 stream:
@@ -192,6 +193,70 @@ func TestJBIG2SymbolsFromGlobalsStream(t *testing.T) {
 	// with and must say so rather than drawing a blank page.
 	if _, err := decodeJBIG2(page, nil); !errors.Is(err, pdferror.ErrMalformed) {
 		t.Fatalf("decoding without globals: got %v, want an error wrapping %v", err, pdferror.ErrMalformed)
+	}
+}
+
+// stubStreamResolver stands in for internal/parser.Document in tests of
+// the /JBIG2Globals plumbing: it returns fixed bytes for whatever object
+// it is handed, or an error, without needing a real document.
+type stubStreamResolver struct {
+	data []byte
+	err  error
+}
+
+func (r stubStreamResolver) DecodeReferencedStream(syntax.Object) ([]byte, error) {
+	return r.data, r.err
+}
+
+func TestJBIG2GlobalsThroughDecodeWith(t *testing.T) {
+	// The same globals-stream case as TestJBIG2SymbolsFromGlobalsStream,
+	// but reached the way a real document does: through the filter
+	// dispatch, with /JBIG2Globals named in /DecodeParms and fetched via
+	// a StreamResolver.
+	const width, height = 50, 20
+	symbols := jbig2TestSymbols()
+	instances := []textInstance{{symbol: 2, x: 3, y: 4}, {symbol: 0, x: 15, y: 4}}
+
+	globals := encodeSymbolDictSegment(0, symbols, 0)
+	page := encodeTextRegionSegment(1, []uint32{0}, width, height, symbols, instances, 0, 0, combOpOr)
+
+	dict := syntax.Dictionary{
+		"Filter": syntax.Name("JBIG2Decode"),
+		// A real file names an indirect reference here; the resolver is
+		// what turns whatever it is into bytes, so any object will do.
+		"DecodeParms": syntax.Dictionary{"JBIG2Globals": syntax.Reference{Number: 5}},
+	}
+
+	out, err := DecodeWith(dict, page, stubStreamResolver{data: globals})
+	if err != nil {
+		t.Fatalf("DecodeWith: %v", err)
+	}
+	if got, want := unpackJBIG2Output(t, out, width, height), paintSymbols(width, height, symbols, instances); !bytes.Equal(got, want) {
+		t.Error("decoded page does not match the symbols placed from the resolved globals stream")
+	}
+
+	// Without a resolver there is no way to reach the globals stream, and
+	// saying so beats decoding an image whose symbols are missing.
+	if _, err := Decode(dict, page); !errors.Is(err, pdferror.ErrUnsupported) {
+		t.Fatalf("Decode with no resolver: got %v, want an error wrapping %v", err, pdferror.ErrUnsupported)
+	}
+
+	// A resolver that cannot produce the stream fails the whole decode
+	// rather than falling back to decoding without it.
+	resolverErr := errors.New("no such object")
+	if _, err := DecodeWith(dict, page, stubStreamResolver{err: resolverErr}); !errors.Is(err, resolverErr) {
+		t.Fatalf("DecodeWith with a failing resolver: got %v, want it to wrap %v", err, resolverErr)
+	}
+
+	// An absent or null /JBIG2Globals is the common case and must not
+	// reach the resolver at all - here the image carries its own
+	// dictionary, so it decodes standalone.
+	standalone := append(encodeSymbolDictSegment(0, symbols, 0), page...)
+	for _, parms := range []syntax.Object{syntax.Dictionary{}, syntax.Dictionary{"JBIG2Globals": syntax.Null{}}} {
+		d := syntax.Dictionary{"Filter": syntax.Name("JBIG2Decode"), "DecodeParms": parms}
+		if _, err := Decode(d, standalone); err != nil {
+			t.Errorf("Decode with /DecodeParms %v: %v", parms, err)
+		}
 	}
 }
 

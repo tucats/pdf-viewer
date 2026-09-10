@@ -52,6 +52,26 @@ func TestRenderSimpleTrueTypeText(t *testing.T) {
 	assertBackground(t, img, 50, 5)      // outside vertically, centered horizontally
 }
 
+// TestRenderSimpleType1Text is Phase 11's counterpart to
+// TestRenderSimpleTrueTypeText above: confirms an embedded Type 1
+// simple font (buildTextSimpleType1) - the from-scratch Type 1
+// charstring interpreter internal/fonts/type1.go adds - paints its test
+// glyph (the same square shape and device-space rectangle
+// buildTextSimpleTrueType's own doc comment derives) reached via
+// /Encoding rather than a TrueType cmap subtable.
+func TestRenderSimpleType1Text(t *testing.T) {
+	img := renderPage(t, "text-simple-type1.pdf")
+	if b := img.Bounds(); b.Dx() != 100 || b.Dy() != 100 {
+		t.Fatalf("Render size = %dx%d, want 100x100", b.Dx(), b.Dy())
+	}
+	assertInk(t, img, 50, 50, 255, 0, 0) // center of the glyph square
+	assertInk(t, img, 20, 20, 255, 0, 0) // just inside the top-left corner
+	assertInk(t, img, 80, 80, 255, 0, 0) // just inside the bottom-right corner
+	assertBackground(t, img, 5, 5)       // well outside (top-left corner of the page)
+	assertBackground(t, img, 95, 95)     // well outside (bottom-right corner of the page)
+	assertBackground(t, img, 50, 5)      // outside vertically, centered horizontally
+}
+
 // TestRenderType0IdentityTextMatchesSimpleFont confirms a composite
 // (/Type0, /Encoding /Identity-H) font showing CID 1 - which
 // /CIDToGIDMap /Identity maps straight to glyph index 1, the same

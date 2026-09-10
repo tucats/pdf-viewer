@@ -56,6 +56,36 @@ func buildTextSimpleTrueType() []byte {
 	return b.finish(1)
 }
 
+// buildTextSimpleType1 returns a single 100x100-point page showing 'A'
+// in red at font size 100 with the text origin at the page origin,
+// identical in every respect to buildTextSimpleTrueType above except
+// its embedded font program is a synthetic Type 1 program
+// (buildTestType1FontProgram, type1.go) reached through a /FontFile
+// entry instead of a TrueType one through /FontFile2 - Phase 11's
+// baseline rendering fixture, letting TestRenderSimpleType1Text assert
+// on the exact same device-space rectangle buildTextSimpleTrueType's
+// own doc comment derives.
+func buildTextSimpleType1() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("1 0 0 rg\nBT\n/F1 100 Tf\n0 0 Td\n(A) Tj\nET\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	b.addObject(5, 0, "<< /Type /Font /Subtype /Type1 /BaseFont /GenfixturesType1 "+
+		"/FirstChar 65 /LastChar 65 /Widths [1000] /Encoding /WinAnsiEncoding "+
+		"/FontDescriptor 6 0 R >>", nil)
+	b.addObject(6, 0, "<< /Type /FontDescriptor /FontName /GenfixturesType1 /Flags 32 /FontFile 7 0 R >>", nil)
+
+	program, length1, length2 := buildTestType1FontProgram()
+	b.addObject(7, 0, fmt.Sprintf("<< /Length %d /Length1 %d /Length2 %d >>", len(program), length1, length2), program)
+
+	return b.finish(1)
+}
+
 // buildTextScaled returns a single 200x100-point page showing two 'A's
 // with the same embedded font at two different sizes ("Tf" changed mid
 // text object) and repositioned with "Td" between them - exercising

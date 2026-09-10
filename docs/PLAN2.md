@@ -204,7 +204,7 @@ correct Unicode string and a defensible per-glyph position.
 
 ## Phase 11: Type 1 embedded font outline extraction
 
-**Status: Not started.**
+**Status: Done.**
 
 Type 1's own charstring format (distinct from CFF's Type 2 charstrings,
 already fully implemented) is unimplemented; a Type 1 font falls back to
@@ -1237,3 +1237,95 @@ in order, not rewritten later except to fix mistakes.
     built to be reused, unchanged, by Phase 10's `/ToUnicode` parsing
     (a different "begin...end" vocabulary over the same lexical grammar
     and `usecmap`/codespace machinery) - see that phase's own plan entry.
+
+### Phase 11: Type 1 embedded font outline extraction — done (2026-09-09)
+
+- **The sample turned out not to test this phase.** This phase's own
+    user-supplied sample fixture (`sample-font--type-1.pdf`, kept only
+    for local development per its licensing - see `FIXTURES.md`'s
+    `real-world/` rules) has ten `/Subtype /Type1` font dictionaries,
+    but every one of them embeds its program via `/FontFile3` as a
+    CFF/Type1C program (already handled by Phase 4's `cff.go`), not a
+    single genuine `/FontFile` Type 1 charstring program - a PDF font
+    dictionary's `/Subtype /Type1` names the font *interface*, not which
+    embedded program format backs it. This project therefore has no
+    independently produced, freely redistributable real-world Type 1
+    `/FontFile` sample at all; `internal/fonts/type1_encode.go`'s
+    from-scratch forward encoder (the same "round-trip against an
+    encoder this project also owns" strategy `internal/filter/jbig2mq.go`
+    and `cff_test.go` already use) is this phase's only way to validate
+    `type1.go`'s parser against real, structurally-correct input.
+- **`internal/fonts/type1.go` (new).** eexec/charstring decryption
+    (`decryptType1`, both keys per the Type 1 Font Format specification
+    section 7.3), a PFA-style hex-armored eexec section detector and
+    decoder (some real-world producers embed a font this way even inside
+    a PDF, despite the PDF specification's own preference for raw
+    binary), a small PostScript-source tokenizer (`type1Scanner`) that
+    walks the decrypted Private dictionary's `/Subrs` and `/CharStrings`
+    structure without needing a general PostScript interpreter, and a
+    full Type 1 Charstring interpreter (`type1Interp`) - all
+    path-construction operators, `hsbw`/`sbw` (Type 1's explicit
+    width/sidebearing operators, which mean this format has none of
+    Type 2's "maybe the first operand is actually a width" ambiguity),
+    local subroutine calls with no index bias (unlike CFF), and the
+    `callothersubr`/`pop` OtherSubrs idiom real font-creation tools
+    emit for the flex feature (two very flat curves, encoded as seven
+    `rmoveto` calls instead of ordinary curve operators - drawn as two
+    real curves here, since this project never applies hinting) and
+    hint replacement. `seac` is recognized and reported as one
+    unavailable glyph, deliberately not composed - the same scope
+    decision `cff.go` already made for its own implicit-`seac` `endchar`
+    form, for the same reason (no StandardEncoding-code-to-name table
+    this package has any other use for).
+- **`internal/fonts/type1_encode.go` (new).** `EncodeType1FontProgram`,
+    exported test/fixture-only forward encoder (mirroring
+    `internal/filter`'s exported `EncodeJBIG2GenericRegion` for the same
+    reason - `tools/genfixtures`, a separate module, needs it too) that
+    assembles a complete, loadable Type 1 font program from a list of
+    named, already op-encoded charstrings plus optional local
+    subroutines, returning the `/Length1`/`/Length2` values a real
+    `/FontFile` stream dictionary needs alongside it.
+- **`simple.go` wiring.** `loadEmbeddedType1` (new) and
+    `readType1FontFileStream` (new, resolving `/Length1`/`/Length2`
+    - not read by `readFontFileStream`, which the self-describing
+    `/FontFile2`/`/FontFile3` formats never needed) plug `/FontFile`
+    into `loadSimpleFont`'s existing TrueType-then-CFF fallback chain as
+    a third, final embedded-program attempt before font substitution;
+    glyph lookup goes through the same `simpleRuneGlyphLookup` (name via
+    `/Encoding`, then rune) CFF already uses, since Type 1's own
+    built-in `/Encoding` table is out of scope for the same reason CFF's
+    is (see `type1.go`'s doc comment).
+- **Fixtures.** `tools/genfixtures` gained `buildTestType1FontProgram`
+    (`type1.go`, new) and `buildTextSimpleType1` (`text.go`), producing
+    `text-simple-type1.pdf` - structurally identical to
+    `text-simple-truetype.pdf` (same page, size, position, and
+    hand-derived expected device-space rectangle) but backed by a
+    synthetic Type 1 program instead of a TrueType one, letting
+    `TestRenderSimpleType1Text` (`pdfviewer_text_test.go`, new) assert
+    the exact same pixels; also added to
+    `TestRenderMatchesReferenceImages` with a checked-in golden PNG.
+- **Tests.** `internal/fonts/type1_test.go` (new) covers a simple square
+    glyph's exact bounds, `callsubr`/`return`, the flex idiom (asserting
+    two real 16-segment flattened curves were drawn, not a straight-line
+    shortcut, landing at the exact expected final point), `seac`
+    reporting the glyph unavailable rather than composing or
+    misinterpreting its operands, a PFA-style hex-armored eexec section,
+    missing `/Length1`/`/Length2` (falls back to searching for the
+    literal `eexec` keyword), a custom `/FontMatrix`, and
+    `decodeType1Number`'s every encoded-integer form including its
+    truncated-input failure cases. `FuzzParseType1Font`
+    (`fuzz_test.go`) covers the same "never panics, always terminates"
+    property `FuzzParseCFFFont` established for Type 2 charstrings,
+    seeded with a plain square glyph and a flex-plus-`callsubr` glyph;
+    21s/4M+ executions found no panic or hang. Full test suite, `go
+    vet`, and `gofmt` all pass clean; regenerating every
+    `tools/genfixtures` fixture reproduced every existing file
+    byte-for-byte except the one new fixture added.
+- **What's carried forward.** A Type 1 font's own built-in `/Encoding`
+    array and `seac` composition remain unimplemented, matching CFF's
+    identical, already-documented gaps - see `docs/capability-matrix.md`'s
+    updated Type 1 row. A `/FontFile` stream binding its "read N binary
+    bytes" private procedure to a name other than the canonical `RD`/`-|`
+    (essentially unseen in real-world output, per `isType1RDToken`'s doc
+    comment) fails closed to `notdefGlyph` for that font rather than
+    misparsing it.

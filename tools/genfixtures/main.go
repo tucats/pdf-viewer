@@ -100,6 +100,7 @@ func main() {
 		{"inline-image.pdf", buildInlineImage()},
 		{"rotated-page.pdf", buildRotatedPage()},
 		{"text-simple-truetype.pdf", buildTextSimpleTrueType()},
+		{"text-simple-type1.pdf", buildTextSimpleType1()},
 		{"text-scaled.pdf", buildTextScaled()},
 		{"text-type0-identity.pdf", buildTextType0Identity()},
 		{"text-type0-embedded-cmap.pdf", buildTextType0EmbeddedCMap()},

@@ -39,6 +39,21 @@ func TestRenderRadialShading(t *testing.T) {
 	assertPixel(t, img, 1, 1, 0, 0, 255) // corner, beyond the outer circle: extended blue
 }
 
+// TestRenderFunctionBasedShading exercises "sh" painting a function-based
+// (/ShadingType 1) shading, whose color comes directly from a 2-input
+// /Function rather than any axial/radial line-or-circle geometry - see
+// tools/genfixtures's buildFunctionBasedShading doc comment for exactly
+// which corner ends up which color and why (the render pipeline's
+// PDF-to-device y-axis flip swaps top and bottom relative to the
+// shading's own domain space).
+func TestRenderFunctionBasedShading(t *testing.T) {
+	img := renderFixture(t, "function-based-shading.pdf")
+	assertPixel(t, img, 0, 0, 0, 255, 0)    // top-left: domain ~(0,1), green
+	assertPixel(t, img, 99, 0, 255, 255, 0) // top-right: domain ~(1,1), yellow
+	assertPixel(t, img, 0, 99, 0, 0, 0)     // bottom-left: domain ~(0,0), black
+	assertPixel(t, img, 99, 99, 255, 0, 0)  // bottom-right: domain ~(1,0), red
+}
+
 // TestRenderShadingPatternFill exercises a shading pattern selected via
 // "cs Pattern"/"scn" used to fill an 80x80 square: the gradient (black
 // to white, spanning the square's own x extent) must be visible inside

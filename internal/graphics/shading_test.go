@@ -167,3 +167,160 @@ func TestShadingNilColorAtIsUncovered(t *testing.T) {
 		t.Fatalf("At with a nil ColorAt: covered, want uncovered (safe default)")
 	}
 }
+
+// identityColorAt2 is FunctionBasedShading's two-input counterpart to
+// identityColorAt above: it reveals exactly which (x, y) domain
+// coordinates At computed, via R=x and G=y, so a test can check the
+// Matrix-inversion and domain-clipping logic without a real PDF function.
+func identityColorAt2(x, y float64) Color {
+	return Color{R: x, G: y}
+}
+
+func TestShadingFunctionBasedInsideDomain(t *testing.T) {
+	sh := &Shading{
+		Kind:            FunctionBasedShading,
+		Domain2:         [4]float64{0, 1, 0, 1},
+		Matrix:          Identity(),
+		ShadingToDevice: Identity(),
+		ColorAt2:        identityColorAt2,
+	}
+	col, ok := sh.At(0.25, 0.75)
+	if !ok || col.R != 0.25 || col.G != 0.75 {
+		t.Fatalf("At(0.25,0.75) = (%v,%v,ok=%v), want (0.25,0.75,true)", col.R, col.G, ok)
+	}
+}
+
+func TestShadingFunctionBasedOutsideDomainIsUncovered(t *testing.T) {
+	sh := &Shading{
+		Kind:            FunctionBasedShading,
+		Domain2:         [4]float64{0, 1, 0, 1},
+		Matrix:          Identity(),
+		ShadingToDevice: Identity(),
+		ColorAt2:        identityColorAt2,
+	}
+	cases := [][2]float64{{-0.1, 0.5}, {1.1, 0.5}, {0.5, -0.1}, {0.5, 1.1}}
+	for _, c := range cases {
+		if _, ok := sh.At(c[0], c[1]); ok {
+			t.Fatalf("At(%v,%v) outside Domain2: covered, want uncovered", c[0], c[1])
+		}
+	}
+}
+
+// TestShadingFunctionBasedAppliesMatrix confirms At inverts the
+// shading's own Matrix (domain-to-shading-space) before checking Domain2
+// and calling ColorAt2 - using a translated+scaled Matrix so a naive
+// implementation that forgot to invert (or applied it in the wrong
+// direction) would compute a visibly wrong domain coordinate.
+func TestShadingFunctionBasedAppliesMatrix(t *testing.T) {
+	sh := &Shading{
+		Kind:    FunctionBasedShading,
+		Domain2: [4]float64{0, 1, 0, 1},
+		// Domain space (0,0)-(1,1) maps to shading space (10,10)-(20,20).
+		Matrix:          Matrix{A: 10, D: 10, E: 10, F: 10},
+		ShadingToDevice: Identity(),
+		ColorAt2:        identityColorAt2,
+	}
+	col, ok := sh.At(15, 10) // shading-space (15,10) -> domain-space (0.5, 0)
+	if !ok || col.R != 0.5 || col.G != 0 {
+		t.Fatalf("At(15,10) = (%v,%v,ok=%v), want (0.5,0,true)", col.R, col.G, ok)
+	}
+}
+
+func TestShadingFunctionBasedNilColorAt2IsUncovered(t *testing.T) {
+	sh := &Shading{Kind: FunctionBasedShading, Domain2: [4]float64{0, 1, 0, 1}, Matrix: Identity(), ShadingToDevice: Identity()}
+	if _, ok := sh.At(0.5, 0.5); ok {
+		t.Fatalf("At with a nil ColorAt2: covered, want uncovered (safe default)")
+	}
+}
+
+// A right triangle with red, green and blue corners, used by every mesh
+// test below to check barycentric interpolation and containment.
+func rgbTriangle() MeshTriangle {
+	return MeshTriangle{
+		X0: 0, Y0: 0, C0: Color{R: 1},
+		X1: 10, Y1: 0, C1: Color{G: 1},
+		X2: 0, Y2: 10, C2: Color{B: 1},
+	}
+}
+
+func TestMeshTriangleCornersReturnTheirOwnColor(t *testing.T) {
+	tri := rgbTriangle()
+	cases := []struct {
+		x, y float64
+		want Color
+	}{
+		{0, 0, Color{R: 1}},
+		{10, 0, Color{G: 1}},
+		{0, 10, Color{B: 1}},
+	}
+	for _, c := range cases {
+		col, ok := tri.colorAt(c.x, c.y)
+		if !ok || col != c.want {
+			t.Fatalf("colorAt(%v,%v) = (%v,ok=%v), want (%v,true)", c.x, c.y, col, ok, c.want)
+		}
+	}
+}
+
+func TestMeshTriangleCentroidIsAverageOfCorners(t *testing.T) {
+	tri := rgbTriangle()
+	col, ok := tri.colorAt(10.0/3, 10.0/3)
+	if !ok {
+		t.Fatalf("colorAt(centroid): not covered, want covered")
+	}
+	want := 1.0 / 3
+	if diff := col.R - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("colorAt(centroid).R = %v, want %v", col.R, want)
+	}
+	if diff := col.G - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("colorAt(centroid).G = %v, want %v", col.G, want)
+	}
+	if diff := col.B - want; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("colorAt(centroid).B = %v, want %v", col.B, want)
+	}
+}
+
+func TestMeshTriangleOutsideIsUncovered(t *testing.T) {
+	tri := rgbTriangle()
+	if _, ok := tri.colorAt(10, 10); ok {
+		t.Fatalf("colorAt(10,10) outside the triangle: covered, want uncovered")
+	}
+}
+
+func TestMeshTriangleDegenerateIsUncovered(t *testing.T) {
+	tri := MeshTriangle{X0: 0, Y0: 0, X1: 5, Y1: 5, X2: 10, Y2: 10} // collinear: zero area
+	if _, ok := tri.colorAt(5, 5); ok {
+		t.Fatalf("colorAt on a degenerate (zero-area) triangle: covered, want uncovered")
+	}
+}
+
+func TestShadingMeshKindFindsCoveringTriangle(t *testing.T) {
+	sh := &Shading{
+		Kind: FreeFormTriangleMesh,
+		Triangles: []MeshTriangle{
+			rgbTriangle(),
+			{X0: 100, Y0: 100, X1: 110, Y1: 100, X2: 100, Y2: 110, C0: Color{R: 1, G: 1, B: 1}},
+		},
+		ShadingToDevice: Identity(),
+	}
+	col, ok := sh.At(0, 0)
+	if !ok || col != (Color{R: 1}) {
+		t.Fatalf("At(0,0) = (%v,ok=%v), want (red,true) from the first triangle", col, ok)
+	}
+	if _, ok := sh.At(50, 50); ok {
+		t.Fatalf("At(50,50), covered by neither triangle: covered, want uncovered")
+	}
+}
+
+func TestShadingMeshKindAppliesShadingToDeviceMatrix(t *testing.T) {
+	sh := &Shading{
+		Kind:            LatticeFormTriangleMesh,
+		Triangles:       []MeshTriangle{rgbTriangle()},
+		ShadingToDevice: Matrix{A: 2, D: 2, E: 100, F: 100}, // shading space *2, then +(100,100)
+	}
+	// Device point (100,100) -> shading space (0,0), the triangle's own
+	// red corner.
+	col, ok := sh.At(100, 100)
+	if !ok || col != (Color{R: 1}) {
+		t.Fatalf("At(100,100) = (%v,ok=%v), want (red,true)", col, ok)
+	}
+}

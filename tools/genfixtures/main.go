@@ -114,6 +114,7 @@ func main() {
 		{"axial-shading.pdf", buildAxialShading()},
 		{"radial-shading.pdf", buildRadialShading()},
 		{"shading-pattern-fill.pdf", buildShadingPatternFill()},
+		{"function-based-shading.pdf", buildFunctionBasedShading()},
 		{"form-xobject.pdf", buildFormXObject()},
 		{"annotation-appearance.pdf", buildAnnotationAppearance()},
 		{"annotation-hidden.pdf", buildAnnotationHidden()},
@@ -1138,6 +1139,59 @@ func buildShadingPatternFill() []byte {
 
 	content := []byte("/Pattern cs\n/P0 scn\n10 10 80 80 re\nf\n")
 	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
+}
+
+// buildFunctionBasedShading returns a single 100x100-point page whose
+// content stream paints a named function-based (/ShadingType 1) shading
+// directly via "sh": color comes straight from a 2-input (x, y) /Function
+// rather than any line/circle geometry, so this fixture deliberately
+// makes the two input axes produce *different* colors (red grows with x,
+// green grows with y, blue stays 0) - a bug that swapped or ignored
+// either axis would still pass a fixture whose two axes did the same
+// thing, but not this one.
+//
+// The function itself is a Type 0 (sampled) function - the only function
+// type this project implements that takes 2 inputs at all (Type 2's
+// exponential interpolation and Type 3's stitching are both 1-input-only
+// - see internal/function's package doc comment) - over a 2x2 grid:
+// (x=0,y=0) black, (x=1,y=0) red, (x=0,y=1) green, (x=1,y=1) yellow.
+// /Matrix scales the shading's own [0,1]x[0,1] /Domain up to the page's
+// full 100x100 user-space extent, and "sh" (like buildAxialShading) is
+// run inside a clip to the whole page.
+//
+// Working out expected device pixel colors requires remembering that
+// Page.Render's initial CTM flips the y axis (PDF user space has y
+// increasing upward; device rows increase downward - see page.go's
+// pageDeviceGeometry) - so PDF-space (0,0), this shading's black corner,
+// ends up at the device image's *bottom*-left, not top-left. Device
+// pixel (0,0) [top-left] therefore samples close to domain (0,1) -
+// green - and (99,99) [bottom-right] samples close to domain (1,0) - red.
+func buildFunctionBasedShading() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Shading << /Sh0 << /ShadingType 1 /ColorSpace /DeviceRGB "+
+		"/Domain [0 1 0 1] /Matrix [100 0 0 100 0 0] /Function 5 0 R >> >> >> "+
+		"/Contents 4 0 R >>", nil)
+
+	content := []byte("q\n0 0 100 100 re\nW\nn\n/Sh0 sh\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	// Sample bytes, dimension 0 (x) varying fastest per 7.10.2, 3 output
+	// components (R,G,B) stored consecutively per grid point:
+	// (x=0,y=0)=black, (x=1,y=0)=red, (x=0,y=1)=green, (x=1,y=1)=yellow.
+	samples := []byte{
+		0x00, 0x00, 0x00,
+		0xFF, 0x00, 0x00,
+		0x00, 0xFF, 0x00,
+		0xFF, 0xFF, 0x00,
+	}
+	fnDict := fmt.Sprintf("<< /FunctionType 0 /Domain [0 1 0 1] /Range [0 1 0 1 0 1] "+
+		"/Size [2 2] /BitsPerSample 8 /Length %d >>", len(samples))
+	b.addObject(5, 0, fnDict, samples)
+
 	return b.finish(1)
 }
 

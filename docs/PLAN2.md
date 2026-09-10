@@ -261,7 +261,7 @@ checkbox).
 
 ## Phase 13: Mesh and function-based shadings (Types 1, 4-7)
 
-**Status: Not started.**
+**Status: 13a done; 13b-13e (mesh shadings, Types 4-7) in progress.**
 
 Axial and radial shadings (Types 2-3, the large majority of real-world
 gradients) are done. Function-based (Type 1) and mesh shadings (Types
@@ -1431,3 +1431,73 @@ in order, not rewritten later except to fix mistakes.
     metrics-driven algorithm. None of these are silent - each one simply
     continues to render exactly as it did before this phase (unpainted,
     or a slightly different but still-legible layout), never incorrectly.
+
+### Phase 13a: Function-based (Type 1) shadings — done (2026-09-10)
+
+- **`internal/graphics/shading.go`.** `ShadingKind` gained
+    `FunctionBasedShading` (Type 1) alongside the existing
+    `AxialShading`/`RadialShading`, plus the four mesh kinds
+    (`FreeFormTriangleMesh` through `TensorProductPatchMesh`) declared
+    now so Phase 13b onward has named constants to build against, even
+    though nothing produces them yet. `Shading` gained `Domain2`
+    (the Type 1 rectangular input domain), `Matrix` (Type 1's own
+    domain-to-shading-space transform, layered underneath
+    `ShadingToDevice`), `ColorAt2` (the 2-input color closure), and
+    `Triangles`/`MeshTriangle` (mesh shadings' representation, unused
+    until Phase 13b). `At` dispatches `FunctionBasedShading` to a new
+    `atFunctionBased`, which inverts `Matrix` to recover the domain-space
+    (x, y) a shading-space point corresponds to and reports the point
+    uncovered if it falls outside `Domain2` - unlike axial/radial, Type 1
+    has no `/Extend`-style "paint the edge value beyond the domain" rule.
+    `MeshTriangle.colorAt` (barycentric interpolation) and `meshColorAt`
+    (linear scan over a triangle list) are added now, ready for Phase
+    13b's mesh types to populate `Triangles`, but not yet reachable from
+    `internal/content` - see "What's carried forward" below.
+- **`internal/content/shading.go` refactor.** `buildShading` used to take
+    an already-dictionary-shaped shading (via `lookupShadingDict`
+    /`dictionaryOrStreamDict`, which discarded a stream's raw bytes) -
+    fine while only axial/radial (always plain dictionaries) existed, but
+    mesh shadings' packed vertex/patch data lives in the stream's own
+    bytes. `buildShading` now takes the resolved-but-unsplit object
+    (dictionary or stream) and does that split itself, so every shading
+    type's own builder can assume whichever shape it actually needs.
+    `lookupShadingDict` was renamed `lookupShadingObject` and no longer
+    reduces a stream to its dictionary; `resolvePatternPaint`'s shading-
+    pattern case was updated the same way. The old axial/radial-only body
+    of `buildShading` moved unchanged into a new `buildAxialOrRadialShading`;
+    a new `buildFunctionBasedShading` parses Type 1's differently-shaped
+    `/Domain` (4 numbers, not axial/radial's 2), its own `/Matrix`
+    (default identity), and its `/Function` (validated to take exactly 2
+    inputs, unlike axial/radial's 1), building a `Shading` via `ColorAt2`.
+    Mesh shading types (4-7) reach a new, dedicated `ErrUnsupported`
+    branch (previously folded into the same "not axial or radial" error
+    axial/radial's own type-switch produced).
+- **Tests.** `internal/graphics/shading_test.go` gained
+    `FunctionBasedShading`/`MeshTriangle` coverage: domain containment,
+    `/Matrix` inversion (a mistranslated or un-inverted matrix would
+    silently compute a wrong domain coordinate), a nil `ColorAt2` safe
+    default, barycentric corner/centroid/outside/degenerate cases for
+    `MeshTriangle`, and `At`'s mesh-kind dispatch (covered vs. uncovered,
+    and that `ShadingToDevice` is honored). `internal/content/shading_test.go`
+    gained `functionBasedShadingDict` (a 2x2-grid Type 0 sampled function,
+    the only function type this project implements that takes 2 inputs -
+    Type 2/3 are both 1-input-only) and `TestDoShadingFunctionBasedPaintsFromXY`,
+    plus updated `TestDoShadingUnsupportedTypeIsError` to exercise a mesh
+    type (4) instead of Type 1, now that Type 1 is supported.
+    `tools/genfixtures`'s `buildFunctionBasedShading` builds
+    `function-based-shading.pdf`: a 2x2 Type 0 function producing black/
+    red/green/yellow at its four domain corners, deliberately varying
+    differently along each axis (red grows with x, green with y) so a
+    bug that swapped or dropped an axis would fail. `pdfviewer_shading_test.go`'s
+    `TestRenderFunctionBasedShading` asserts all four device-space
+    corners (worked out by hand, accounting for `page.go`'s PDF-to-device
+    y-axis flip - see that test's doc comment), and the fixture was added
+    to `TestRenderMatchesReferenceImages`'s golden-image list. Full test
+    suite, `go build`, and `go vet` pass clean.
+- **What's carried forward.** Types 4-7 (mesh shadings) remain
+    `ErrUnsupported`, tracked as Phase 13b onward in this document. Every
+    shading type's optional `/Background` and `/BBox` entries remain
+    unimplemented - a pre-existing simplification predating this phase
+    (axial/radial never read them either), now called out explicitly in
+    `docs/capability-matrix.md` since mesh shadings will make `/BBox`
+    more commonly relevant once Phase 13b lands.

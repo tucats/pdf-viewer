@@ -21,15 +21,20 @@ type TilingPattern struct {
 }
 
 // ShadingKind identifies which of PDF's shading types (8.7.4.5) this
-// project implements directly: the two ("axial" and "radial") that
-// dominate real-world gradient content. The function-based (Type 1) and
-// mesh (Types 4-7, which describe a gradient as a triangle/patch mesh
-// rather than a simple geometric formula) shading types are rejected as
-// unsupported by internal/content's shading resolution before a Shading
-// value is ever constructed - see that package's shading.go.
+// project implements: the geometric ones (axial and radial, by far the
+// most common in real-world content), the function-based one (a color
+// computed directly from a 2-D position rather than a 1-D parametric
+// line/circle), and the four mesh types (a gradient described as an
+// explicit triangle or patch mesh with per-vertex/per-corner colors,
+// rather than any single formula).
 type ShadingKind int
 
 const (
+	// FunctionBasedShading is PDF's Type 1 shading: color is the direct
+	// output of a 2-input (x, y) function evaluated over a rectangular
+	// domain, with no line/circle geometry at all - see Shading's
+	// Domain2/Matrix/ColorAt2 fields and atFunctionBased.
+	FunctionBasedShading ShadingKind = 1
 	// AxialShading is PDF's Type 2 shading: color varies linearly along
 	// a straight line between two points.
 	AxialShading ShadingKind = 2
@@ -38,19 +43,65 @@ const (
 	// form that also produces a simple "radial" (single expanding
 	// circle) gradient when the two circles share a center.
 	RadialShading ShadingKind = 3
+	// FreeFormTriangleMesh is PDF's Type 4 shading: a stream of vertices,
+	// each carrying its own color, grouped into triangles either
+	// explicitly (a fresh triangle) or by sharing an edge with the
+	// previously decoded triangle (see internal/content's mesh-decoding
+	// code, which is what actually parses the packed vertex stream -
+	// this package only ever sees the resulting Triangles).
+	FreeFormTriangleMesh ShadingKind = 4
+	// LatticeFormTriangleMesh is PDF's Type 5 shading: like
+	// FreeFormTriangleMesh, but the vertex stream is a regular grid
+	// (/VerticesPerRow wide) with triangles implied by adjacency rather
+	// than explicit edge-sharing flags.
+	LatticeFormTriangleMesh ShadingKind = 5
+	// CoonsPatchMesh is PDF's Type 6 shading: a stream of Coons patches
+	// (12 boundary Bezier control points plus 4 corner colors per
+	// patch), each internally subdivided into a fine triangle lattice
+	// before reaching this package - see this field's Triangles.
+	CoonsPatchMesh ShadingKind = 6
+	// TensorProductPatchMesh is PDF's Type 7 shading: like
+	// CoonsPatchMesh, but each patch additionally carries its own 4
+	// internal control points (16 total) rather than having them derived
+	// from the boundary.
+	TensorProductPatchMesh ShadingKind = 7
 )
 
-// Shading is a resolved axial or radial gradient, ready to compute a
-// device-space pixel's color with no further PDF-specific knowledge: the
-// color-per-parametric-position computation, which requires evaluating a
-// PDF function and converting through a color space (internal/function
-// and internal/image - two packages this one does not import, to avoid
-// an import cycle, since both need graphics types such as Color
-// themselves), is captured once, ahead of time, in the ColorAt closure -
-// see that field's doc comment. This mirrors how graphics.State.Font
-// avoids the same cycle by storing `any` plus a type assertion done
-// elsewhere; Shading's ColorAt needs no type assertion at all, since a
-// plain function value already has exactly the shape this package needs.
+// isMeshKind reports whether kind is one of the four mesh shading types
+// (4-7), which all share the same rendering representation (a flat list
+// of colored triangles - see Shading.Triangles) regardless of how
+// differently internal/content had to decode each one's own stream
+// format to produce that list.
+func isMeshKind(kind ShadingKind) bool {
+	switch kind {
+	case FreeFormTriangleMesh, LatticeFormTriangleMesh, CoonsPatchMesh, TensorProductPatchMesh:
+		return true
+	default:
+		return false
+	}
+}
+
+// Shading is a resolved PDF shading of any supported type, ready to
+// compute a device-space pixel's color with no further PDF-specific
+// knowledge. Two different representations are used depending on Kind:
+//
+//   - AxialShading/RadialShading/FunctionBasedShading are each a formula
+//     evaluated live, per pixel, via a closure (ColorAt or ColorAt2) -
+//     the color-per-position computation, which requires evaluating a PDF
+//     function and converting through a color space (internal/function
+//     and internal/image - two packages this one does not import, to
+//     avoid an import cycle, since both need graphics types such as Color
+//     themselves), is captured once, ahead of time, in that closure. This
+//     mirrors how graphics.State.Font avoids the same cycle by storing
+//     `any` plus a type assertion done elsewhere; these closures need no
+//     type assertion at all, since a plain function value already has
+//     exactly the shape this package needs.
+//   - The four mesh kinds (FreeFormTriangleMesh through
+//     TensorProductPatchMesh) instead carry their entire geometry
+//     up front as a flat Triangles list - there is no compact formula for
+//     "the color at (x,y)" the way a line or circle has, so internal/content
+//     does all of the PDF-specific mesh-stream decoding ahead of time and
+//     hands this package only the fully-resolved result.
 //
 // internal/content builds one of these for two different PDF
 // constructs that share identical color math but differ in how their
@@ -67,33 +118,76 @@ type Shading struct {
 	// Coords is the shading's geometry, in shading space (see
 	// ShadingToDevice) and in the specification's own parameter order:
 	// for AxialShading, [x0 y0 x1 y1] (indices 4 and 5 are unused); for
-	// RadialShading, [x0 y0 r0 x1 y1 r1] (all six used).
+	// RadialShading, [x0 y0 r0 x1 y1 r1] (all six used). Unused (left
+	// zero) for every other ShadingKind.
 	Coords [6]float64
 
 	// Domain is the parametric range [t0 t1] the shading's color
 	// function is evaluated over - PDF's own default, per 8.7.4.5.3, is
-	// [0 1].
+	// [0 1]. Used only by AxialShading/RadialShading.
 	Domain [2]float64
 
 	// Extend[0] (respectively Extend[1]) reports whether the shading
 	// paints beyond its t0 (respectively t1) end - using that end's own
 	// color, per the specification, rather than the boundary being the
-	// edge of the painted region.
+	// edge of the painted region. Used only by AxialShading/RadialShading.
 	Extend [2]bool
 
-	// ShadingToDevice maps shading space (the coordinate system Coords
-	// is expressed in) to device space - see this type's own doc comment
-	// for the two different ways internal/content establishes it
-	// depending on whether this Shading backs "sh" or a pattern.
+	// Domain2 is FunctionBasedShading's rectangular input domain
+	// [xmin xmax ymin ymax] (8.7.4.5.2's default is [0 1 0 1]) - a point
+	// outside it is simply not covered by the shading at all (unlike
+	// AxialShading/RadialShading's Extend, Type 1 has no "paint the edge
+	// color beyond the domain" concept). Unused by every other Kind.
+	Domain2 [4]float64
+
+	// Matrix is FunctionBasedShading's own mapping from Domain2's (x, y)
+	// space into shading space (8.7.4.5.2's /Matrix, default identity) -
+	// a second coordinate transform layered underneath ShadingToDevice,
+	// specific to this one shading type. Unused by every other Kind.
+	Matrix Matrix
+
+	// Triangles backs every mesh Kind (FreeFormTriangleMesh through
+	// TensorProductPatchMesh): the fully decoded, flattened set of
+	// Gouraud-shaded triangles internal/content produced from the
+	// shading stream's own packed vertex or patch data - by the time a
+	// Shading exists, a mesh has already been reduced to "a list of
+	// triangles, each with 3 corner colors", the same "precompute once"
+	// shape ColorAt gives axial/radial shadings. Unused by every other
+	// Kind.
+	Triangles []MeshTriangle
+
+	// ShadingToDevice maps shading space (the coordinate system Coords,
+	// or a mesh's own triangle vertices, is expressed in) to device
+	// space - see this type's own doc comment for the two different ways
+	// internal/content establishes it depending on whether this Shading
+	// backs "sh" or a pattern.
 	ShadingToDevice Matrix
 
 	// ColorAt evaluates the shading's color at parametric position t,
 	// already clamped into Domain by At below - a caller of At never
-	// needs to clip t itself. A nil ColorAt makes At always report
-	// ok=false, the same "safe default" every other optional closure
-	// field in this package (see, for instance, DrawOp.Image being nil)
-	// degrades to rather than a nil-call panic.
+	// needs to clip t itself. Used only by AxialShading/RadialShading. A
+	// nil ColorAt makes At always report ok=false, the same "safe
+	// default" every other optional closure field in this package (see,
+	// for instance, DrawOp.Image being nil) degrades to rather than a
+	// nil-call panic.
 	ColorAt func(t float64) Color
+
+	// ColorAt2 is ColorAt's FunctionBasedShading counterpart: evaluates
+	// the shading's color at a domain-space (x, y) position already
+	// known to lie within Domain2 - see atFunctionBased. Used only by
+	// FunctionBasedShading; nil degrades the same safe way ColorAt does.
+	ColorAt2 func(x, y float64) Color
+}
+
+// MeshTriangle is one Gouraud-shaded triangle of a decoded mesh shading
+// (see Shading.Triangles): three vertices in shading space, each with its
+// own color, linearly (barycentrically) interpolated across the
+// triangle's interior - see meshColorAt.
+type MeshTriangle struct {
+	X0, Y0     float64
+	X1, Y1     float64
+	X2, Y2     float64
+	C0, C1, C2 Color
 }
 
 // At computes the color visible at device-space point (deviceX,
@@ -102,14 +196,26 @@ type Shading struct {
 // degenerate/non-invertible ShadingToDevice (possible from malformed
 // content, e.g. a pattern or "sh" active under a singular CTM).
 func (s *Shading) At(deviceX, deviceY float64) (Color, bool) {
-	if s.ColorAt == nil {
-		return Color{}, false
-	}
 	deviceToShading, ok := s.ShadingToDevice.Invert()
 	if !ok {
 		return Color{}, false
 	}
 	sx, sy := deviceToShading.Apply(deviceX, deviceY)
+
+	// FunctionBasedShading and the four mesh kinds each have their own,
+	// entirely different notion of "covered" and "color here" - neither
+	// fits the single-parameter t computed below, so they are handled by
+	// their own helpers and return directly.
+	if s.Kind == FunctionBasedShading {
+		return s.atFunctionBased(sx, sy)
+	}
+	if isMeshKind(s.Kind) {
+		return meshColorAt(s.Triangles, sx, sy)
+	}
+
+	if s.ColorAt == nil {
+		return Color{}, false
+	}
 
 	var param float64
 	switch s.Kind {
@@ -246,4 +352,77 @@ func radialParameter(px, py float64, coords [6]float64, extend [2]bool) (float64
 		}
 	}
 	return best, ok
+}
+
+// atFunctionBased implements Type 1 (function-based) shadings (8.7.4.5.2):
+// (sx, sy) - already in shading space, per At's own doc comment - is
+// mapped *back* through this shading's own Matrix into Domain2's (x, y)
+// space (Matrix's documented direction is domain-to-shading, so a point
+// already in shading space needs the inverse to recover its domain
+// coordinates), then simply handed to ColorAt2 if it falls inside
+// Domain2. Unlike an axial/radial shading, there is no "beyond the
+// domain, use the edge color" extension rule for this type at all - a
+// point outside Domain2 is just not covered.
+func (s *Shading) atFunctionBased(sx, sy float64) (Color, bool) {
+	if s.ColorAt2 == nil {
+		return Color{}, false
+	}
+	shadingToDomain, ok := s.Matrix.Invert()
+	if !ok {
+		return Color{}, false
+	}
+	dx, dy := shadingToDomain.Apply(sx, sy)
+	if dx < s.Domain2[0] || dx > s.Domain2[1] || dy < s.Domain2[2] || dy > s.Domain2[3] {
+		return Color{}, false
+	}
+	return s.ColorAt2(dx, dy), true
+}
+
+// meshColorAt finds whichever triangle (if any) covers shading-space
+// point (sx, sy) and returns its interpolated color there. A real
+// mesh's triangles never overlap, so which one "wins" when more than one
+// nominally contains the point (possible only for a malformed mesh, or
+// exactly on a shared edge where either neighbor gives the same answer
+// anyway) is not a meaningful choice - the first match found is used.
+// Triangle count is typically small enough (real-world gradient meshes
+// are dozens to low hundreds of patches, not millions of triangles) that
+// this linear scan, rather than a spatial index, is an acceptable,
+// documented simplification.
+func meshColorAt(triangles []MeshTriangle, sx, sy float64) (Color, bool) {
+	for i := range triangles {
+		if c, ok := triangles[i].colorAt(sx, sy); ok {
+			return c, true
+		}
+	}
+	return Color{}, false
+}
+
+// colorAt computes (sx, sy)'s barycentric coordinates (a, b, c) with
+// respect to this triangle's three corners - the standard formula, valid
+// for any non-degenerate triangle - and reports ok=false whenever the
+// point falls outside it (any coordinate meaningfully negative) or the
+// triangle itself is degenerate (zero area, so barycentric coordinates
+// are not even well-defined). Inside the triangle, the corner colors are
+// blended by exactly those same three weights - the definition of Gouraud
+// shading.
+func (t MeshTriangle) colorAt(sx, sy float64) (Color, bool) {
+	denom := (t.Y1-t.Y2)*(t.X0-t.X2) + (t.X2-t.X1)*(t.Y0-t.Y2)
+	if math.Abs(denom) < 1e-12 {
+		return Color{}, false
+	}
+	a := ((t.Y1-t.Y2)*(sx-t.X2) + (t.X2-t.X1)*(sy-t.Y2)) / denom
+	b := ((t.Y2-t.Y0)*(sx-t.X2) + (t.X0-t.X2)*(sy-t.Y2)) / denom
+	c := 1 - a - b
+	// A small negative tolerance (rather than requiring exactly >= 0)
+	// keeps adjacent triangles from both rejecting a point that falls
+	// exactly on their shared edge due to ordinary floating-point error.
+	const epsilon = -1e-9
+	if a < epsilon || b < epsilon || c < epsilon {
+		return Color{}, false
+	}
+	return Color{
+		R: a*t.C0.R + b*t.C1.R + c*t.C2.R,
+		G: a*t.C0.G + b*t.C1.G + c*t.C2.G,
+		B: a*t.C0.B + b*t.C1.B + c*t.C2.B,
+	}, true
 }

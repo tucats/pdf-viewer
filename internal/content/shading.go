@@ -63,7 +63,7 @@ func (in *interpreter) doShading(st *graphics.State, operands []syntax.Object) e
 		return pdferror.Malformedf("\"sh\" operand must be a name, found %T", operands[0])
 	}
 
-	dict, found, err := in.lookupShadingDict(name)
+	obj, found, err := in.lookupShadingObject(name)
 	if err != nil {
 		return err
 	}
@@ -72,7 +72,7 @@ func (in *interpreter) doShading(st *graphics.State, operands []syntax.Object) e
 		return nil
 	}
 
-	sh, err := in.buildShading(dict, st.CTM)
+	sh, err := in.buildShading(obj, st.CTM)
 	if err != nil {
 		return err
 	}
@@ -80,16 +80,18 @@ func (in *interpreter) doShading(st *graphics.State, operands []syntax.Object) e
 	return nil
 }
 
-// lookupShadingDict resolves name within in.resources's /Shading
+// lookupShadingObject resolves name within in.resources's /Shading
 // dictionary, reporting found=false (with no error) for every way the
 // lookup can come up empty without the content actually being malformed
-// - mirroring lookupXObject/lookupFont. A shading object may be either a
-// plain dictionary (always true for the axial/radial types this package
-// supports) or a stream (required only for the mesh shading types this
-// package does not support, which carry per-vertex data - see the
-// package doc comment above); either way, its dictionary is what this
-// function returns.
-func (in *interpreter) lookupShadingDict(name syntax.Name) (syntax.Dictionary, bool, error) {
+// - mirroring lookupXObject/lookupFont. A shading object may legally be
+// either a plain dictionary (the only shape the axial/radial/
+// function-based types ever take) or a stream (required for the four
+// mesh types, which carry their own per-vertex/per-patch data as the
+// stream's bytes - see meshshading.go): unlike dictionaryOrStreamDict,
+// this function does *not* discard a stream's raw bytes by reducing it to
+// just its dictionary, since buildShading itself needs to tell the two
+// shapes apart and read a mesh stream's data.
+func (in *interpreter) lookupShadingObject(name syntax.Name) (syntax.Object, bool, error) {
 	if in.resources == nil {
 		return nil, false, nil
 	}
@@ -109,7 +111,11 @@ func (in *interpreter) lookupShadingDict(name syntax.Name) (syntax.Dictionary, b
 	if !ok {
 		return nil, false, nil
 	}
-	return in.dictionaryOrStreamDict(entry)
+	resolvedEntry, err := resolveIfRef(in.resolver, entry)
+	if err != nil {
+		return nil, false, err
+	}
+	return resolvedEntry, true, nil
 }
 
 // dictionaryOrStreamDict resolves obj and returns its dictionary whether
@@ -133,11 +139,29 @@ func (in *interpreter) dictionaryOrStreamDict(obj syntax.Object) (syntax.Diction
 	}
 }
 
-// buildShading turns a shading dictionary into a graphics.Shading, using
+// buildShading turns a resolved shading object - a plain dictionary
+// (every shading type can be one) or a stream (required for the four
+// mesh types, whose own bytes carry the packed vertex/patch data
+// meshshading.go decodes) - into a graphics.Shading, using
 // shadingToDevice as its device mapping (supplied by each of this file's
 // two callers - doShading and resolvePatternPaint - according to their
-// own, different rules for what that mapping should be).
-func (in *interpreter) buildShading(dict syntax.Dictionary, shadingToDevice graphics.Matrix) (*graphics.Shading, error) {
+// own, different rules for what that mapping should be). This is the one
+// place that tells the two possible shapes apart, so every helper it
+// calls below can assume whichever shape its own shading type actually
+// requires.
+func (in *interpreter) buildShading(resolvedObj syntax.Object, shadingToDevice graphics.Matrix) (*graphics.Shading, error) {
+	var dict syntax.Dictionary
+	var stream syntax.Stream
+	isStream := false
+	switch v := resolvedObj.(type) {
+	case syntax.Dictionary:
+		dict = v
+	case syntax.Stream:
+		dict, stream, isStream = v.Dict, v, true
+	default:
+		return nil, pdferror.Malformedf("shading is neither a dictionary nor a stream (found %T)", resolvedObj)
+	}
+
 	typeObj, ok := dict["ShadingType"]
 	if !ok {
 		return nil, pdferror.Malformedf("shading dictionary has no /ShadingType")
@@ -151,15 +175,42 @@ func (in *interpreter) buildShading(dict syntax.Dictionary, shadingToDevice grap
 		return nil, pdferror.Malformedf("/ShadingType is not a number (found %T)", resolvedType)
 	}
 
+	switch int(typeNum) {
+	case 1:
+		return in.buildFunctionBasedShading(dict, shadingToDevice)
+	case 4, 5, 6, 7:
+		// Mesh shadings are a further, larger sub-phase (they need their
+		// own packed-stream binary format decoded, not just dictionary
+		// entries) - not yet implemented; see docs/PLAN2.md's Phase 13.
+		// isStream/stream are already extracted above (a mesh shading
+		// object must be the stream form) so the sub-phase that
+		// implements them only needs to add a call here, not touch this
+		// function's own shape-detection logic again.
+		if !isStream {
+			return nil, pdferror.Malformedf("mesh shading (type %d) must be a stream, found a plain dictionary", int(typeNum))
+		}
+		_ = stream
+		return nil, pdferror.Unsupportedf("mesh shading type %d (free-form/lattice-form triangle mesh and Coons/tensor patch mesh shadings are not yet supported)", int(typeNum))
+	}
+
+	return in.buildAxialOrRadialShading(dict, int(typeNum), shadingToDevice)
+}
+
+// buildAxialOrRadialShading builds the two geometric shading types
+// (axial and radial) - split out from buildShading once that function
+// also needed to handle the function-based and mesh types, which share
+// none of this parsing (no /Coords, a differently-shaped /Domain, and so
+// on - see buildFunctionBasedShading and buildMeshShading).
+func (in *interpreter) buildAxialOrRadialShading(dict syntax.Dictionary, typeNum int, shadingToDevice graphics.Matrix) (*graphics.Shading, error) {
 	var kind graphics.ShadingKind
 	var wantCoords int
-	switch int(typeNum) {
+	switch typeNum {
 	case 2:
 		kind, wantCoords = graphics.AxialShading, 4
 	case 3:
 		kind, wantCoords = graphics.RadialShading, 6
 	default:
-		return nil, pdferror.Unsupportedf("shading type %d (only axial [2] and radial [3] shadings are supported)", int(typeNum))
+		return nil, pdferror.Unsupportedf("shading type %d (only types 1-7 are supported)", typeNum)
 	}
 
 	coordsVals, found, err := floatArrayEntry(in.resolver, dict, "Coords")
@@ -167,7 +218,7 @@ func (in *interpreter) buildShading(dict syntax.Dictionary, shadingToDevice grap
 		return nil, err
 	}
 	if !found || len(coordsVals) != wantCoords {
-		return nil, pdferror.Malformedf("shading /Coords must have %d entries for shading type %d, has %d", wantCoords, int(typeNum), len(coordsVals))
+		return nil, pdferror.Malformedf("shading /Coords must have %d entries for shading type %d, has %d", wantCoords, typeNum, len(coordsVals))
 	}
 	var coords [6]float64
 	copy(coords[:], coordsVals)
@@ -226,6 +277,83 @@ func (in *interpreter) buildShading(dict syntax.Dictionary, shadingToDevice grap
 				// than threading an error through graphics.Shading's
 				// ColorAt signature (which every other package
 				// constructing one would then also need to handle).
+				return graphics.Color{}
+			}
+			r, g, b := cs.ToRGB(out)
+			return graphics.Color{R: r, G: g, B: b}
+		},
+	}, nil
+}
+
+// buildFunctionBasedShading builds a Type 1 (function-based) shading
+// (8.7.4.5.2): unlike axial/radial, there is no line or circle - color is
+// simply the /Function's own output, evaluated directly at a 2-D (x, y)
+// position drawn from a rectangular /Domain and mapped into shading space
+// by an optional /Matrix (a *second*, shading-specific transform layered
+// underneath shadingToDevice, distinct from anything the content stream
+// itself is doing with "cm").
+func (in *interpreter) buildFunctionBasedShading(dict syntax.Dictionary, shadingToDevice graphics.Matrix) (*graphics.Shading, error) {
+	// Note this /Domain's shape - 4 numbers, [xmin xmax ymin ymax] - is
+	// entirely different from axial/radial's 2-number [t0 t1]; they are
+	// not interchangeable, which is exactly why this lives in its own
+	// function rather than being folded into buildAxialOrRadialShading's
+	// existing /Domain handling.
+	domain := [4]float64{0, 1, 0, 1}
+	if domainVals, found, err := floatArrayEntry(in.resolver, dict, "Domain"); err != nil {
+		return nil, err
+	} else if found {
+		if len(domainVals) != 4 {
+			return nil, pdferror.Malformedf("Type 1 shading /Domain must have 4 entries, has %d", len(domainVals))
+		}
+		domain = [4]float64{domainVals[0], domainVals[1], domainVals[2], domainVals[3]}
+	}
+
+	matrix := graphics.Identity()
+	if matrixVals, found, err := floatArrayEntry(in.resolver, dict, "Matrix"); err != nil {
+		return nil, err
+	} else if found {
+		if len(matrixVals) != 6 {
+			return nil, pdferror.Malformedf("Type 1 shading /Matrix must have 6 entries, has %d", len(matrixVals))
+		}
+		matrix = graphics.Matrix{
+			A: matrixVals[0], B: matrixVals[1], C: matrixVals[2],
+			D: matrixVals[3], E: matrixVals[4], F: matrixVals[5],
+		}
+	}
+
+	fnObj, ok := dict["Function"]
+	if !ok {
+		return nil, pdferror.Malformedf("shading has no /Function")
+	}
+	fn, err := function.Parse(in.resolver, fnObj)
+	if err != nil {
+		return nil, err
+	}
+	if fn.NumInputs() != 2 {
+		return nil, pdferror.Malformedf("Type 1 shading /Function must take 2 inputs (x, y), takes %d", fn.NumInputs())
+	}
+
+	csObj, ok := dict["ColorSpace"]
+	if !ok {
+		return nil, pdferror.Malformedf("shading has no /ColorSpace")
+	}
+	cs, err := pdfimage.ResolveColorSpace(in.resolver, csObj, in.resources)
+	if err != nil {
+		return nil, err
+	}
+	if fn.NumOutputs() != cs.Components() {
+		return nil, pdferror.Malformedf("shading /Function produces %d output(s), /ColorSpace needs %d", fn.NumOutputs(), cs.Components())
+	}
+
+	return &graphics.Shading{
+		Kind: graphics.FunctionBasedShading, Domain2: domain, Matrix: matrix,
+		ShadingToDevice: shadingToDevice,
+		ColorAt2: func(x, y float64) graphics.Color {
+			out, err := fn.Eval([]float64{x, y})
+			if err != nil {
+				// See buildAxialOrRadialShading's identical fallback: a
+				// function validated to take exactly 2 inputs, called with
+				// exactly 2 inputs, cannot fail here in practice.
 				return graphics.Color{}
 			}
 			r, g, b := cs.ToRGB(out)
@@ -347,14 +475,11 @@ func (in *interpreter) resolvePatternPaint(name syntax.Name) (*graphics.Shading,
 		if !ok {
 			return nil, nil, pdferror.Malformedf("shading pattern has no /Shading entry")
 		}
-		shadingDict, found, err := in.dictionaryOrStreamDict(shadingObj)
+		resolvedShading, err := resolveIfRef(in.resolver, shadingObj)
 		if err != nil {
 			return nil, nil, err
 		}
-		if !found {
-			return nil, nil, pdferror.Malformedf("shading pattern's /Shading is neither a dictionary nor a stream")
-		}
-		sh, err := in.buildShading(shadingDict, patternToDevice)
+		sh, err := in.buildShading(resolvedShading, patternToDevice)
 		return sh, nil, err
 	case 1:
 		if !isStream {

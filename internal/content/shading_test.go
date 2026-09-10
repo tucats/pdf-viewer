@@ -27,6 +27,60 @@ func axialShadingDict() syntax.Dictionary {
 	}
 }
 
+// functionBasedShadingDict returns a minimal, valid Type 1
+// (function-based) shading dictionary over the unit square [0,1]x[0,1]:
+// a Type 2 (sampled per-input, not per-position) function would not
+// serve here since Type 1 shadings always take exactly 2 inputs, so this
+// uses a Type 0 (sampled) function instead - a 2x2 grid of DeviceGray
+// samples, black at (0,0) and white at (1,1), the other two corners
+// mid-gray, letting a test check that both domain axes are actually
+// wired up (not just one, which a bug that swapped x and y would still
+// pass).
+func functionBasedShadingDict() syntax.Dictionary {
+	fn := syntax.Stream{
+		Dict: syntax.Dictionary{
+			"FunctionType":  syntax.Integer(0),
+			"Domain":        syntax.Array{syntax.Real(0), syntax.Real(1), syntax.Real(0), syntax.Real(1)},
+			"Range":         syntax.Array{syntax.Real(0), syntax.Real(1)},
+			"Size":          syntax.Array{syntax.Integer(2), syntax.Integer(2)},
+			"BitsPerSample": syntax.Integer(8),
+		},
+		// Raw sample bytes, dimension 0 (x) varying fastest per 7.10.2:
+		// (x=0,y=0)=0x00, (x=1,y=0)=0x80, (x=0,y=1)=0x80, (x=1,y=1)=0xFF.
+		Raw: []byte{0x00, 0x80, 0x80, 0xFF},
+	}
+	return syntax.Dictionary{
+		"ShadingType": syntax.Integer(1),
+		"ColorSpace":  syntax.Name("DeviceGray"),
+		"Function":    fn,
+	}
+}
+
+func TestDoShadingFunctionBasedPaintsFromXY(t *testing.T) {
+	resources := syntax.Dictionary{"Shading": syntax.Dictionary{"Sh0": functionBasedShadingDict()}}
+	ops, err := Parse([]byte("/Sh0 sh"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	list, err := Interpret(ops, graphics.Identity(), resources, &fakeResolver{})
+	if err != nil {
+		t.Fatalf("Interpret: %v", err)
+	}
+	if len(list) != 1 || list[0].Shading == nil {
+		t.Fatalf("Interpret: want exactly one DrawOp with a resolved Shading, got %+v", list)
+	}
+	sh := list[0].Shading
+	if col, ok := sh.At(0, 0); !ok || col.R > 0.05 {
+		t.Fatalf("At(0,0) = (%v,%v), want covered and near-black", col, ok)
+	}
+	if col, ok := sh.At(1, 1); !ok || col.R < 0.95 {
+		t.Fatalf("At(1,1) = (%v,%v), want covered and near-white", col, ok)
+	}
+	if _, ok := sh.At(-1, 0.5); ok {
+		t.Fatalf("At(-1,0.5) outside /Domain: covered, want uncovered")
+	}
+}
+
 func TestDoShadingAppendsShadingDrawOpWithNoPath(t *testing.T) {
 	resources := syntax.Dictionary{"Shading": syntax.Dictionary{"Sh0": axialShadingDict()}}
 	ops, err := Parse([]byte("/Sh0 sh"))
@@ -92,15 +146,18 @@ func TestDoShadingMissingResourceIsSkipped(t *testing.T) {
 
 func TestDoShadingUnsupportedTypeIsError(t *testing.T) {
 	dict := axialShadingDict()
-	dict["ShadingType"] = syntax.Integer(1) // function-based: not implemented
-	resources := syntax.Dictionary{"Shading": syntax.Dictionary{"Sh0": dict}}
+	dict["ShadingType"] = syntax.Integer(4) // free-form triangle mesh: not yet implemented
+	// A mesh shading must be a stream (its data carries packed vertex
+	// bytes) - buildShading checks this before it ever gets to "is type 4
+	// supported", so the resource itself has to be a stream too.
+	resources := syntax.Dictionary{"Shading": syntax.Dictionary{"Sh0": syntax.Stream{Dict: dict}}}
 	ops, err := Parse([]byte("/Sh0 sh"))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	_, err = Interpret(ops, graphics.Identity(), resources, &fakeResolver{})
 	if !errors.Is(err, pdferror.ErrUnsupported) {
-		t.Fatalf("Interpret with /ShadingType 1: got %v, want an error wrapping ErrUnsupported", err)
+		t.Fatalf("Interpret with /ShadingType 4: got %v, want an error wrapping ErrUnsupported", err)
 	}
 }
 

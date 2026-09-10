@@ -45,6 +45,7 @@ type OpenOption func(*openConfig)
 type openConfig struct {
 	diagnostics      *Diagnostics
 	fontSubstitution *FontSubstitution
+	predefinedCMaps  *PredefinedCMaps
 	password         string
 }
 
@@ -185,6 +186,47 @@ type FontSubstitution struct {
 	// default rather than a silently empty configuration. See
 	// docs/FONTS.md's "Configuration" section for the full rationale.
 	DisableSystemDefaults bool
+}
+
+// WithPredefinedCMaps opts a Document into resolving a Type0/CID font's
+// *predefined* CJK /Encoding name (e.g. "UniGB-UCS2-H", "90ms-RKSC-H" -
+// see docs/PLAN2.md's Phase 9 and docs/capability-matrix.md's Fonts
+// section) against real CMap resource data supplied by the embedding
+// application, instead of always falling back to a generic default
+// width and notdefGlyph for every code.
+//
+// This package ships none of that data itself: a predefined encoding's
+// mapping is not stored in the PDF file at all, and this data is
+// Adobe's own licensed CMap resource files (historically bundled with
+// Acrobat/Reader; today also distributed at
+// https://github.com/adobe-type-tools/cmap-resources, and equivalently
+// laid out inside a Ghostscript, poppler, or TeX installation's own
+// resource directories) - this package has no license/bundling decision
+// to bundle a copy, the same policy WithFontSubstitution's own doc
+// comment describes for font files. Without this option (the default),
+// this package behaves exactly as it always has for a predefined
+// encoding name: it never reads any directory or file outside of the
+// PDF being opened itself. An embedded CMap *stream* (as opposed to a
+// predefined *name*) needs no such data and is unaffected either way -
+// see internal/fonts/cidcmap.go.
+func WithPredefinedCMaps(cfg PredefinedCMaps) OpenOption {
+	return func(c *openConfig) { c.predefinedCMaps = &cfg }
+}
+
+// PredefinedCMaps configures WithPredefinedCMaps.
+type PredefinedCMaps struct {
+	// Directories are explicit paths to recursively scan for CMap
+	// resource files, indexed by each file's own base name (predefined
+	// CMap resource files are conventionally named exactly after the
+	// CMap they contain, with no extension - e.g. a file named
+	// "UniGB-UCS2-H" satisfies a PDF whose /Encoding is the name
+	// UniGB-UCS2-H) - see internal/fonts.DirectoryCMapSource. Unlike
+	// FontSubstitution.Directories, there is no platform-default
+	// directory list to fall back on: CMap resources are not installed
+	// as part of any operating system's normal font or resource stack,
+	// so at least one real directory must be supplied here for this
+	// option to have any effect at all.
+	Directories []string
 }
 
 // RenderOptions configures Page.Render.

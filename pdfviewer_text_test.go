@@ -87,6 +87,23 @@ func TestRenderType0EmbeddedCMapTextMatchesIdentity(t *testing.T) {
 	assertBackground(t, img, 95, 95)
 }
 
+// TestRenderType0PredefinedEncodingFallsBackToNotdefByDefault confirms
+// that, without pdfviewer.WithPredefinedCMaps configured (this project's
+// default for every document), a Type0 font naming a predefined CJK
+// encoding ("UniGB-UCS2-H" - buildTextType0PredefinedEncoding) falls
+// back to internal/fonts' notdefGlyph placeholder box, the same
+// documented behavior as an unresolvable simple font
+// (TestRenderNotdefFallback) - not a blank page, and not the real square
+// glyph. See pdfviewer_predefinedcmap_test.go for the same fixture
+// rendered *with* the option configured, which does show the real
+// glyph.
+func TestRenderType0PredefinedEncodingFallsBackToNotdefByDefault(t *testing.T) {
+	img := renderPage(t, "text-type0-predefined-encoding.pdf")
+	assertInk(t, img, 8, 60, 255, 0, 0) // outer ring of the notdef box (/DW 1000 sized)
+	assertBackground(t, img, 50, 60)    // hollow interior
+	assertBackground(t, img, 95, 20)    // well outside the whole box
+}
+
 // TestRenderScaledText confirms buildTextScaled's two differently-sized
 // glyphs (size 40 at text origin (0,0), then size 80 after "60 0 Td")
 // land at their two independently hand-derived device rectangles - see

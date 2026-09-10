@@ -103,6 +103,7 @@ func main() {
 		{"text-scaled.pdf", buildTextScaled()},
 		{"text-type0-identity.pdf", buildTextType0Identity()},
 		{"text-type0-embedded-cmap.pdf", buildTextType0EmbeddedCMap()},
+		{"text-type0-predefined-encoding.pdf", buildTextType0PredefinedEncoding()},
 		{"text-notdef-fallback.pdf", buildTextNotdefFallback()},
 		{"text-rotated-page.pdf", buildTextRotatedPage()},
 		{"separation-fill.pdf", buildSeparationFill()},

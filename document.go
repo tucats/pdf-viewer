@@ -121,6 +121,9 @@ func Open(r io.ReaderAt, size int64, opts ...OpenOption) (*Document, error) {
 			!cfg.fontSubstitution.DisableSystemDefaults,
 		))
 	}
+	if cfg.predefinedCMaps != nil {
+		m.SetCMapSource(fonts.NewDirectoryCMapSource(cfg.predefinedCMaps.Directories))
+	}
 	return &Document{model: m, fontCache: content.NewFontCache()}, nil
 }
 

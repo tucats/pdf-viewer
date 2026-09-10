@@ -123,6 +123,11 @@ type Document struct {
 	// comment for why this is typed as `any` rather than a concrete
 	// internal/fonts type.
 	fontSource any
+
+	// cmapSource is nil unless the root package's WithPredefinedCMaps
+	// option attached one via SetCMapSource - see that method's doc
+	// comment, which mirrors SetFontSource's above exactly.
+	cmapSource any
 }
 
 // SetDiagnostics attaches r to d, so that every subsequent call the rest
@@ -158,6 +163,21 @@ func (d *Document) SetFontSource(src any) {
 	d.fontSource = src
 }
 
+// SetCMapSource attaches src - expected to be a *internal/fonts.
+// DirectoryCMapSource, or any other value satisfying that package's
+// CMapSource interface - to d, so that internal/fonts.Load (via
+// PredefinedCMapSource below and that package's own predefined_cmap.go
+// helpers) can find it once d is used as a fonts.Resolver. This is
+// SetFontSource's exact counterpart for Phase 9's predefined-CMap
+// resolution - see that method's doc comment for the full rationale
+// behind the `any` parameter type, which applies here unchanged.
+// Passing nil (the default for every Document that never has this
+// method called) restores "no predefined-CMap resolution", exactly like
+// SetFontSource(nil) restores "no font substitution".
+func (d *Document) SetCMapSource(src any) {
+	d.cmapSource = src
+}
+
 // FontSubstitutionSource implements internal/fonts.SubstitutionProvider
 // structurally (see that interface's own doc comment for the full
 // rationale), returning whatever SetFontSource last attached - nil if it
@@ -167,6 +187,15 @@ func (d *Document) SetFontSource(src any) {
 // knowledge of that type.
 func (d *Document) FontSubstitutionSource() any {
 	return d.fontSource
+}
+
+// PredefinedCMapSource implements internal/fonts.CMapSourceProvider
+// structurally, returning whatever SetCMapSource last attached - nil if
+// it was never called. This is FontSubstitutionSource's exact
+// counterpart for predefined-CMap resolution - see that method's doc
+// comment for the full rationale, which applies here unchanged.
+func (d *Document) PredefinedCMapSource() any {
+	return d.cmapSource
 }
 
 // RecordDiagnostic implements diag.Recordable, so any package holding d

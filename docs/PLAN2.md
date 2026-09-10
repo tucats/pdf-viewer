@@ -139,7 +139,7 @@ correctly end to end.
 
 ## Phase 9: Non-Identity Type 0/CID encodings (CJK support)
 
-**Status: 9a and 9b done.**
+**Status: Done (9a, 9b, 9c).**
 
 Today, any Type 0/CID font not using `Identity-H`/`Identity-V` - that
 is, any predefined CJK encoding (`UniGB-UCS2-H`, `UniCNS-UCS2-H`,
@@ -1057,3 +1057,73 @@ in order, not rewritten later except to fix mistakes.
     `WithFontSubstitution`'s precedent) with a real, disk-backed
     `CMapSource` implementation and end-to-end fixtures/tests - see
     Phase 9's own remaining scope.
+
+### Phase 9c: public API for predefined CJK CMap resolution — done (2026-09-09)
+
+- **`internal/fonts/directory_cmap_source.go` (new).** `DirectoryCMapSource`,
+    this package's only shipped `CMapSource`: recursively scans a fixed
+    list of directories, indexing every regular file found by its own
+    base name (predefined CMap resource files - Adobe's own, or the
+    equivalent files inside a Ghostscript/poppler/TeX installation - have
+    no extension and are conventionally named exactly after the CMap
+    they contain, e.g. a file literally named "UniGB-UCS2-H"), reading a
+    file's bytes only once actually requested via `CMapData`. Unlike
+    `DirectorySource` (font substitution), there is no GOOS-gated default
+    directory list - CMap resources are not part of any operating
+    system's normal resource stack - so this is opt-in-with-explicit-
+    directories only, and, like `DirectorySource`, scans the filesystem
+    at most once per instance (cached thereafter).
+- **`options.go`: `WithPredefinedCMaps`/`PredefinedCMaps` (new).**
+    Mirrors `WithFontSubstitution`/`FontSubstitution` exactly (a single
+    `Directories []string` field, no `DisableSystemDefaults` equivalent
+    since there are no defaults to disable). `document.go`'s `Open`
+    wires a configured `PredefinedCMaps` into a new
+    `internal/fonts.NewDirectoryCMapSource`, attached via
+    `internal/model.Document`'s new `SetCMapSource` - the exact
+    `SetFontSource` counterpart, added alongside a `PredefinedCMapSource`
+    method implementing `internal/fonts.CMapSourceProvider` structurally
+    (mirroring `FontSubstitutionSource`/`SubstitutionProvider`).
+- **No `cid.go`/`predefined_cmap.go` changes were needed** - 9b already
+    built `predefinedCMapFor`/`CMapSourceProvider` anticipating exactly
+    this wiring, so this sub-phase is purely the public-facing plumbing
+    (`internal/model`, `options.go`, `document.go`) plus the concrete,
+    disk-backed `CMapSource` implementation.
+- **Fixtures.** `tools/genfixtures` gained `buildTextType0PredefinedEncoding`
+    (`text-type0-predefined-encoding.pdf`): structurally identical to
+    `text-type0-identity.pdf`/`text-type0-embedded-cmap.pdf`, but its
+    `/Encoding` is the bare name `UniGB-UCS2-H` (a real predefined CJK
+    encoding name; this project bundles none of Adobe's actual data for
+    it). Used two ways: rendered with no option at all, it falls back to
+    `notdefGlyph` exactly like `text-notdef-fallback.pdf`
+    (`TestRenderType0PredefinedEncodingFallsBackToNotdefByDefault`,
+    `pdfviewer_text_test.go`, plus a checked-in golden PNG showing that
+    fallback box); rendered through the new public API with
+    `WithPredefinedCMaps` pointed at a temporary directory containing a
+    small, entirely project-owned file literally named "UniGB-UCS2-H"
+    (never any of Adobe's real licensed data - the same
+    fixture-independence policy this project's other tests already
+    follow), it renders the real square glyph pixel-for-pixel identically
+    to the Identity-H fixture
+    (`TestRenderType0PredefinedEncodingWithConfiguredCMapSource`,
+    `pdfviewer_predefinedcmap_test.go`, new).
+- **Tests.** `directory_cmap_source_test.go` (new) covers exact-name
+    matching, Adobe's own one-level-nested resource layout, a missing
+    directory, and the one-time-scan caching behavior.
+    `predefined_cmap_test.go` (from 9b, already covered the
+    `CMapSourceProvider` wiring and `usecmap` cycle guard using a fake
+    `CMapSource` - unchanged by this sub-phase). `pdfviewer_predefinedcmap_test.go`
+    (new) adds the same three-shape end-to-end coverage
+    `pdfviewer_fontsubstitution_test.go` established for
+    `WithFontSubstitution`: opting in has no effect on documents that
+    don't need it, a zero-value option is a documented no-op (no default
+    directory list, unlike `FontSubstitution`'s useful zero value), and a
+    correctly configured source actually changes rendering. Full test
+    suite, `go vet`, and the race detector all pass clean; regenerating
+    every `tools/genfixtures` fixture reproduced every existing file
+    byte-for-byte except the one new fixture added.
+- **What's carried forward.** With 9a-9c done, Phase 9 is complete for
+    both embedded-CMap and (opt-in) predefined-name encodings. This
+    package's own CMap grammar parser (`internal/fonts/cidcmap.go`) is
+    built to be reused, unchanged, by Phase 10's `/ToUnicode` parsing
+    (a different "begin...end" vocabulary over the same lexical grammar
+    and `usecmap`/codespace machinery) - see that phase's own plan entry.

@@ -172,6 +172,53 @@ func buildTextType0EmbeddedCMap() []byte {
 	return b.finish(1)
 }
 
+// buildTextType0PredefinedEncoding returns a single 100x100-point page
+// structurally identical to buildTextType0Identity and
+// buildTextType0EmbeddedCMap above - same embedded TrueType program,
+// same descendant font width table - except its /Encoding is the bare
+// *name* "UniGB-UCS2-H" (a real predefined CJK encoding this project
+// does not bundle data for - see internal/fonts/predefined_cmap.go and
+// pdfviewer.WithPredefinedCMaps) rather than an embedded CMap stream or
+// "Identity-H".
+//
+// This fixture is deliberately used two different ways by two different
+// tests:
+//
+//   - Rendered with no option configured at all (this project's default
+//     for every document), the shown code 0x0041 cannot be resolved to a
+//     CID at all (this package has no bundled UniGB-UCS2-H data, and the
+//     descendant font's /W table only assigns a width to CID 1 - not
+//     code/CID 0x41), so it falls back to internal/fonts' notdefGlyph
+//     placeholder box, exactly like text-notdef-fallback.pdf - see
+//     TestRenderType0PredefinedEncodingFallsBackToNotdefByDefault.
+//   - Rendered with pdfviewer.WithPredefinedCMaps pointed at a directory
+//     containing a real "UniGB-UCS2-H" file that a test itself writes
+//     (mapping code 0x0041 to CID 1 - never any of Adobe's actual
+//     licensed data, matching this project's fixture-independence
+//     policy), it renders identically to buildTextType0Identity's square -
+//     see TestRenderType0PredefinedEncodingWithConfiguredCMapSource.
+func buildTextType0PredefinedEncoding() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("1 0 0 rg\nBT\n/F1 100 Tf\n0 0 Td\n<0041> Tj\nET\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	b.addObject(5, 0, "<< /Type /Font /Subtype /Type0 /BaseFont /GenfixturesSquare-Predefined "+
+		"/Encoding /UniGB-UCS2-H /DescendantFonts [6 0 R] >>", nil)
+	b.addObject(6, 0, "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /GenfixturesSquare "+
+		"/DW 1000 /W [1 [1000]] /CIDToGIDMap /Identity /FontDescriptor 7 0 R >>", nil)
+	b.addObject(7, 0, "<< /Type /FontDescriptor /FontName /GenfixturesSquare /Flags 32 /FontFile2 8 0 R >>", nil)
+
+	program := buildTestFontProgram()
+	b.addObject(8, 0, fmt.Sprintf("<< /Length %d >>", len(program)), program)
+
+	return b.finish(1)
+}
+
 // buildTextNotdefFallback returns a single 100x100-point page showing
 // 'A' at font size 100, text origin (0,0), in a simple font declaring
 // /BaseFont /Helvetica with *no* /FontFile* entry at all - exercising

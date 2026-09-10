@@ -18,16 +18,16 @@ import (
 // compatible in Go, but adding a previously-absent parameter to an
 // existing function is not.
 //
-// RenderOptions carries the minimal set of fields Render's implementation
-// (see page.go) actually uses: Scale and Background. Per the README's
-// Draft Public API notes, a fuller RenderOptions is expected to also
-// cover an explicit pixel size, page-box selection beyond MediaBox
-// (CropBox/BleedBox/TrimBox/ArtBox - Phase 2/3 per
-// docs/capability-matrix.md), and color mode; those are not implemented
-// yet and are left for a later change now that there is a real Render to
-// extend. ThumbnailOptions (Phase 3) mirrors it with MaxDimension in
-// place of Scale, matching the README's own description of Thumbnail as
-// "a convenience for a bounded maximum dimension" sharing full
+// RenderOptions carries the fields Render's implementation (see page.go)
+// actually uses: Scale, Background, HideAnnotations, and (docs/PLAN2.md's
+// Phase 16) Box, selecting which of the page's boundary boxes (CropBox,
+// the default, or MediaBox/BleedBox/TrimBox/ArtBox) bounds the rendered
+// output - see PageBox. Per the README's Draft Public API notes, a
+// fuller RenderOptions is still expected to also cover an explicit pixel
+// size and color mode; those are not implemented yet and are left for a
+// later change. ThumbnailOptions (Phase 3) mirrors it with MaxDimension
+// in place of Scale, matching the README's own description of Thumbnail
+// as "a convenience for a bounded maximum dimension" sharing full
 // rendering's page interpretation.
 
 // OpenOption configures how Open or OpenFile parses a document - see
@@ -229,6 +229,52 @@ type PredefinedCMaps struct {
 	Directories []string
 }
 
+// PageBox selects which of a page's boundary boxes RenderOptions.Box and
+// ThumbnailOptions.Box use to determine the rendered viewport - the
+// region of the page's content that ends up visible in the output image,
+// exactly the way Page.Bounds' doc comment already explains CropBox
+// working today. See docs/capability-matrix.md's "Page boxes" section
+// for what each box conventionally means in a real PDF (MediaBox is the
+// whole physical sheet; CropBox is what an ordinary viewer shows;
+// BleedBox/TrimBox/ArtBox are print-production-specific refinements of
+// the same idea, most relevant to prepress workflows).
+type PageBox int
+
+const (
+	// CropBoxPage selects the page's /CropBox (or /MediaBox, where no
+	// /CropBox exists anywhere in the page's ancestry) - exactly what
+	// Page.Bounds already reports, and this package's long-standing
+	// rendering behavior. It is the zero value, so a caller that never
+	// sets RenderOptions.Box or ThumbnailOptions.Box at all keeps
+	// today's exact behavior unchanged.
+	CropBoxPage PageBox = iota
+
+	// MediaBoxPage selects the page's /MediaBox - the whole physical
+	// sheet a print-production PDF's MediaBox commonly spans, crop marks
+	// and bleed margins included, rather than only the smaller region
+	// CropBoxPage would show.
+	MediaBoxPage
+
+	// BleedBoxPage selects the page's /BleedBox - see
+	// internal/model.Page.BleedBox's doc comment for what it
+	// conventionally means. Not every page has its own /BleedBox entry;
+	// when absent, this package treats it the same way
+	// internal/model.Page.BleedBox already does (defaulting to the
+	// page's CropBox, then clipped to MediaBox), so selecting
+	// BleedBoxPage on such a page renders identically to CropBoxPage.
+	BleedBoxPage
+
+	// TrimBoxPage selects the page's /TrimBox - see
+	// internal/model.Page.TrimBox's doc comment. Defaulting behavior
+	// when absent is exactly BleedBoxPage's, for the same reason.
+	TrimBoxPage
+
+	// ArtBoxPage selects the page's /ArtBox - see
+	// internal/model.Page.ArtBox's doc comment. Defaulting behavior when
+	// absent is exactly BleedBoxPage's, for the same reason.
+	ArtBoxPage
+)
+
 // RenderOptions configures Page.Render.
 type RenderOptions struct {
 	// Scale is the number of device pixels per PDF point (1/72 inch).
@@ -262,6 +308,13 @@ type RenderOptions struct {
 	// otherwise interprets form/annotation *interactivity* (see the
 	// README's non-goals).
 	HideAnnotations bool
+
+	// Box selects which of the page's boundary boxes bounds the rendered
+	// output - see PageBox. The zero value, CropBoxPage, matches this
+	// package's long-standing default (the same box Page.Bounds already
+	// reports), so a caller that does not set this field at all sees no
+	// change in behavior.
+	Box PageBox
 }
 
 // ThumbnailOptions configures Page.Thumbnail.
@@ -284,4 +337,10 @@ type ThumbnailOptions struct {
 	// to a thumbnail's rendering the same way it applies to a full
 	// render - see that field's doc comment.
 	HideAnnotations bool
+
+	// Box is exactly RenderOptions.Box: it selects which of the page's
+	// boundary boxes bounds both the thumbnail's rendered content and
+	// (via thumbnailScale) the aspect ratio MaxDimension is fit to - see
+	// RenderOptions.Box's and PageBox's doc comments.
+	Box PageBox
 }

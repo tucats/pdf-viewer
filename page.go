@@ -129,7 +129,8 @@ func (p *pageImpl) Render(ctx context.Context, opts RenderOptions) (image.Image,
 	if scale <= 0 {
 		scale = 1
 	}
-	return p.renderAtScale(ctx, scale, opts.Background, opts.HideAnnotations)
+	box := pageBoxRect(p.page, opts.Box)
+	return p.renderAtScale(ctx, scale, opts.Background, opts.HideAnnotations, box)
 }
 
 // defaultThumbnailMaxDimension is the maximum dimension (in pixels)
@@ -151,11 +152,12 @@ func (p *pageImpl) Thumbnail(ctx context.Context, opts ThumbnailOptions) (image.
 	if maxDimension <= 0 {
 		maxDimension = defaultThumbnailMaxDimension
 	}
-	scale, err := p.thumbnailScale(maxDimension)
+	box := pageBoxRect(p.page, opts.Box)
+	scale, err := p.thumbnailScale(maxDimension, box)
 	if err != nil {
 		return nil, err
 	}
-	return p.renderAtScale(ctx, scale, opts.Background, opts.HideAnnotations)
+	return p.renderAtScale(ctx, scale, opts.Background, opts.HideAnnotations, box)
 }
 
 func (p *pageImpl) Text(ctx context.Context) ([]TextGlyph, error) {
@@ -208,13 +210,17 @@ func (p *pageImpl) Text(ctx context.Context) ([]TextGlyph, error) {
 // API means by Thumbnail sharing "the same page interpretation as full
 // rendering" rather than being a second, separate implementation that
 // could drift out of sync with Render's own behavior.
-func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background color.Color, hideAnnotations bool) (image.Image, error) {
+//
+// box is the page boundary (already resolved from a RenderOptions.Box or
+// ThumbnailOptions.Box selection via pageBoxRect) that anchors and sizes
+// the rendered output - see pageDeviceGeometry.
+func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background color.Color, hideAnnotations bool, box model.Rect) (image.Image, error) {
 	bg := background
 	if bg == nil {
 		bg = color.White
 	}
 
-	width, height, ctm, err := pageDeviceGeometry(p.page, scale)
+	width, height, ctm, err := pageDeviceGeometry(p.page, box, scale)
 	if err != nil {
 		return nil, err
 	}
@@ -272,8 +278,10 @@ func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background 
 // dimensions equal to (at most) maxDimension, preserving its aspect
 // ratio - "rendered", here, already accounting for the page's own
 // /Rotate the same way pageDeviceGeometry does, since a 90-or-270-degree
-// rotated page's *visual* width and height are swapped from its
-// MediaBox's own width and height.
+// rotated page's *visual* width and height are swapped from its box's
+// own width and height. box is the same already-resolved page boundary
+// renderAtScale will go on to use (see pageBoxRect), so the aspect ratio
+// computed here always matches what actually gets rendered.
 //
 // The obvious formula - maxDimension divided by the longer point
 // dimension - is computed first as a starting estimate, then corrected
@@ -284,8 +292,7 @@ func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background 
 // exactly (or almost exactly) on an integer boundary, which would be a
 // silent, easy-to-miss correctness bug for exactly the property
 // (thumbnails are bounded in size) Thumbnail exists to guarantee.
-func (p *pageImpl) thumbnailScale(maxDimension int) (float64, error) {
-	box := p.page.CropBox
+func (p *pageImpl) thumbnailScale(maxDimension int, box model.Rect) (float64, error) {
 	w := math.Abs(box.URX - box.LLX)
 	h := math.Abs(box.URY - box.LLY)
 	if p.page.Rotate == 90 || p.page.Rotate == 270 {
@@ -300,7 +307,7 @@ func (p *pageImpl) thumbnailScale(maxDimension int) (float64, error) {
 	}
 	scale := float64(maxDimension) / longest
 
-	width, height, _, err := pageDeviceGeometry(p.page, scale)
+	width, height, _, err := pageDeviceGeometry(p.page, box, scale)
 	if err != nil {
 		return 0, err
 	}
@@ -314,6 +321,28 @@ func (p *pageImpl) thumbnailScale(maxDimension int) (float64, error) {
 	return scale, nil
 }
 
+// pageBoxRect returns page's boundary box in PDF points for the
+// requested selection - the model.Page field of the same name PageBox's
+// own doc comment describes for each constant, falling back to CropBox
+// (this package's long-standing default) for CropBoxPage and any other
+// value, so a zero-value PageBox (or one from a future version of this
+// package this build does not yet know about) never panics or behaves
+// unexpectedly.
+func pageBoxRect(page model.Page, box PageBox) model.Rect {
+	switch box {
+	case MediaBoxPage:
+		return page.MediaBox
+	case BleedBoxPage:
+		return page.BleedBox
+	case TrimBoxPage:
+		return page.TrimBox
+	case ArtBoxPage:
+		return page.ArtBox
+	default:
+		return page.CropBox
+	}
+}
+
 // pageDeviceGeometry computes the pixel dimensions of page's rendered
 // output at the given scale (device pixels per PDF point) and the
 // initial content-transformation matrix - mapping the page's default
@@ -322,16 +351,17 @@ func (p *pageImpl) thumbnailScale(maxDimension int) (float64, error) {
 // count down) and the page's own /Rotate attribute (see
 // model.Page.Rotate).
 //
-// The output window is anchored to page's CropBox, not its MediaBox
-// (see model.Page.CropBox and Page.Bounds' doc comments for why): a
-// page's content stream still draws in the same MediaBox-relative user
-// space it always did (nothing about the content's own coordinates
-// changes), but only the CropBox-sized, CropBox-origin-anchored portion
-// of that user space becomes visible in the rendered image - exactly
-// like a physical printer's sheet being trimmed down to the finished
-// page, everything outside the trim line simply does not appear.
-func pageDeviceGeometry(page model.Page, scale float64) (width, height int, ctm graphics.Matrix, err error) {
-	box := page.CropBox
+// The output window is anchored to box - by default page's CropBox (see
+// model.Page.CropBox and Page.Bounds' doc comments for why), or whichever
+// other boundary a RenderOptions.Box/ThumbnailOptions.Box selection
+// resolved to (see pageBoxRect): a page's content stream still draws in
+// the same MediaBox-relative user space it always did (nothing about the
+// content's own coordinates changes), but only box's own sized,
+// origin-anchored portion of that user space becomes visible in the
+// rendered image - exactly like a physical printer's sheet being
+// trimmed down to a finished page, everything outside the trim line
+// simply does not appear.
+func pageDeviceGeometry(page model.Page, box model.Rect, scale float64) (width, height int, ctm graphics.Matrix, err error) {
 	minX, maxX := box.LLX, box.URX
 	if minX > maxX {
 		minX, maxX = maxX, minX
@@ -347,7 +377,7 @@ func pageDeviceGeometry(page model.Page, scale float64) (width, height int, ctm 
 	}
 
 	// baseCTM maps a user-space point directly to this "unrotated"
-	// device space: x shifts by the CropBox's own origin and scales; y
+	// device space: x shifts by box's own origin and scales; y
 	// additionally flips, since PDF user space has y increasing upward
 	// but image rows increase downward.
 	baseCTM := graphics.Matrix{

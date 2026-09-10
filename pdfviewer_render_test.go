@@ -253,6 +253,7 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"image-jbig2-text.pdf",
 		"inline-image.pdf",
 		"rotated-page.pdf",
+		"page-boxes.pdf",
 		"text-simple-truetype.pdf",
 		"text-simple-type1.pdf",
 		"text-scaled.pdf",

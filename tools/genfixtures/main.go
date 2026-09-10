@@ -100,6 +100,7 @@ func main() {
 		{"image-jbig2-text.pdf", buildImageJBIG2Text()},
 		{"inline-image.pdf", buildInlineImage()},
 		{"rotated-page.pdf", buildRotatedPage()},
+		{"page-boxes.pdf", buildPageBoxes()},
 		{"text-simple-truetype.pdf", buildTextSimpleTrueType()},
 		{"text-simple-type1.pdf", buildTextSimpleType1()},
 		{"text-scaled.pdf", buildTextScaled()},
@@ -1044,6 +1045,57 @@ func buildRotatedPage() []byte {
 		"/Resources << >> /Contents 4 0 R >>", nil)
 
 	content := []byte("1 0 0 rg\n0 0 20 20 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	return b.finish(1)
+}
+
+// buildPageBoxes returns a single page declaring all five PDF page
+// boxes, each nested strictly inside the one before it by a 10-point
+// margin on every side:
+//
+//	MediaBox [0   0   200 200]  (the whole 200x200 physical sheet)
+//	CropBox  [10  10  190 190]
+//	BleedBox [20  20  180 180]
+//	TrimBox  [30  30  170 170]
+//	ArtBox   [40  40  160 160]  (innermost, 120x120)
+//
+// The content stream paints five solid, nested squares matching those
+// same five rectangles, largest first so each later (smaller) square
+// paints on top of the ones before it - gray for the MediaBox-sized
+// square, then red/green/blue/yellow for CropBox/BleedBox/TrimBox/
+// ArtBox in turn. Because each square is strictly smaller than, and
+// painted after, the one before it, the color actually visible at any
+// point is always the *smallest* box's color that contains that point:
+// a 10-point-wide ring of gray between MediaBox and CropBox, a
+// 10-point-wide ring of red between CropBox and BleedBox, and so on
+// inward, with solid yellow filling all of ArtBox.
+//
+// This is Phase 16's page-box-selection fixture (docs/PLAN2.md): a test
+// rendering this fixture with RenderOptions.Box set to each of
+// CropBoxPage (the default)/MediaBoxPage/BleedBoxPage/TrimBoxPage/
+// ArtBoxPage in turn can confirm both that the rendered image's pixel
+// dimensions match the selected box's own size and that a point sampled
+// a few points inside that box's own edge (safely within its own
+// 10-point ring, away from any rounding at the exact boundary) shows
+// that ring's distinct color - proof the selected box, and not some
+// other one, actually became the rendered viewport. See
+// pdfviewer_pagebox_test.go for exactly that derivation, box by box.
+func buildPageBoxes() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R "+
+		"/MediaBox [0 0 200 200] /CropBox [10 10 190 190] "+
+		"/BleedBox [20 20 180 180] /TrimBox [30 30 170 170] /ArtBox [40 40 160 160] "+
+		"/Resources << >> /Contents 4 0 R >>", nil)
+
+	content := []byte("" +
+		"0.6 0.6 0.6 rg\n0 0 200 200 re\nf\n" + // MediaBox-sized square: gray
+		"1 0 0 rg\n10 10 180 180 re\nf\n" + // CropBox-sized square: red
+		"0 1 0 rg\n20 20 160 160 re\nf\n" + // BleedBox-sized square: green
+		"0 0 1 rg\n30 30 140 140 re\nf\n" + // TrimBox-sized square: blue
+		"1 1 0 rg\n40 40 120 120 re\nf\n") // ArtBox-sized square: yellow
 	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
 
 	return b.finish(1)

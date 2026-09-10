@@ -57,9 +57,15 @@ func (c *Canvas) Image() *image.RGBA {
 // single choke point that guarantees it regardless of which content
 // stream operator or how much arithmetic produced the point; see
 // graphics.Path's clampPoint.
-func (c *Canvas) Fill(path *graphics.Path, rule graphics.FillRule, color graphics.Color, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
+//
+// mask, when non-nil, is an ExtGState soft mask (see graphics.SoftMask's
+// doc comment) - paint (below) samples it once per covered pixel and
+// multiplies the result into that pixel's alpha, on top of shape
+// coverage and constantAlpha. nil means no soft mask was active,
+// reproducing this method's pre-soft-mask behavior exactly.
+func (c *Canvas) Fill(path *graphics.Path, rule graphics.FillRule, color graphics.Color, alpha float64, mode graphics.BlendMode, mask *graphics.SoftMask, clips []graphics.ClipPath) {
 	r, g, b := color.R, color.G, color.B
-	c.paint(path, rule, clips, alpha, mode, func(_, _ int) (float64, float64, float64, float64) {
+	c.paint(path, rule, clips, alpha, mode, mask, func(_, _ int) (float64, float64, float64, float64) {
 		return r, g, b, 1
 	})
 }
@@ -102,7 +108,7 @@ func (c *Canvas) Fill(path *graphics.Path, rule graphics.FillRule, color graphic
 // rather than painting nothing - the standard "tile" texture-wrapping
 // mode, which is exactly what makes a single pre-rendered pattern cell
 // repeat correctly across however large a shape it fills.
-func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, img *graphics.Image, repeat bool, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
+func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, img *graphics.Image, repeat bool, alpha float64, mode graphics.BlendMode, mask *graphics.SoftMask, clips []graphics.ClipPath) {
 	if img == nil || img.Width <= 0 || img.Height <= 0 {
 		return
 	}
@@ -111,7 +117,7 @@ func (c *Canvas) DrawImage(quad *graphics.Path, imageToDevice graphics.Matrix, i
 		return
 	}
 
-	c.paint(quad, graphics.NonZero, clips, alpha, mode, func(col, row int) (float64, float64, float64, float64) {
+	c.paint(quad, graphics.NonZero, clips, alpha, mode, mask, func(col, row int) (float64, float64, float64, float64) {
 		// Sample at the pixel's center (col+0.5, row+0.5), not its
 		// integer corner, so a pixel is colored by whatever image sample
 		// its middle actually falls under.
@@ -154,8 +160,8 @@ func wrap01(v float64) float64 {
 // /Extend) paints nothing there, leaving whatever was already
 // underneath - the same "partial coverage" tolerance DrawImage already
 // has for a device pixel outside an image's own unit square.
-func (c *Canvas) FillShading(path *graphics.Path, rule graphics.FillRule, sh *graphics.Shading, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
-	c.paint(path, rule, clips, alpha, mode, func(col, row int) (r, g, b, a float64) {
+func (c *Canvas) FillShading(path *graphics.Path, rule graphics.FillRule, sh *graphics.Shading, alpha float64, mode graphics.BlendMode, mask *graphics.SoftMask, clips []graphics.ClipPath) {
+	c.paint(path, rule, clips, alpha, mode, mask, func(col, row int) (r, g, b, a float64) {
 		color, ok := sh.At(float64(col)+0.5, float64(row)+0.5)
 		if !ok {
 			return 0, 0, 0, 0
@@ -171,13 +177,13 @@ func (c *Canvas) FillShading(path *graphics.Path, rule graphics.FillRule, sh *gr
 // the whole page when unclipped") - see graphics.DrawOp.Shading's doc
 // comment for why internal/content hands this a nil Path rather than
 // building a covering rectangle itself.
-func (c *Canvas) PaintShading(sh *graphics.Shading, alpha float64, mode graphics.BlendMode, clips []graphics.ClipPath) {
+func (c *Canvas) PaintShading(sh *graphics.Shading, alpha float64, mode graphics.BlendMode, mask *graphics.SoftMask, clips []graphics.ClipPath) {
 	var full graphics.Path
 	full.AppendRect([4]graphics.Point{
 		{X: 0, Y: 0}, {X: float64(c.width), Y: 0},
 		{X: float64(c.width), Y: float64(c.height)}, {X: 0, Y: float64(c.height)},
 	})
-	c.FillShading(&full, graphics.NonZero, sh, alpha, mode, clips)
+	c.FillShading(&full, graphics.NonZero, sh, alpha, mode, mask, clips)
 }
 
 // paint is the shared core of Fill and DrawImage: it rasterizes path's
@@ -191,8 +197,19 @@ func (c *Canvas) PaintShading(sh *graphics.Shading, alpha float64, mode graphics
 // itself needing to know which case it is serving. constantAlpha (PDF's
 // "ca"/"CA") further attenuates sample's own per-pixel alpha, and mode
 // selects how the result combines with whatever is already on the
-// canvas (see blendChannel).
-func (c *Canvas) paint(path *graphics.Path, rule graphics.FillRule, clips []graphics.ClipPath, constantAlpha float64, mode graphics.BlendMode, sample func(col, row int) (r, g, b, a float64)) {
+// canvas (see blendChannel). mask, when non-nil, is an ExtGState soft
+// mask (11.6.4.3): it is sampled once more per pixel, at that pixel's
+// own center (mask.At(col+0.5, row+0.5) - the same point convention
+// DrawImage already samples an ordinary image at), and multiplied into
+// the pixel's alpha exactly like constantAlpha is. A nil mask
+// reproduces this method's pre-soft-mask behavior exactly (see
+// graphics.SoftMask's own doc comment for why "no mask" and "mask value
+// 1 everywhere" would not be quite the same shortcut to take here: a
+// real SoftMask.At already returns 0, not 1, for a point outside its own
+// grid, so skipping the call entirely when mask is nil is not just an
+// optimization, it is the only way to get "unmasked" instead of "masked
+// out everywhere" when there is genuinely no mask active).
+func (c *Canvas) paint(path *graphics.Path, rule graphics.FillRule, clips []graphics.ClipPath, constantAlpha float64, mode graphics.BlendMode, mask *graphics.SoftMask, sample func(col, row int) (r, g, b, a float64)) {
 	minXf, minYf, maxXf, maxYf, ok := path.Bounds()
 	if !ok {
 		return
@@ -228,6 +245,9 @@ func (c *Canvas) paint(path *graphics.Path, rule graphics.FillRule, clips []grap
 				continue
 			}
 			alpha := float64(shapeCov) * a * constantAlpha
+			if mask != nil {
+				alpha *= mask.At(float64(col)+0.5, float64(row)+0.5)
+			}
 			if alpha > 1 {
 				alpha = 1
 			}

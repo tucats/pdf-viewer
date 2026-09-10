@@ -9,7 +9,7 @@ import (
 func TestFillWithPartialAlphaBlendsWithBackground(t *testing.T) {
 	c := NewCanvas(10, 10, graphics.Color{R: 1, G: 1, B: 1}) // white background
 	path := rectPath(0, 0, 10, 10)
-	c.Fill(path, graphics.NonZero, graphics.Color{}, 0.5, graphics.BlendNormal, nil) // 50% black over white
+	c.Fill(path, graphics.NonZero, graphics.Color{}, 0.5, graphics.BlendNormal, nil, nil) // 50% black over white
 
 	r, g, b, _ := c.Image().At(5, 5).RGBA()
 	// Expect ~50% gray (roughly 127-128 per channel), not solid black.
@@ -24,7 +24,7 @@ func TestFillWithPartialAlphaBlendsWithBackground(t *testing.T) {
 func TestFillWithZeroAlphaPaintsNothing(t *testing.T) {
 	c := NewCanvas(10, 10, graphics.Color{R: 1, G: 1, B: 1})
 	path := rectPath(0, 0, 10, 10)
-	c.Fill(path, graphics.NonZero, graphics.Color{}, 0, graphics.BlendNormal, nil)
+	c.Fill(path, graphics.NonZero, graphics.Color{}, 0, graphics.BlendNormal, nil, nil)
 
 	r, g, b, _ := c.Image().At(5, 5).RGBA()
 	if r>>8 < 253 || g>>8 < 253 || b>>8 < 253 {
@@ -38,7 +38,7 @@ func TestFillWithMultiplyBlendModeDarkensBackground(t *testing.T) {
 	// BlendNormal (an ordinary replace) could never produce here.
 	c := NewCanvas(10, 10, graphics.Color{R: 0.5, G: 0.5, B: 0.5})
 	path := rectPath(0, 0, 10, 10)
-	c.Fill(path, graphics.NonZero, graphics.Color{R: 0.5, G: 0.5, B: 0.5}, 1, graphics.BlendMultiply, nil)
+	c.Fill(path, graphics.NonZero, graphics.Color{R: 0.5, G: 0.5, B: 0.5}, 1, graphics.BlendMultiply, nil, nil)
 
 	r, _, _, _ := c.Image().At(5, 5).RGBA()
 	got := r >> 8
@@ -50,7 +50,7 @@ func TestFillWithMultiplyBlendModeDarkensBackground(t *testing.T) {
 func TestFillWithScreenBlendModeLightensBackground(t *testing.T) {
 	c := NewCanvas(10, 10, graphics.Color{R: 0.5, G: 0.5, B: 0.5})
 	path := rectPath(0, 0, 10, 10)
-	c.Fill(path, graphics.NonZero, graphics.Color{R: 0.5, G: 0.5, B: 0.5}, 1, graphics.BlendScreen, nil)
+	c.Fill(path, graphics.NonZero, graphics.Color{R: 0.5, G: 0.5, B: 0.5}, 1, graphics.BlendScreen, nil, nil)
 
 	r, _, _, _ := c.Image().At(5, 5).RGBA()
 	got := r >> 8
@@ -70,7 +70,7 @@ func TestFillBlendModeAppliesOnlyWithinAlpha(t *testing.T) {
 	// Multiply(white=1, black=0) = 0 (pure black) - but at alpha 0.5,
 	// the result should land halfway between the white backdrop and
 	// that blended black, i.e. ~50% gray, not pure black.
-	c.Fill(path, graphics.NonZero, graphics.Color{}, 0.5, graphics.BlendMultiply, nil)
+	c.Fill(path, graphics.NonZero, graphics.Color{}, 0.5, graphics.BlendMultiply, nil, nil)
 
 	r, _, _, _ := c.Image().At(5, 5).RGBA()
 	got := r >> 8

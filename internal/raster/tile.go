@@ -68,6 +68,14 @@ func RenderTransparent(list graphics.DisplayList, width, height int) *graphics.I
 // differ in every line past the coverage computation itself) and
 // composites it into buf (width*height*4 float64s, RGBA order, [0,1]
 // per channel) using the standard non-premultiplied "over" operator.
+// Unlike blend modes (see this file's own doc comment for why those are
+// *not* honored here), op.SoftMask - if a "gs" operator set one while
+// this DrawOp's own content stream was running - *is* honored, exactly
+// like Canvas.paint honors one: it is just one more per-pixel multiply
+// into srcAlpha, so skipping it here would only save one multiplication
+// while producing a visibly wrong tile for the (admittedly rare, but no
+// harder to support correctly) case of a soft mask active inside a
+// tiling pattern's own content.
 func compositeOp(buf []float64, width, height int, op graphics.DrawOp) {
 	if op.Path == nil {
 		// Only ever possible for a "sh"-shaped DrawOp (no specific
@@ -116,6 +124,9 @@ func compositeOp(buf []float64, width, height int, op graphics.DrawOp) {
 				continue
 			}
 			srcAlpha := float64(shapeCov) * a * op.Alpha
+			if op.SoftMask != nil {
+				srcAlpha *= op.SoftMask.At(float64(col)+0.5, float64(row)+0.5)
+			}
 			if srcAlpha > 1 {
 				srcAlpha = 1
 			}

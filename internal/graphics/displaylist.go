@@ -116,4 +116,15 @@ type DrawOp struct {
 	// construction site needs to set this field explicitly for
 	// unchanged, pre-Phase-5 behavior.
 	BlendMode BlendMode
+
+	// SoftMask is graphics.State.SoftMask at the same moment - see that
+	// field's doc comment. A nil SoftMask (the Go zero value) means no
+	// soft mask was active, exactly the "nothing to attenuate" behavior
+	// every DrawOp had before this feature existed, so - like
+	// BlendMode, and unlike Alpha - no construction site needs to set
+	// this field explicitly for unchanged, pre-soft-mask behavior.
+	// internal/raster (see Canvas.paint) multiplies SoftMask.At(pixel)
+	// into every other per-pixel alpha contribution (shape coverage,
+	// an image's own alpha, the constant Alpha above) before compositing.
+	SoftMask *SoftMask
 }

@@ -141,6 +141,23 @@ type State struct {
 	// zero value) needs no explicit initialization in NewState.
 	BlendMode BlendMode
 
+	// SoftMask is PDF's "SMask" ExtGState parameter (11.6.4.3): when
+	// non-nil, every fill, stroke, image, and shading painted while this
+	// State is current has its own alpha further attenuated, per pixel,
+	// by SoftMask.At - see that type's doc comment for how it is built
+	// (internal/content, not this package, does the building; this
+	// package only stores and later samples the finished result) and
+	// DrawOp.SoftMask for how one State's SoftMask reaches internal/
+	// raster. The Go zero value (nil) correctly means "no soft mask,"
+	// matching FillShading/FillTiling's identical nil-means-absent
+	// convention just above, and matching the specification's own
+	// default of no soft mask until a content stream's "gs" operator
+	// sets one via an ExtGState's /SMask entry. Like every other State
+	// field, "gs" setting this is saved and restored by q/Q exactly like
+	// FillAlpha or BlendMode - a soft mask set inside a q/Q pair does not
+	// leak out past the matching Q.
+	SoftMask *SoftMask
+
 	// Clips holds every currently-active clipping path, most recently
 	// intersected last, together with the fill rule each was intersected
 	// under. The *effective* clip region is the intersection of all of

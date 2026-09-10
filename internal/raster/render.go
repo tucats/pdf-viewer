@@ -21,18 +21,18 @@ func Render(list graphics.DisplayList, width, height int, background graphics.Co
 			// Phase 3: an image ("Do" or an inline "BI" image) paints
 			// per-pixel sampled color/alpha rather than a single solid
 			// Color - see DrawOp's doc comment and Canvas.DrawImage.
-			canvas.DrawImage(op.Path, op.ImageToDevice, op.Image, op.Repeat, op.Alpha, op.BlendMode, op.Clips)
+			canvas.DrawImage(op.Path, op.ImageToDevice, op.Image, op.Repeat, op.Alpha, op.BlendMode, op.SoftMask, op.Clips)
 		case op.Shading != nil && op.Path != nil:
 			// Phase 5: a shape filled or stroked with a shading pattern -
 			// see DrawOp.Shading's doc comment.
-			canvas.FillShading(op.Path, op.Rule, op.Shading, op.Alpha, op.BlendMode, op.Clips)
+			canvas.FillShading(op.Path, op.Rule, op.Shading, op.Alpha, op.BlendMode, op.SoftMask, op.Clips)
 		case op.Shading != nil:
 			// Phase 5: the "sh" operator - no specific shape, paint the
 			// whole (clip-restricted) canvas - see DrawOp.Shading's doc
 			// comment on why Path is nil here specifically.
-			canvas.PaintShading(op.Shading, op.Alpha, op.BlendMode, op.Clips)
+			canvas.PaintShading(op.Shading, op.Alpha, op.BlendMode, op.SoftMask, op.Clips)
 		default:
-			canvas.Fill(op.Path, op.Rule, op.Color, op.Alpha, op.BlendMode, op.Clips)
+			canvas.Fill(op.Path, op.Rule, op.Color, op.Alpha, op.BlendMode, op.SoftMask, op.Clips)
 		}
 	}
 	return canvas.Image()

@@ -25,7 +25,7 @@ func TestFillShadingPaintsGradientAcrossShape(t *testing.T) {
 	path := rectPath(0, 0, 10, 1)
 	sh := linearGray(graphics.Identity(), [2]bool{false, false})
 
-	c.FillShading(path, graphics.NonZero, sh, 1, graphics.BlendNormal, nil)
+	c.FillShading(path, graphics.NonZero, sh, 1, graphics.BlendNormal, nil, nil)
 
 	// Pixel 0 (center x=0.5) should be near-black (t~0.05); pixel 9
 	// (center x=9.5) should be near-white (t~0.95).
@@ -47,7 +47,7 @@ func TestFillShadingUncoveredRegionPaintsNothing(t *testing.T) {
 	path := rectPath(0, 0, 20, 1)
 	sh := linearGray(graphics.Identity(), [2]bool{false, false}) // gradient only spans x in [0,10]
 
-	c.FillShading(path, graphics.NonZero, sh, 1, graphics.BlendNormal, nil)
+	c.FillShading(path, graphics.NonZero, sh, 1, graphics.BlendNormal, nil, nil)
 
 	// Beyond the shading's own geometry (x>10), with no Extend, nothing
 	// should be painted - the background (red) must show through.
@@ -63,7 +63,7 @@ func TestFillShadingRespectsClip(t *testing.T) {
 	clip := rectPath(0, 0, 5, 10)
 	sh := linearGray(graphics.Scale(1, 1), [2]bool{true, true})
 
-	c.FillShading(full, graphics.NonZero, sh, 1, graphics.BlendNormal, []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}})
+	c.FillShading(full, graphics.NonZero, sh, 1, graphics.BlendNormal, nil, []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}})
 
 	// Outside the clip (x=8), still untouched white background even
 	// though the shading itself (extended) would otherwise cover it.
@@ -81,7 +81,7 @@ func TestPaintShadingCoversWholeCanvasWithoutAPath(t *testing.T) {
 	c := NewCanvas(10, 1, graphics.Color{R: 1, G: 0, B: 0})
 	sh := linearGray(graphics.Identity(), [2]bool{true, true})
 
-	c.PaintShading(sh, 1, graphics.BlendNormal, nil)
+	c.PaintShading(sh, 1, graphics.BlendNormal, nil, nil)
 
 	// Every pixel across the whole 10-wide canvas should now be some
 	// shade of gray (background red fully replaced), including pixel 9
@@ -97,7 +97,7 @@ func TestPaintShadingRespectsClip(t *testing.T) {
 	clip := rectPath(0, 0, 5, 1)
 	sh := linearGray(graphics.Identity(), [2]bool{true, true})
 
-	c.PaintShading(sh, 1, graphics.BlendNormal, []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}})
+	c.PaintShading(sh, 1, graphics.BlendNormal, nil, []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}})
 
 	// Outside the clip: still the untouched red background.
 	r, g, b, _ := c.Image().At(8, 0).RGBA()

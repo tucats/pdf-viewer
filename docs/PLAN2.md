@@ -371,6 +371,65 @@ Both are low real-world impact for a general-purpose viewer:
 boxes and renders accordingly; a PDF 2.0 corpus renders correctly or
 each specific failure is triaged into its own follow-up item.
 
+## Phase 17: ExtGState-level soft masks
+
+**Status: In progress (17a done).**
+
+Promoted out of the Backlog section below on concrete request. This is a
+**visible defect** gap, narrower in practice than per-image `/SMask`
+(already done - see the capability matrix's Images section) but not
+rare: a soft mask is the standard way a PDF producer fades an image or a
+group of shapes to transparency using a gradient or another image as the
+fade shape, rather than a single flat "ca" percentage - vignettes,
+drop shadows, and gradient-faded logos or watermarks are the most common
+real-world uses. Today `gs` silently ignores a `/SMask` entry entirely
+(anything other than `/SMask /None` produces a diagnostic note and no
+visible effect at all), so affected content renders fully opaque instead
+of faded.
+
+- **17a: `graphics.SoftMask` plumbing.** Add the `graphics.SoftMask` type
+    (a resolved, per-pixel mask - see `internal/graphics/softmask.go`),
+    `graphics.State.SoftMask`/`graphics.DrawOp.SoftMask` fields, and wire
+    `internal/raster.Canvas` (`Fill`/`DrawImage`/`FillShading`/
+    `PaintShading`, and `RenderTransparent`'s tiling-pattern compositor)
+    to sample and multiply one in wherever a `DrawOp` carries one. No PDF
+    content can set a real `SoftMask` yet - `internal/content` still
+    never sets `graphics.State.SoftMask` to anything but nil - so this
+    sub-phase changes no rendered output on its own; it is the tested
+    foundation 17b builds the actual `/SMask` interpretation on top of.
+- **17b: Build a `SoftMask` from an ExtGState's `/SMask` dictionary.**
+    `internal/content`'s `applyExtGState` (`gs`) resolves a real `/SMask`
+    dictionary (`/S` `/Luminosity` or `/Alpha`, `/G` a transparency-group
+    Form XObject, optional `/BC` backdrop for a luminosity mask) by
+    rendering `/G`'s content offscreen (`internal/raster.RenderTransparent`,
+    reusing the same machinery tiling patterns already use for an
+    alpha-aware offscreen buffer) and reducing the result to a single
+    per-pixel value, exactly like the specification describes. Every
+    `DrawOp`-constructing site in `internal/content` (fills, strokes,
+    images, text, shadings) passes the active `graphics.State.SoftMask`
+    through, so a soft mask set by `gs` attenuates everything painted
+    afterward until `/SMask /None` or a `Q` restores an earlier state.
+- **17c: Fixture corpus, end-to-end rendering tests, and capability
+    matrix update.**
+
+**Scope cuts** (each mirrors an existing, already-documented limitation
+elsewhere in this project, rather than being a new kind of gap):
+`/TR` (the mask's own transfer function) is not applied, matching this
+project's existing PDF-function support being invoked only where a
+prior phase already needed it; true isolated/knockout compositing for
+the mask's own transparency group is not implemented, matching Form
+XObjects generally (see the "Transparency groups" backlog item below,
+unchanged by this phase); `/BC` (explicit backdrop color) supports only
+DeviceGray/DeviceRGB-shaped numeric arrays, matching `internal/content`'s
+existing `colorFromComponents` fallback used elsewhere for a bare
+numeric color with no named color space to resolve it against.
+
+**Exit criteria:** a fixture with a luminosity soft mask (a simple
+gradient or half-and-half group) fading a filled shape renders the
+expected partial transparency; `/SMask /None` and `q`/`Q` correctly
+clear/restore an active mask; `docs/capability-matrix.md`'s Soft masks
+row is Done.
+
 ## Backlog: revisit only on concrete demand
 
 These are real, known gaps - already documented in
@@ -404,9 +463,6 @@ frequency estimate.
     reasonable without group isolation except in specific overlapping-
     transparency compositions; revisit if real-world pages show visibly
     wrong compositing.
-- **ExtGState-level soft masks** (`/SMask` deriving a mask from a whole
-    transparency group) - narrower usage than per-image `/SMask`
-    (already done).
 - **Type 3 fonts** (glyphs as content streams) - rare in practice.
 - **LZWDecode `/EarlyChange 0`** - rare; the standard library offers no
     direct way to select this variant, so support would require a
@@ -2091,3 +2147,78 @@ in order, not rewritten later except to fix mistakes.
 - **What's carried forward.** Phase 16 is complete (16a-16c). The
     pre-existing, unrelated inline-image parsing crash noted in Phase
     15b's own entry above remains open and is still out of scope here.
+
+### Phase 17a: graphics.SoftMask plumbing — done (2026-09-10)
+
+- **`internal/graphics/softmask.go` (new file).** Added `SoftMask`: a
+    resolved, per-pixel soft mask (`Width`/`Height`, a single `Values
+    []byte` channel in the same 0-255 scale every other color channel in
+    this package uses, and `DeviceToMask Matrix` - deliberately stored
+    already inverted, i.e. device-space-to-mask-space, unlike
+    `DrawOp.ImageToDevice`'s opposite direction, so `internal/raster`'s
+    per-pixel sampling loop never has to invert a matrix itself the way
+    `Canvas.DrawImage` does once per `DrawOp`). `At(deviceX, deviceY)`
+    samples nearest-neighbor and returns 0 - not 1 - for any point
+    outside the mask's own pixel grid: the specification's soft-mask
+    group is composited over a fully opaque *black* backdrop (11.6.5.2),
+    so "the group never painted here" means fully masked out, not
+    unmasked - documented at length on `At` itself as an easy mistake to
+    get backward and have it go unnoticed (most hand-built test masks
+    paint over their whole area, so the bug would only show up as a
+    silently unmasked page edge on a mask that does not cover the full
+    canvas). Covered by
+    [softmask_test.go](../internal/graphics/softmask_test.go): each
+    quadrant of a small hand-built mask, out-of-grid points, an explicit
+    scale+translate `DeviceToMask` (not just identity), and the nil-
+    receiver/zero-size degenerate cases.
+- **`graphics.State.SoftMask`/`graphics.DrawOp.SoftMask` (new fields).**
+    Added to [state.go](../internal/graphics/state.go) and
+    [displaylist.go](../internal/graphics/displaylist.go), mirroring
+    `FillShading`/`BlendMode`'s existing "nil/zero value means absent,
+    behaves exactly like before this feature existed" convention: a
+    `State`'s `SoftMask` is saved/restored by `q`/`Q` automatically
+    (a plain field, no special-cased `Clone` logic needed), and a
+    `DrawOp`'s `SoftMask` needs no explicit zero-value initialization at
+    any existing construction site, unlike `Alpha`.
+- **`internal/raster`: `Canvas` and `RenderTransparent` consume a
+    `*graphics.SoftMask`.** `Fill`/`DrawImage`/`FillShading`/
+    `PaintShading`/the shared `paint` core (`canvas.go`) all gained a
+    `mask *graphics.SoftMask` parameter, sampled once per covered pixel
+    at that pixel's own center (`mask.At(col+0.5, row+0.5)`, the same
+    point convention `DrawImage` already samples an image at) and
+    multiplied into the pixel's alpha alongside shape coverage and
+    `constantAlpha` - a nil mask (the overwhelmingly common case, and
+    every pre-existing call site) reproduces prior behavior exactly.
+    `render.go`'s `Render` passes each `DrawOp`'s own `SoftMask` through.
+    `tile.go`'s `compositeOp` (the tiling-pattern offscreen compositor)
+    gained the identical one-line multiply, so a soft mask active inside
+    a tiling pattern cell's own content is honored too, unlike blend
+    modes (deliberately not honored there - see that file's pre-existing
+    doc comment) - a soft mask costs one extra multiply per pixel
+    either way, so there was no reason to special-case it out the way
+    blend-mode support was.
+- **Tests.** Every pre-existing `Canvas` method call site across
+    `canvas_test.go`, `canvas_blend_test.go`, and `canvas_shading_test.go`
+    was updated to pass `nil` for the new `mask` parameter (reproducing
+    unchanged behavior, verified by the existing suite still passing
+    unmodified otherwise). New
+    [canvas_softmask_test.go](../internal/raster/canvas_softmask_test.go):
+    a half-masked `Fill` (left half painted, right half untouched),
+    confirming `nil` is not silently equivalent to "mask value 1
+    everywhere" (a regression test for the exact mistake `SoftMask.At`'s
+    own doc comment warns about), a soft mask combined with a constant
+    `ca`/`CA` alpha (confirming the two multiply together rather than
+    one overriding the other), and `DrawImage` honoring a mask too (not
+    just `Fill`, guarding against a future refactor bypassing the shared
+    `paint` core for one of the two).
+- **What's carried forward.** No PDF content can produce a real
+    `graphics.SoftMask` yet - `internal/content`'s `applyExtGState`
+    still only records a diagnostic note and otherwise ignores a real
+    `/SMask` dictionary, exactly as before this sub-phase. This sub-phase
+    changes no rendered output for any existing fixture (confirmed: the
+    full test suite, including `TestRenderMatchesReferenceImages`,
+    passes unmodified). `docs/capability-matrix.md`'s Soft masks row is
+    intentionally left "Not started" until 17b makes the feature
+    actually reachable from a content stream. Building and interpreting
+    a real `/SMask` dictionary (`/S`, `/G`, `/BC`) into a `SoftMask` is
+    17b.

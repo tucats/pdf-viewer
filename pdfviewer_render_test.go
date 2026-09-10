@@ -112,6 +112,28 @@ func TestRenderStrokedLine(t *testing.T) {
 	assertPixel(t, img, 5, 5, 255, 255, 255) // far corner, off the line: white
 }
 
+// TestRenderStrokeJoins exercises Phase 15a's real miter/bevel join
+// geometry (internal/graphics's addJoin) through the full content-stream
+// pipeline ("j" operator -> graphics.State.LineJoin -> StrokeToFill),
+// not just at the internal/graphics unit-test level - see
+// tools/genfixtures's buildStrokeJoins doc comment for exactly how this
+// fixture's two corners (one miter, one bevel, otherwise identical) were
+// derived, and internal/graphics/stroke_test.go's
+// TestStrokeToFillMiterJoinReachesComputedTip for the same hand-derived
+// geometry checked directly against StrokeToFill's output.
+//
+// The one PDF-space point that distinguishes the two - (40,44), safely
+// inside the miter join's extra "spike" triangle but safely outside
+// where a bevel join would have stopped - becomes device pixel (40,56)
+// after this 100x100 page's standard y-flip (device_y = 100 - pdf_y);
+// its mirror image 40 points to the right, (80,56), lands in the
+// corresponding spot on the bevel-joined copy.
+func TestRenderStrokeJoins(t *testing.T) {
+	img := renderFixture(t, "stroke-joins.pdf")
+	assertPixel(t, img, 40, 56, 0, 0, 255)     // inside the miter join's spike: blue
+	assertPixel(t, img, 80, 56, 255, 255, 255) // same relative spot, bevel join: no spike, white
+}
+
 // TestRenderClippedRect exercises "W"/"n" clipping: content clips to a
 // 40x40 square centered on the page ([30,70] both axes, symmetric so
 // the y-flip does not move it), then fills the *entire* page green - only
@@ -220,6 +242,7 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"minimal-blank-page.pdf",
 		"filled-rect.pdf",
 		"stroked-line.pdf",
+		"stroke-joins.pdf",
 		"clipped-rect.pdf",
 		"transformed-rect.pdf",
 		"image-rgb.pdf",

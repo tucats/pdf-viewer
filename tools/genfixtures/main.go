@@ -88,6 +88,7 @@ func main() {
 		{"object-stream.pdf", buildObjectStream()},
 		{"filled-rect.pdf", buildFilledRect()},
 		{"stroked-line.pdf", buildStrokedLine()},
+		{"stroke-joins.pdf", buildStrokeJoins()},
 		{"clipped-rect.pdf", buildClippedRect()},
 		{"transformed-rect.pdf", buildTransformedRect()},
 		{"flate-content-rect.pdf", buildFlateContentRect()},
@@ -661,6 +662,32 @@ func buildFilledRect() []byte {
 // buildFilledRect's fill-only content.
 func buildStrokedLine() []byte {
 	return buildSinglePageContent(100, 100, "0 0 1 RG\n5 w\n10 10 m\n90 90 l\nS\n")
+}
+
+// buildStrokeJoins returns a single 100x100-point page whose content
+// stream strokes the same 120-degree, two-segment corner shape twice
+// side by side, wide (16-point line width, so the join geometry is
+// clearly visible at this page's resolution) - once with an explicit
+// miter join ("0 j", the default per the specification, but set
+// explicitly here for clarity) and once, 40 points to the right, with a
+// bevel join ("2 j") - exercising Phase 15a's real join geometry
+// (internal/graphics's addJoin) end to end: content-stream "j" operator
+// parsing, State.LineJoin, and StrokeToFill together, not just the
+// internal/graphics-level unit tests addJoin and miterTip already have.
+//
+// Both corners turn the same way (from heading in the +X direction to
+// heading 120 degrees from that), the same angle
+// internal/graphics/stroke_test.go's a120CornerPath uses, chosen there
+// because it produces a clean, exactly-computable miter ratio of 2 half-
+// widths (well within the default miterLimit of 10, so no /M operator is
+// needed here) - see that file's TestStrokeToFillMiterJoinReachesComputedTip
+// for the hand-derived geometry this fixture's own render test checks
+// against.
+func buildStrokeJoins() []byte {
+	return buildSinglePageContent(100, 100,
+		"0 0 1 RG\n16 w\n"+
+			"0 j\n10 50 m\n30 50 l\n20 67.3205 l\nS\n"+
+			"2 j\n50 50 m\n70 50 l\n60 67.3205 l\nS\n")
 }
 
 // buildClippedRect returns a single 100x100-point page whose content

@@ -316,7 +316,7 @@ feature documented the same way CCITT/JBIG2's own gaps are.
 
 ## Phase 15: Stroke join geometry and exact clip intersection
 
-**Status: Not started.**
+**Status: 15a done.**
 
 Both are **cosmetic/fidelity** gaps only - no page fails or shows wrong
 content, but two specific things are approximated: every stroke join
@@ -1822,3 +1822,77 @@ in order, not rewritten later except to fix mistakes.
     phase's sub-entries remain: `/Background` and `/BBox` are never
     honored on any shading dictionary, and mesh patches use a fixed
     (rather than area-adaptive) subdivision density.
+
+### Phase 15a: Miter/bevel stroke joins — done (2026-09-10)
+
+- **`internal/graphics/stroke.go`.** `StrokeToFill` now actually uses the
+    `joinStyle`/`miterLimit` parameters it already accepted (previously
+    ignored, with every join drawn as a round join regardless). The new
+    `addJoin` replaces the old unconditional `addCircle` call at every
+    interior and closing vertex:
+    - **The geometric insight that keeps this simple.** Every stroke
+        segment is already its own rectangle (`addSegmentRect`), reaching
+        exactly up to each vertex on both long edges. Where the path
+        turns, those two rectangles' edges pull apart on the side the path
+        turns *toward* (the outer/convex side) - that gap is the only
+        thing a join needs to fill. On the opposite (inner/concave) side
+        they overlap instead, which is harmless under the `NonZero` fill
+        rule `StrokeToFill`'s whole output is filled with - so no
+        "which side" ambiguity needs resolving there at all, and a join
+        never needs to be drawn twice.
+    - **`RoundJoin`** is unchanged (`addCircle`, unconditionally correct -
+        a full circle needs no "which side" reasoning, which is also why
+        it is the only join style that stays gap-free at an exact
+        180-degree path reversal; see `joinEpsilon`'s doc comment).
+    - **`MiterJoin`** computes the exact point where the two segments'
+        outer edges, extended, would meet (`miterTip`), and falls back to
+        `BevelJoin`'s plain triangle once that point would land past
+        `miterLimit` half-widths from the vertex, per the specification.
+        The formula (`(n0+n1)/(1+cos(theta))`, where n0/n1 are each
+        segment's own perpendicular offset and theta the angle between
+        them) needs no separate normalization step - see `miterTip`'s doc
+        comment for the derivation via similar triangles.
+    - **`BevelJoin`** is the plain triangle (vertex plus both segments'
+        outer corners) that `MiterJoin` also falls back to.
+    - Two segments meeting at (within floating-point tolerance) the same
+        or exactly opposite direction skip join geometry entirely
+        (`joinEpsilon`): the same-direction case has no gap to fill, and
+        the opposite-direction (path folding straight back on itself)
+        case is left as a documented, narrow simplification specific to
+        miter/bevel - `RoundJoin` already handles it correctly.
+- **Tests.** `internal/graphics/stroke_test.go` gained
+    `a120CornerPath` (a two-segment corner whose turn angle makes the
+    miter ratio come out to exactly 2 half-widths, a clean number to
+    check) and four new tests built on it:
+    `TestStrokeToFillMiterJoinReachesComputedTip` (the miter join's exact
+    quadrilateral, point for point, against `miterTip`'s own formula),
+    `TestStrokeToFillMiterPastLimitFallsBackToBevel` (the same corner,
+    `miterLimit` set below its ratio, produces the plain bevel triangle
+    instead), `TestStrokeToFillBevelJoinNeverReachesTip` (`BevelJoin`
+    never reaches the tip even when `miterLimit` would easily allow a
+    miter join at the same corner), and
+    `TestStrokeToFillCollinearSegmentsAddNoJoin`. The pre-existing closed-
+    triangle test's comment was corrected (it uses `MiterJoin`, not the
+    round joins its comment used to describe, since every join style used
+    to render identically before this phase).
+- **Fixture and end-to-end render test.** `tools/genfixtures`'s
+    `buildStrokeJoins` (`stroke-joins.pdf`) strokes the same 120-degree
+    corner `a120CornerPath` uses twice, wide (16-point line width) and
+    side by side - once with an explicit miter join, once with a bevel
+    join - so the difference is visible at this page's resolution
+    (confirmed visually: the miter side shows a clear spike, the bevel
+    side a flat corner). `TestRenderStrokeJoins`
+    (`pdfviewer_render_test.go`) checks one PDF-space point hand-derived
+    to sit inside the miter join's extra spike but outside where a bevel
+    join would have stopped - confirmed against the actual renderer
+    output before being written down, not just hand-arithmetic - and its
+    mirror point on the bevel copy, which must stay background. The
+    fixture was added to `TestRenderMatchesReferenceImages`'s golden-image
+    list (`testdata/renderrefs/stroke-joins.png`) and to
+    `testdata/fixtures/FIXTURES.md`. Full test suite, `go vet`, and `go
+    build` all pass clean; no other checked-in fixture or golden image
+    changed, confirming this phase's join-geometry change is
+    behavior-preserving everywhere it isn't specifically exercised.
+- **What's carried forward.** 15b (exact clip intersection, replacing
+    coverage-multiplication) is unimplemented, as scoped - see this
+    document's Phase 15b bullet.

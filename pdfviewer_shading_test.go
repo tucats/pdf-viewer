@@ -87,6 +87,39 @@ func TestRenderFreeFormTriangleMeshShading(t *testing.T) {
 	assertPixel(t, img, 98, 1, 255, 255, 255) // top-right: outside the triangle, untouched background
 }
 
+// TestRenderLatticeFormTriangleMeshShading exercises "sh" painting a
+// Type 5 (lattice-form Gouraud-shaded triangle mesh) shading: a 2x2 grid
+// covering the whole page, red/green/blue/yellow at its four corners -
+// see tools/genfixtures's buildLatticeFormTriangleMeshShading doc comment
+// for the exact geometry. Unlike the Type 4 fixture, this one covers the
+// entire page, so there is no "outside the mesh" background check here.
+func TestRenderLatticeFormTriangleMeshShading(t *testing.T) {
+	img := renderFixture(t, "mesh-shading-type5.pdf")
+	// See TestRenderFreeFormTriangleMeshShading's comment on why a
+	// "dominant channel" check, not an exact-color assertPixel, is used
+	// this close to a vertex under linear Gouraud interpolation.
+	dominant := func(x, y int, wantChannel int, other1, other2 int) {
+		t.Helper()
+		vals := []int{0, 0, 0}
+		vals[0], vals[1], vals[2], _ = rgba8(img, x, y)
+		if vals[wantChannel] < 200 || vals[other1] > 60 || vals[other2] > 60 {
+			t.Errorf("pixel (%d,%d) = (%d,%d,%d), want channel %d clearly dominant", x, y, vals[0], vals[1], vals[2], wantChannel)
+		}
+	}
+	dominant(1, 98, 0, 1, 2)  // near red, PDF-space (0,0): bottom-left
+	dominant(98, 98, 1, 0, 2) // near green, PDF-space (100,0): bottom-right
+	dominant(1, 1, 2, 0, 1)   // near blue, PDF-space (0,100): top-left
+
+	// Near yellow, PDF-space (100,100), top-right: both R and G should be
+	// clearly present and B clearly absent - yellow needs its own check
+	// since it is not a single dominant channel the way the other three
+	// corners are.
+	r, g, b, _ := rgba8(img, 98, 1)
+	if r < 200 || g < 200 || b > 60 {
+		t.Errorf("pixel (98,1) = (%d,%d,%d), want near-yellow (high R, high G, low B)", r, g, b)
+	}
+}
+
 // TestRenderShadingPatternFill exercises a shading pattern selected via
 // "cs Pattern"/"scn" used to fill an 80x80 square: the gradient (black
 // to white, spanning the square's own x extent) must be visible inside

@@ -355,8 +355,17 @@ func (in *interpreter) buildMeshShading(dict syntax.Dictionary, stream syntax.St
 		if err != nil {
 			return nil, err
 		}
+	case 5:
+		verticesPerRow, err := requiredIntEntry(in.resolver, dict, "VerticesPerRow")
+		if err != nil {
+			return nil, err
+		}
+		if verticesPerRow < 2 {
+			return nil, pdferror.Malformedf("mesh shading /VerticesPerRow must be at least 2, got %d", verticesPerRow)
+		}
+		triangles = decodeType5Mesh(br, params, verticesPerRow)
 	default:
-		return nil, pdferror.Unsupportedf("mesh shading type %d (lattice-form triangle mesh and Coons/tensor patch mesh shadings are not yet supported)", shadingType)
+		return nil, pdferror.Unsupportedf("mesh shading type %d (Coons/tensor patch mesh shadings are not yet supported)", shadingType)
 	}
 
 	return &graphics.Shading{
@@ -424,4 +433,32 @@ func decodeType4Mesh(br *bitReader, p meshParams, bitsPerFlag int) ([]graphics.M
 		triangles = append(triangles, meshTriangleFrom(verts[idx[i]], verts[idx[i+1]], verts[idx[i+2]]))
 	}
 	return triangles, nil
+}
+
+// decodeType5Mesh implements 8.7.4.5.6 (lattice-form Gouraud-shaded
+// triangle mesh): unlike Type 4, there are no edge flags at all - every
+// vertex is simply a (coordinate, color) pair, and the stream's implicit
+// structure is a regular grid verticesPerRow wide, read one row at a
+// time. Triangles are implied purely by grid adjacency (each 2x2 block of
+// cells becomes two triangles - see latticeToTriangles) rather than
+// anything the stream itself encodes. Vertex records are *not*
+// byte-aligned here (see this file's doc comment) - no br.align() call,
+// unlike decodeType4Mesh.
+func decodeType5Mesh(br *bitReader, p meshParams, verticesPerRow int) []graphics.MeshTriangle {
+	var rows [][]meshVertex
+	var row []meshVertex
+	for br.hasData() {
+		coord := readCoordinate(br, p.bitsPerCoordinate, p.decode)
+		raw := readColor(br, p.bitsPerComponent, p.decode, p.numComps)
+		row = append(row, meshVertex{X: coord.X, Y: coord.Y, C: meshColor(raw, p.fn, p.cs)})
+		if len(row) == verticesPerRow {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	// A trailing partial row (fewer than verticesPerRow vertices) is
+	// simply never appended to rows at all, so it is silently dropped -
+	// the same "tolerate truncated trailing data" policy
+	// decodeType4Mesh's own final-triangle handling uses.
+	return latticeToTriangles(rows)
 }

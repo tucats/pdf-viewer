@@ -116,6 +116,7 @@ func main() {
 		{"shading-pattern-fill.pdf", buildShadingPatternFill()},
 		{"function-based-shading.pdf", buildFunctionBasedShading()},
 		{"mesh-shading-type4.pdf", buildFreeFormTriangleMeshShading()},
+		{"mesh-shading-type5.pdf", buildLatticeFormTriangleMeshShading()},
 		{"form-xobject.pdf", buildFormXObject()},
 		{"annotation-appearance.pdf", buildAnnotationAppearance()},
 		{"annotation-hidden.pdf", buildAnnotationHidden()},
@@ -1279,6 +1280,59 @@ func buildFreeFormTriangleMeshShading() []byte {
 
 	shDict := fmt.Sprintf("<< /ShadingType 4 /ColorSpace /DeviceRGB "+
 		"/BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 "+
+		"/Decode [0 100 0 100 0 1 0 1 0 1] /Length %d >>", len(w.data))
+	b.addObject(5, 0, shDict, w.data)
+
+	return b.finish(1)
+}
+
+// buildLatticeFormTriangleMeshShading returns a single 100x100-point page
+// whose content stream paints a named lattice-form Gouraud-shaded
+// triangle mesh (/ShadingType 5) directly via "sh": a 2x2 grid of
+// vertices (/VerticesPerRow 2) covering the *entire* page - red at
+// PDF-space (0,0), green at (100,0), blue at (0,100), yellow at
+// (100,100) - unlike buildFreeFormTriangleMeshShading's Type 4 fixture,
+// which deliberately leaves half the page unpainted, this one is a
+// complementary check that a lattice mesh's implicit (flag-less) row/
+// column adjacency triangulates and covers a full quad correctly. There
+// are no edge flags in a Type 5 stream at all - each vertex is simply
+// (x, y, r, g, b) - and, unlike Type 4, vertices are packed with no
+// per-vertex byte padding (see internal/content/meshshading.go's own doc
+// comment on why the two types differ here; this fixture's 5 fields x 8
+// bits = 40 bits per vertex happens to land on a byte boundary anyway, so
+// it does not itself exercise that distinction - internal/content's own
+// unit tests do, with a deliberately non-byte-friendly bit width).
+//
+// As with the Type 4 fixture, remember Page.Render's PDF-to-device
+// y-axis flip when reasoning about expected pixel colors: PDF-space
+// (0,0) [red] ends up at the device image's bottom-left, (100,0) [green]
+// at bottom-right, (0,100) [blue] at top-left, and (100,100) [yellow] at
+// top-right.
+func buildLatticeFormTriangleMeshShading() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Shading << /Sh0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n0 0 100 100 re\nW\nn\n/Sh0 sh\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	w := &meshBitWriter{}
+	writeLatticeVertex := func(x, y, r, g, bl byte) {
+		w.write(uint32(x), 8)
+		w.write(uint32(y), 8)
+		w.write(uint32(r), 8)
+		w.write(uint32(g), 8)
+		w.write(uint32(bl), 8)
+	}
+	writeLatticeVertex(0, 0, 255, 0, 0)       // row 0: red at (0,0)
+	writeLatticeVertex(255, 0, 0, 255, 0)     // row 0: green at (100,0)
+	writeLatticeVertex(0, 255, 0, 0, 255)     // row 1: blue at (0,100)
+	writeLatticeVertex(255, 255, 255, 255, 0) // row 1: yellow at (100,100)
+
+	shDict := fmt.Sprintf("<< /ShadingType 5 /ColorSpace /DeviceRGB "+
+		"/BitsPerCoordinate 8 /BitsPerComponent 8 /VerticesPerRow 2 "+
 		"/Decode [0 100 0 100 0 1 0 1 0 1] /Length %d >>", len(w.data))
 	b.addObject(5, 0, shDict, w.data)
 

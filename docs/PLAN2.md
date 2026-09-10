@@ -261,7 +261,7 @@ checkbox).
 
 ## Phase 13: Mesh and function-based shadings (Types 1, 4-7)
 
-**Status: 13a and 13b done; 13c-13e (Types 5-7) in progress.**
+**Status: 13a-13c done; 13d-13e (Types 6-7, Coons/tensor patch meshes) in progress.**
 
 Axial and radial shadings (Types 2-3, the large majority of real-world
 gradients) are done. Function-based (Type 1) and mesh shadings (Types
@@ -1608,3 +1608,52 @@ in order, not rewritten later except to fix mistakes.
     `ErrUnsupported`, tracked as Phase 13c-13e. `latticeToTriangles`
     already exists ready for Type 5 to call directly and for Types 6/7 to
     call after subdividing a patch's bicubic surface into a fine grid.
+
+### Phase 13c: Type 5 (lattice-form triangle mesh) — done (2026-09-10)
+
+- **`decodeType5Mesh`** (`internal/content/meshshading.go`) implements
+    8.7.4.5.6: unlike Type 4, a Type 5 stream has no edge flags at all -
+    every vertex is simply `(x, y, r, g, b...)`, and the mesh's structure
+    is an implicit `/VerticesPerRow`-wide grid read one row at a time,
+    triangulated purely by adjacency via `latticeToTriangles` (already
+    built in 13b, unused until now). The other half of 13b's "why Type 4
+    first" reasoning pays off here: this sub-phase added one ~15-line
+    function, no new shared infrastructure at all.
+- **The one genuinely new risk.** Type 5 vertices are packed with *no*
+    per-vertex byte alignment, unlike Type 4's - confirmed against pdf.js
+    the same way 13b's entry describes. `decodeType5Mesh` deliberately has
+    no `br.align()` call. `TestDecodeType5MeshNoByteAlignmentBetweenVertices`
+    (a bit width that does not divide evenly into a byte, so any
+    accidentally-inserted alignment would desync every field after the
+    first vertex) is this sub-phase's regression guard for that specific
+    fact - verified to actually fail if `align()` is added back in, not
+    just written to look like it would.
+- **`internal/content/shading.go` wiring.** `buildMeshShading`'s type
+    switch gained a `case 5` parsing `/VerticesPerRow` (required, >= 2)
+    before calling `decodeType5Mesh`; `TestDoShadingUnsupportedTypeIsError`
+    moved from Type 5 to Type 6 (still genuinely unsupported).
+- **Tests.** `internal/content/meshshading_test.go` gained a 2x2-grid
+    round trip, a truncated-trailing-row case (a partial final row is
+    dropped, not fabricated - the same tolerance policy Type 4's
+    truncated-triangle handling uses), and the byte-alignment regression
+    test above. `tools/genfixtures`'s `buildLatticeFormTriangleMeshShading`
+    builds `mesh-shading-type5.pdf`: a 2x2 grid covering the *entire*
+    page (red/green/blue/yellow at its four corners), a deliberate
+    complement to 13b's Type 4 fixture, which instead leaves half its
+    page unpainted - together the two fixtures cover both "a mesh that
+    covers everything" and "a mesh that leaves part of the clip
+    unpainted". `pdfviewer_shading_test.go`'s
+    `TestRenderLatticeFormTriangleMeshShading` checks dominant color near
+    each of the four corners (yellow needs its own two-channel check,
+    unlike the other three single-channel-dominant corners), and the
+    fixture was added to `TestRenderMatchesReferenceImages`'s golden-image
+    list. Full test suite, `go build`, `go vet`, and the race detector all
+    pass clean; a 15+-second `FuzzOpenAndRender` run (picking up the new
+    fixture automatically) found no panic or hang.
+- **What's carried forward.** Types 6 (Coons patch mesh) and 7
+    (tensor-product patch mesh) remain `ErrUnsupported`, tracked as Phase
+    13d-13e - substantially more work than 13b/13c, since a patch's
+    bicubic Bezier surface has to be evaluated and subdivided into a fine
+    triangle grid before `latticeToTriangles` can take over, rather than
+    reading the mesh's final triangle shape directly off the stream the
+    way Types 4 and 5 do.

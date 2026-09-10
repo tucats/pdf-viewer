@@ -299,3 +299,89 @@ func TestDecodeType4MeshTruncatedTrailingVerticesAreDropped(t *testing.T) {
 		t.Fatalf("len(triangles) = %d, want 0 (an incomplete trailing triangle must be dropped, not fabricated)", len(triangles))
 	}
 }
+
+// writeType5Vertex packs one Type 5 vertex record (x, y, r, g, b - all 8
+// bits wide) with *no* trailing align() call, unlike Type 4's vertices -
+// Type 5 packs continuously with no per-vertex byte padding at all (see
+// this file's own doc comment).
+func writeType5Vertex(w *meshBitWriter, x, y, r, g, b byte) {
+	w.write(uint32(x), 8)
+	w.write(uint32(y), 8)
+	w.write(uint32(r), 8)
+	w.write(uint32(g), 8)
+	w.write(uint32(b), 8)
+}
+
+func TestDecodeType5MeshTwoByTwoGrid(t *testing.T) {
+	w := &meshBitWriter{}
+	writeType5Vertex(w, 0, 0, 255, 0, 0)       // row 0, col 0: red
+	writeType5Vertex(w, 100, 0, 0, 255, 0)     // row 0, col 1: green
+	writeType5Vertex(w, 0, 100, 0, 0, 255)     // row 1, col 0: blue
+	writeType5Vertex(w, 100, 100, 255, 255, 0) // row 1, col 1: yellow
+	br := &bitReader{data: w.data}
+
+	triangles := decodeType5Mesh(br, type4Params(t), 2)
+	if len(triangles) != 2 {
+		t.Fatalf("len(triangles) = %d, want 2 (one 2x2 grid cell splits into 2 triangles)", len(triangles))
+	}
+}
+
+func TestDecodeType5MeshTruncatedTrailingRowIsDropped(t *testing.T) {
+	w := &meshBitWriter{}
+	writeType5Vertex(w, 0, 0, 255, 0, 0)
+	writeType5Vertex(w, 100, 0, 0, 255, 0)
+	writeType5Vertex(w, 0, 100, 0, 0, 255) // only 1 of 2 vertices for row 1
+	br := &bitReader{data: w.data}
+
+	triangles := decodeType5Mesh(br, type4Params(t), 2)
+	if len(triangles) != 0 {
+		t.Fatalf("len(triangles) = %d, want 0 (a single complete row alone has nothing to triangulate against, and the incomplete second row must be dropped)", len(triangles))
+	}
+}
+
+// TestDecodeType5MeshNoByteAlignmentBetweenVertices confirms
+// decodeType5Mesh packs vertices continuously with no per-vertex
+// byte-alignment - unlike decodeType4Mesh's br.align() call (see this
+// file's own doc comment on why the two types differ here). Using a bit
+// width that does not divide evenly into a byte (5 bits, not 8) makes any
+// accidental byte-alignment between vertices show up clearly: a wrongly
+// inserted align() would shift every field after the first vertex to a
+// different bit position, decoding it into an essentially unrelated
+// value instead of the one actually encoded there.
+func TestDecodeType5MeshNoByteAlignmentBetweenVertices(t *testing.T) {
+	w := &meshBitWriter{}
+	write5 := func(v uint32) { w.write(v, 5) }
+	// 4 vertices x (x,y,r,g,b) = 20 fields x 5 bits = 100 bits = 12.5
+	// bytes, so nothing about this stream's own length is byte-friendly
+	// either. Colors are left at 0 - this test only checks coordinates.
+	verts := [][2]uint32{{1, 2}, {3, 4}, {5, 6}, {7, 8}}
+	for _, v := range verts {
+		write5(v[0])
+		write5(v[1])
+		write5(0)
+		write5(0)
+		write5(0)
+	}
+	br := &bitReader{data: w.data}
+
+	params := meshParams{
+		bitsPerCoordinate: 5, bitsPerComponent: 5,
+		decode: []float64{0, 31, 0, 31, 0, 1, 0, 1, 0, 1}, numComps: 3, cs: deviceRGB(t),
+	}
+	triangles := decodeType5Mesh(br, params, 2)
+	if len(triangles) != 2 {
+		t.Fatalf("len(triangles) = %d, want 2", len(triangles))
+	}
+	// rows = [[v1,v2],[v3,v4]] (verticesPerRow=2), so triangles[1] is
+	// (v2, v4, v3) - see latticeToTriangles. Checking v4's coordinates
+	// specifically (the 3rd vertex decoded) is what actually exercises
+	// this test's point: a byte-alignment bug would have already thrown
+	// off every field from v2 onward.
+	const eps = 0.01
+	if diff := triangles[1].X1 - 7; diff > eps || diff < -eps {
+		t.Fatalf("4th vertex X = %v, want ~7 (a byte-alignment bug between vertices would desync this)", triangles[1].X1)
+	}
+	if diff := triangles[1].Y1 - 8; diff > eps || diff < -eps {
+		t.Fatalf("4th vertex Y = %v, want ~8", triangles[1].Y1)
+	}
+}

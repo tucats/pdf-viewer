@@ -1,6 +1,7 @@
 package acroform
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tucats/pdf-viewer/internal/syntax"
@@ -86,5 +87,24 @@ func TestGenerateAppearanceCheckbox(t *testing.T) {
 	_, _, ok := GenerateAppearance(&fakeResolver{}, widget, nil)
 	if !ok {
 		t.Fatalf("GenerateAppearance reported ok=false for a checkbox")
+	}
+}
+
+// TestGenerateAppearanceChoiceField confirms a choice field (/FT /Ch -
+// a combo or list box) is dispatched through the same text-appearance
+// path a text field uses, showing its current selection as plain text.
+func TestGenerateAppearanceChoiceField(t *testing.T) {
+	widget := syntax.Dictionary{
+		"FT":   syntax.Name("Ch"),
+		"Rect": syntax.Array{syntax.Integer(0), syntax.Integer(0), syntax.Integer(100), syntax.Integer(20)},
+		"V":    syntax.String("Selected Item"),
+		"DA":   syntax.String("/Helv 12 Tf 0 g"),
+	}
+	stream, _, ok := GenerateAppearance(&fakeResolver{}, widget, nil)
+	if !ok {
+		t.Fatalf("GenerateAppearance reported ok=false for a choice field")
+	}
+	if !strings.Contains(string(stream.Raw), "Tj") {
+		t.Fatalf("content has no Tj operator: %q", stream.Raw)
 	}
 }

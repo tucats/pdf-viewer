@@ -78,4 +78,3 @@ func TestParseDAWrongOperandTypesIgnored(t *testing.T) {
 		t.Fatalf("ParseDA = %+v, ok=%v", got, ok)
 	}
 }
-

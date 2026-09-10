@@ -236,7 +236,7 @@ fixture-testing rigor.
 
 ## Phase 12: AcroForm field appearance regeneration
 
-**Status: Not started.**
+**Status: Done.**
 
 Widget annotations with an *existing* appearance stream already render
 correctly (Phase 5). Fields filled by tooling that does not generate an
@@ -1329,3 +1329,105 @@ in order, not rewritten later except to fix mistakes.
     (essentially unseen in real-world output, per `isType1RDToken`'s doc
     comment) fails closed to `notdefGlyph` for that font rather than
     misparsing it.
+
+### Phase 12: AcroForm field appearance regeneration — done (2026-09-10)
+
+- **`internal/acroform` (new package).** Given a widget annotation
+    `internal/annotation` already reported has no usable existing
+    appearance, generates one from the field's current value:
+    - `field.go`: `Resolve`/`ResolveWithAcroForm` walk a widget's
+        `/Parent` chain merging inheritable AcroForm attributes (`/FT`,
+        `/Ff`, `/V`, `/DA`, `/Q`, 12.7.3.2), falling back to the AcroForm
+        dictionary's own `/DA`/`/DR` (12.7.3.3's documented default) -
+        this half shipped as Phase 12a.
+    - `da.go`'s `ParseDA` (Phase 12b) reuses `internal/content.Parse`
+        directly against a `/DA` string, since its grammar *is* ordinary
+        content-stream operator syntax - reading out just the `"Tf"`
+        operator's font name and size, needed to resolve `/DA`'s
+        "auto-size" `0` into a real size even when the producer's own
+        size was already nonzero.
+    - `textfield.go`/`measure.go`/`textstring.go`/`serialize.go` (Phase
+        12c) build a generated Form XObject's content stream for a text
+        field (`/FT /Tx` - single-line, with `shrinkToFitWidth`'s exact
+        (width scales linearly with size) horizontal fit correction, and
+        basic word-wrapped, height-truncated multiline) or a choice
+        field shown as plain text (`/FT /Ch`, always the field's first
+        selection for a multi-select list, never through `/Opt`):
+        `encodeForFont` converts a field's decoded `/V` into the
+        specific `/DA` font's own byte encoding (inverting
+        `internal/fonts.BuildSimpleEncoding`'s code-to-rune table) so the
+        generated `"Tj"` operand means what it says once
+        `internal/content`'s own unmodified text-showing code reads it
+        back; `nonFontOperatorsSource` splices `/DA`'s own color
+        operator through verbatim while this package re-derives its own
+        `"Tf"`. Password fields (`/Ff` bit 14) never get a generated
+        appearance at all, matching Acrobat's own refusal to paint a
+        password's plaintext.
+    - `checkbox.go` (folded into 12c, since the dispatcher needed both
+        paths anyway) generates a solid inset square for a checked
+        non-pushbutton button field (`/FT /Btn`), plus an `/MK`-driven
+        border/background - deliberately not the specific dingbat
+        character Acrobat itself would draw, and deliberately not
+        distinguishing a checkbox from a radio button visually; see that
+        file's doc comment for the full reasoning. A push button
+        (`/Ff` bit 17, icon/caption-driven rather than value-driven) and
+        a signature field (`/FT /Sig`, no generic "current value" at
+        all) are both skipped entirely, exactly as before this package
+        existed.
+    - `appearance.go`'s `GenerateAppearance` is the single entry point,
+        dispatching on `/FT` and returning a ready-to-paint Form XObject
+        stream plus the widget's own `/Rect`.
+- **`internal/annotation` refactor.** `resolveOne` is now exported as
+    `ResolveOne`, its `/Annots`-array-walking loop factored out into
+    `ResolveAnnots` (used by both `Resolve` and the root package's new
+    form-field pass), and its BBox-to-Rect mapping math factored out into
+    `FromStream` - so a generated appearance is placed on the page via
+    the *exact* same algorithm a real `/AP` stream already goes through,
+    rather than a second copy of it.
+- **`internal/model.Document` gained `AcroForm()`**, resolving the
+    document catalog's own `/AcroForm` entry (the catalog dictionary
+    itself is now kept on `Document`, which had never previously needed
+    it for anything beyond finding `/Pages`).
+- **Wiring.** `page.go`'s `renderAtScale` calls a new `formFieldDrawOps`
+    (`annotations.go`) alongside the existing `annotationDrawOps`: for
+    every widget `internal/annotation.ResolveOne` could not already
+    resolve an appearance for, it hands the widget to
+    `internal/acroform.GenerateAppearance` and, on success, paints the
+    result exactly like any other annotation appearance (reusing
+    `internal/content`'s Form XObject machinery, same as
+    `annotationDrawOps` already does).
+- **Fixtures.** `tools/genfixtures/acroform.go`'s
+    `buildFormFilledNoAppearance` builds `form-filled-no-appearance.pdf`:
+    a text field (`/V (A)`, red, size exactly matching its own field
+    height) and a checked/unchecked pair of checkboxes, all three with
+    `/V` but no `/AP` at all, reusing the same synthetic square-glyph
+    TrueType program (`text.go`'s `buildTestFontProgram`) the existing
+    text fixtures embed - so, as with those, the fixture is fully
+    reproducible from this project's own code and every expected pixel
+    is derivable by hand from this package's own documented layout
+    formulas (see that function's doc comment for the worked-out
+    geometry).
+- **Tests.** Each `internal/acroform` file has its own table-driven unit
+    tests (field-tree inheritance and cycle guarding, `/DA` parsing
+    including malformed/ambiguous cases, text-string decoding for both
+    PDFDocEncoding-as-Latin-1 and UTF-16BE, font-byte encoding and its
+    `'?'` fallback, content-stream serialization/escaping, word-wrapping,
+    checkbox state resolution, and the top-level dispatcher's every
+    "nothing to generate" case) exercising the pure logic at the Go-value
+    level, without needing a PDF file at all. `pdfviewer_acroform_test.go`
+    adds one end-to-end test per field kind rendering the new fixture and
+    asserting the exact hand-derived device-space pixels; the fixture was
+    also added to `TestRenderMatchesReferenceImages`'s golden-image list.
+    Full test suite, `go vet`, and the race detector all pass clean; a
+    45-second, 17M-execution run of `FuzzOpenAndRender` (which picks up
+    the new fixture as a seed automatically) found no panic or hang.
+- **What's carried forward.** Every deliberate scope limit is documented
+    on `internal/acroform`'s own package doc comment and cross-referenced
+    from `docs/capability-matrix.md`'s AcroForm field rendering row:
+    comb fields render as ordinary non-comb text, a choice field's
+    `/Opt` export-value table is never consulted, a multi-select list
+    box always shows only its first selection, and font auto-sizing/
+    quadding use a documented heuristic rather than Acrobat's own
+    metrics-driven algorithm. None of these are silent - each one simply
+    continues to render exactly as it did before this phase (unpainted,
+    or a slightly different but still-legible layout), never incorrectly.

@@ -473,6 +473,7 @@ var blackTable3 = [64]huffCode{
 	{2, 2}, {2, 2}, {2, 2}, {2, 2}, {2, 2}, {2, 2}, {2, 2}, {2, 2},
 	{2, 2}, {2, 2}, {2, 2}, {2, 2}, {2, 2}, {2, 2}, {2, 2}, {2, 2},
 }
+
 // ccittBits is a most-significant-bit-first bit reader over an
 // in-memory byte slice, with one non-obvious feature the rest of this
 // file leans on: look can be asked for more bits than remain in data

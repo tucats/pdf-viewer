@@ -57,13 +57,20 @@ import (
 const maxSymbolsPerDictionary = 100_000
 
 // maxSymbolPixelsPerDictionary bounds the total area of every symbol in
-// one dictionary, for the same reason a single region's size is bounded
-// (see maxGenericRegionPixels): each symbol is held as one byte per
-// pixel while it is being decoded, and a stream that declares a few
-// thousand enormous symbols would otherwise be asking for unbounded
-// memory. Sized to match the single-region limit, since a dictionary's
-// symbols are ultimately drawn onto a page no larger than that.
-const maxSymbolPixelsPerDictionary = maxGenericRegionPixels
+// one dictionary, for the same "bounded work against a hostile or merely
+// oversized input" reason maxGenericRegionPixels exists - but tighter,
+// and deliberately so.
+//
+// A symbol is a glyph, not a page: a scanned character runs to a few
+// hundred pixels, so even a large dictionary's symbols total a few
+// million. Sizing this to the whole-page limit instead would let a
+// stream of a few dozen bytes - one that declares thousands of symbols
+// and then simply ends, leaving the arithmetic decoder to invent their
+// dimensions out of its end-of-data padding - cost a second of work and
+// tens of megabytes before anything noticed. Sixteen million pixels is
+// still far above any legitimate dictionary while keeping that
+// worst case small.
+const maxSymbolPixelsPerDictionary = 16_000_000
 
 // symbolDictParams is a symbol dictionary segment's parsed header (T.88
 // 7.4.3), separated from the coded data that follows it.
@@ -180,8 +187,18 @@ func decodeSymbolDictSegment(segData []byte, inputSymbols []*jbig2Bitmap) ([]*jb
 	// outer loop starts a new class by adding a signed delta to the
 	// running height; the inner loop then reads one symbol per width
 	// delta until an OOB marks the end of the class.
+	// A height class need not contain any symbols at all, so the outer
+	// loop cannot be required to make progress on every pass - and a
+	// stream that has run out of data does not stop the decoder, it just
+	// starts inventing values (see mqDecoder.byteAt). Bounding the number
+	// of classes is what guarantees termination either way: a dictionary
+	// cannot legitimately need more classes than it has symbols, since
+	// each class beyond the first exists to hold at least one.
 	height := 0
-	for len(newSymbols) < p.numNewSym {
+	for classes := 0; len(newSymbols) < p.numNewSym; classes++ {
+		if classes > p.numNewSym {
+			return nil, pdferror.Malformedf("JBIG2Decode: symbol dictionary's height classes do not account for its %d declared symbols", p.numNewSym)
+		}
 		dh, ok, bad := dec.decodeInt(iadh)
 		if !ok || bad {
 			return nil, pdferror.Malformedf("JBIG2Decode: symbol dictionary height class delta is missing or out of range")
@@ -245,8 +262,12 @@ func decodeSymbolDictSegment(segData []byte, inputSymbols []*jbig2Bitmap) ([]*jb
 // reachable from here, sharing this dictionary's coded stream and
 // contexts.
 func decodeAggregateSymbol(dec *mqDecoder, p *symbolDictParams, textCx *textContexts, iaai arithIntCtx, inputSymbols, newSymbols []*jbig2Bitmap, width, height int) (*jbig2Bitmap, error) {
+	// The instance count is bounded for the same reason a text region
+	// segment's own declared count is (see maxTextRegionInstances): this
+	// one feeds the same loop, and a symbol assembled from more pieces
+	// than a whole page has glyphs is not a symbol.
 	instances, ok, bad := dec.decodeInt(iaai)
-	if !ok || bad || instances <= 0 {
+	if !ok || bad || instances <= 0 || instances > maxTextRegionInstances {
 		return nil, pdferror.Malformedf("JBIG2Decode: symbol dictionary aggregate instance count is missing or out of range")
 	}
 

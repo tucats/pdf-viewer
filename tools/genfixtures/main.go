@@ -96,6 +96,7 @@ func main() {
 		{"image-smask.pdf", buildImageSMask()},
 		{"image-jpeg.pdf", buildImageJPEG()},
 		{"image-jbig2.pdf", buildImageJBIG2()},
+		{"image-jbig2-text.pdf", buildImageJBIG2Text()},
 		{"inline-image.pdf", buildInlineImage()},
 		{"rotated-page.pdf", buildRotatedPage()},
 		{"text-simple-truetype.pdf", buildTextSimpleTrueType()},
@@ -876,6 +877,82 @@ func buildImageJBIG2() []byte {
 		"/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode /Length %d >>",
 		dim, dim, len(jbig2Data))
 	b.addObject(5, 0, imgDict, jbig2Data)
+
+	return b.finish(1)
+}
+
+// buildImageJBIG2Text returns a single 100x100-point page that paints a
+// referenced image XObject encoded with JBIG2Decode in *symbol mode* -
+// the form scan-to-PDF and OCR pipelines actually emit, and the one
+// docs/PLAN2.md's Phase 8e added support for. Where buildImageJBIG2's
+// fixture codes its pixels directly (a generic region), this one codes a
+// symbol dictionary of two glyph shapes and a text region placing
+// instances of them, with the dictionary living in a separate
+// /JBIG2Globals stream exactly as a real producer's shared dictionary
+// does.
+//
+// The image is a 40x40 bilevel bitmap holding three placements of two
+// distinguishable shapes:
+//
+//   - a solid 16x16 square in the top-left quadrant, and
+//   - a hollow 18x18 square (a 4-pixel border around a white centre) in
+//     each of the top-right and bottom-left quadrants,
+//
+// leaving the bottom-right quadrant blank. The two shapes differ in both
+// size and interior, so a rendering test can tell which symbol was drawn
+// where: swapping the two symbol IDs, misplacing an instance, dropping
+// the second height class, or inverting black and white each change a
+// point this fixture's test asserts. The two shapes also have different
+// heights, so the dictionary needs two height classes rather than one -
+// the structure T.88's symbol coding is built around.
+//
+// As with buildImageJBIG2, the JBIG2 bytes come from internal/filter's
+// own encoder at fixture-build time, so this fixture stays fully
+// reproducible from this project's own code.
+func buildImageJBIG2Text() []byte {
+	const dim = 40
+
+	solid := filter.JBIG2Symbol{Width: 16, Height: 16, Pix: make([]byte, 16*16)}
+	for i := range solid.Pix {
+		solid.Pix[i] = 1
+	}
+
+	const hollowDim, hollowBorder = 18, 4
+	hollow := filter.JBIG2Symbol{Width: hollowDim, Height: hollowDim, Pix: make([]byte, hollowDim*hollowDim)}
+	for y := 0; y < hollowDim; y++ {
+		for x := 0; x < hollowDim; x++ {
+			if x < hollowBorder || y < hollowBorder || x >= hollowDim-hollowBorder || y >= hollowDim-hollowBorder {
+				hollow.Pix[y*hollowDim+x] = 1
+			}
+		}
+	}
+
+	// Symbols ordered by non-decreasing height, instances by Y then X -
+	// both required by the encoder, and both the order a real encoder
+	// produces anyway.
+	symbols := []filter.JBIG2Symbol{solid, hollow}
+	instances := []filter.JBIG2Instance{
+		{Symbol: 1, X: 21, Y: 1}, // Hollow, top-right quadrant.
+		{Symbol: 0, X: 2, Y: 2},  // Solid, top-left quadrant.
+		{Symbol: 1, X: 1, Y: 21}, // Hollow, bottom-left quadrant.
+	}
+	globals, page := filter.EncodeJBIG2SymbolText(dim, dim, symbols, instances)
+
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n100 0 0 100 0 0 cm\n/Im0 Do\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	imgDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d "+
+		"/ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode "+
+		"/DecodeParms << /JBIG2Globals 6 0 R >> /Length %d >>", dim, dim, len(page))
+	b.addObject(5, 0, imgDict, page)
+
+	b.addObject(6, 0, fmt.Sprintf("<< /Length %d >>", len(globals)), globals)
 
 	return b.finish(1)
 }

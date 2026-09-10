@@ -13,9 +13,10 @@
 // (with PNG and TIFF predictors), DCTDecode (JPEG, via the standard
 // library's image/jpeg - see dct.go), CCITTFaxDecode (Group 3 and
 // Group 4 fax compression, a from-scratch decoder since the standard
-// library has none - see ccitt.go), and JBIG2Decode (generic-region
-// coding only - a from-scratch decoder, see jbig2.go's doc comment for
-// exactly what is and is not implemented) are implemented. Any other
+// library has none - see ccitt.go), and JBIG2Decode (a from-scratch
+// decoder covering every arithmetic-coded JBIG2 mode - see jbig2.go's
+// doc comment for exactly what is and is not implemented) are
+// implemented. Any other
 // filter name - JPXDecode and Crypt - returns an error wrapping
 // pdferror.ErrUnsupported naming the filter, rather than being silently
 // skipped or misread; see docs/capability-matrix.md for the up-to-date

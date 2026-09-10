@@ -28,6 +28,17 @@ func FuzzDecode(f *testing.F) {
 	// paths and never reach the arithmetic decoder at all.
 	f.Add("JBIG2Decode", EncodeJBIG2GenericRegion(16, 16, jbig2TestPattern("diagonalsAndBlock", 16, 16), false))
 	f.Add("JBIG2Decode", EncodeJBIG2GenericRegion(24, 20, jbig2TestPattern("bands", 24, 20), true))
+	// A symbol-mode seed too: the symbol dictionary and text region
+	// decoders read structured values (symbol counts, height and width
+	// deltas, per-strip positions) that drive loop bounds and bitmap
+	// allocations, which is precisely the shape of parsing a fuzzer is
+	// worth pointing at, and none of it is reachable from a
+	// generic-region seed.
+	f.Add("JBIG2Decode", func() []byte {
+		symbols := jbig2TestSymbols()
+		instances := []textInstance{{symbol: 2, x: 1, y: 1}, {symbol: 0, x: 12, y: 1}, {symbol: 4, x: 3, y: 12}}
+		return encodeSymbolModeStream(40, 24, symbols, instances)
+	}())
 
 	f.Fuzz(func(t *testing.T, filterName string, data []byte) {
 		dict := syntax.Dictionary{"Filter": syntax.Name(filterName)}

@@ -146,6 +146,34 @@ func TestRenderJBIG2Image(t *testing.T) {
 	assertRGB8(t, img, 98, 98, 0, 0, 0, 2)       // bottom-right border corner
 }
 
+// TestRenderJBIG2SymbolTextImage confirms a JBIG2Decode-filtered image
+// coded in *symbol mode* - a symbol dictionary in a separate
+// /JBIG2Globals stream plus a text region placing instances of its
+// symbols (buildImageJBIG2Text) - decodes and paints correctly end to
+// end. That covers the whole Phase 8d-8g path: resolving the second stream
+// the image's /DecodeParms points at, decoding both streams' segments as
+// one continuing sequence, the dictionary's two height classes, and the
+// text region's placement arithmetic.
+//
+// The fixture places a solid square in the top-left quadrant and a
+// hollow one in each of the top-right and bottom-left quadrants, leaving
+// the bottom-right blank, so the asserted points below distinguish the
+// two symbols from each other (a solid centre versus a white one), catch
+// an instance drawn in the wrong place, and - as in TestRenderJBIG2Image
+// - would all invert if black and white were swapped.
+func TestRenderJBIG2SymbolTextImage(t *testing.T) {
+	img := renderPage(t, "image-jbig2-text.pdf")
+	if b := img.Bounds(); b.Dx() != 100 || b.Dy() != 100 {
+		t.Fatalf("Render size = %dx%d, want 100x100", b.Dx(), b.Dy())
+	}
+	assertRGB8(t, img, 25, 25, 0, 0, 0, 2)       // top-left: the solid symbol's interior
+	assertRGB8(t, img, 75, 25, 255, 255, 255, 2) // top-right: the hollow symbol's white centre
+	assertRGB8(t, img, 57, 7, 0, 0, 0, 2)        // top-right: that symbol's border
+	assertRGB8(t, img, 25, 75, 255, 255, 255, 2) // bottom-left: the other hollow symbol's centre
+	assertRGB8(t, img, 7, 57, 0, 0, 0, 2)        // bottom-left: its border
+	assertRGB8(t, img, 75, 75, 255, 255, 255, 2) // bottom-right: no instance placed here
+}
+
 // TestRenderInlineImage confirms an inline ("BI"/"ID"/"EI") image
 // (buildInlineImage: a 2x1 red/green DeviceRGB image, no /Resources
 // /XObject entry at all) paints correctly - the inline-image counterpart

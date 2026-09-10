@@ -53,6 +53,7 @@ go run ./tools/genfixtures
 | `image-smask.pdf` | One 100x100-point page that paints a referenced 1x1 solid-red image XObject with a `/SMask` giving it 50% alpha, across the whole page - exercises resolving and decoding a second image object referenced from within the first one's own dictionary, and per-pixel alpha blending against the page's background. |
 | `image-jpeg.pdf` | One 100x100-point page that paints a referenced image XObject encoded with `/Filter /DCTDecode`: a solid dark-blue 4x4 JPEG, generated at fixture-build time with the standard library's own `image/jpeg` encoder (quality 100) rather than sourced externally - exercises `internal/filter`'s DCTDecode support through the real cross-reference/object-resolution pipeline. Note: unlike every other fixture, this one's exact bytes depend on Go's `image/jpeg` encoder's output, which is deterministic for a given Go release but is not itself part of this project's own reproducibility guarantee the way the rest of `tools/genfixtures` is - if `TestGeneratedFixturesMatchCheckedInFiles` ever fails only for this file after a Go upgrade, regenerate and re-commit it rather than treating that as a correctness regression. |
 | `image-jbig2.pdf` | One 100x100-point page that paints a referenced image XObject encoded with `/Filter /JBIG2Decode`: a 32x32 bilevel bitmap whose top-left quadrant is black and whose other three quadrants are white, inside a one-pixel black border, painted across the whole page - the Phase 8 end-to-end fixture for JBIG2 generic-region decoding (segment parsing, the MQ arithmetic coder, and typical prediction, which this fixture enables). The shape is asymmetric in both axes and in black/white, so the rendering test catches a horizontal flip, a vertical flip, or a black/white inversion (JBIG2 defines 1 as black, the opposite of a 1-bit DeviceGray sample). The JBIG2 bytes are produced at fixture-build time by `internal/filter`'s own encoder, so - unlike `image-jpeg.pdf` - this fixture is fully reproducible from this project's own code. |
+| `image-jbig2-text.pdf` | One 100x100-point page that paints a referenced image XObject encoded with `/Filter /JBIG2Decode` in JBIG2's *symbol mode* - the form real scan-to-PDF and OCR pipelines emit, and the Phase 8e counterpart to `image-jbig2.pdf`'s generic region. A 40x40 bilevel bitmap holds three placements of two distinguishable shapes: a solid 16x16 square in the top-left quadrant and a hollow 18x18 square (a 4-pixel border around a white centre) in each of the top-right and bottom-left quadrants, leaving the bottom-right blank. The symbol dictionary defining those two shapes lives in a *separate stream* the image's `/DecodeParms` names with `/JBIG2Globals`, exactly as a producer's shared dictionary does, so this fixture covers resolving that second stream as well as the coding itself. The two shapes differ in both size and interior, so swapping the symbol IDs, misplacing an instance, dropping the dictionary's second height class, or inverting black and white each change a point `TestRenderJBIG2SymbolTextImage` asserts. As with `image-jbig2.pdf`, the JBIG2 bytes come from `internal/filter`'s own encoder at fixture-build time, so the fixture is fully reproducible from this project's own code. |
 | `inline-image.pdf` | One 100x100-point page whose content stream paints an inline (`BI`/`ID`/`EI`) 2x1 DeviceRGB image (red, green), with no `/Resources /XObject` entry at all - exercises `internal/content`'s inline-image parsing end to end, including its computed-exact-length read path (no `/Filter`, so the raw byte count is computed from `/W`, `/H`, `/BPC`, and `/CS` rather than requiring a non-standard `/L` key or a scan for `EI`). |
 | `rotated-page.pdf` | A 100 (wide) x 200 (tall) point page declaring `/Rotate 90`, with a 20x20-point red square filled at the origin of its own (unrotated) user space - the Phase 3 regression fixture for `Page.Render`'s and `Page.Thumbnail`'s `/Rotate` handling, which previously had no end-to-end rendering test. See `buildRotatedPage`'s doc comment in `tools/genfixtures/main.go` for the hand-worked-out expected pixel result. |
 | `text-simple-truetype.pdf` | One 100x100-point page showing "A" at font size 100 in a simple (`/Subtype /TrueType`) font with an embedded, hand-built minimal TrueType program (a single square glyph, see `tools/genfixtures/truetype.go`) - the baseline Phase 4 rendering fixture. See `buildTextSimpleTrueType`'s doc comment for the hand-derived expected device-space bounding box. |
@@ -79,10 +80,45 @@ go run ./tools/genfixtures
 
 ## real-world/
 
-Empty for now. Phase 0 permits adding real-world PDF fixtures alongside
-the hand-authored ones, but only with their license and source recorded
-in a table here at the time they are added — do not add a real-world PDF
-fixture without doing so in the same change.
+PDFs produced by **other software** — real scanners, copiers, and
+authoring tools — rather than by this repository. Phase 0 permits adding
+these alongside the hand-authored ones, but only with their license and
+source recorded in the table below at the time they are added — do not
+add a real-world PDF fixture without doing so in the same change.
+
+**Do not hand-edit these files.** They are meaningful precisely because
+they are exactly what the software that produced them emitted, and unlike
+everything under `handmade/` they cannot be regenerated.
+
+### Why carry them at all
+
+A hand-authored fixture can only exercise the feature combinations this
+project thought to produce, and where the same project writes both an
+encoder and a decoder for a format, a round-trip test proves the two
+agree with *each other* — not that either matches the specification. A
+file from a real encoder is the only thing that closes that gap.
+
+That is not hypothetical here: every JBIG2 fixture under `handmade/` is
+built by `internal/filter`'s own encoder (see
+`internal/filter/jbig2mq.go`'s `mqEncoder` doc comment for why that
+encoder exists), because no independently-produced JBIG2 sample was
+available while the decoder was written.
+
+| File | Purpose |
+| --- | --- |
+| `pdf-with-jbig2.pdf` | A one-page scan from a Xerox WorkCentre 5030 copier (per its own `/Producer`), 3296x2551 pixels at `/BitsPerComponent 1`, compressed with `/Filter /JBIG2Decode` in JBIG2's **symbol mode** and rotated with `/Rotate 270`. Its image stream's `/DecodeParms` names a `/JBIG2Globals` stream holding a 55-symbol dictionary; the image's own stream adds a second 114-symbol dictionary and two text regions — one per horizontal stripe of the page — that between them place 1025 symbol instances drawn from both dictionaries at once, using 4- and 8-row strips and a non-zero `SBDSOFFSET`. This is the Phase 8h end-to-end fixture (`TestRenderRealWorldJBIG2Sample`, golden image `testdata/renderrefs/sample-jbig2.png`) and the only test in this project exercising JBIG2 bytes this project did not itself produce. |
+
+**License:** `pdf-with-jbig2.pdf` comes from the
+[pdfminer.six](https://github.com/pdfminer/pdfminer.six) project's
+`samples/contrib` directory, whose accompanying license statement records
+that those contributed sample files may be freely used. No attribution
+information is recorded upstream for this individual file, so none can be
+reproduced here; it is redistributed on the basis of that statement
+rather than under this repository's own [LICENSE](../../LICENSE), which
+covers this project's own work and not third-party content. If that
+understanding is ever shown to be wrong, the remedy is to delete this
+file and its golden image — nothing else in the corpus depends on it, and
+`TestRenderRealWorldJBIG2Sample` is the only test that reads it.
 
 ## Rendered reference images
 
@@ -93,4 +129,7 @@ in the repository root for the comparison tolerance and how to regenerate
 them (`go test . -run TestRenderMatchesReferenceImages -update`) after a
 deliberate, reviewed change to rendering output. Same license and
 provenance as everything under `handmade/` above: original work of this
-project, MIT.
+project, MIT — with one exception, `sample-jbig2.png`, which is a
+rendering of the third-party `real-world/pdf-with-jbig2.pdf` and so
+carries whatever terms that file does (see its entry above); it is
+regenerated by `go test . -run TestRenderRealWorldJBIG2Sample -update`.

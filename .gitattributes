@@ -21,3 +21,10 @@
 # longer touches the bytes either way.
 testdata/fixtures/handmade/*.pdf binary
 testdata/renderrefs/*.png binary
+
+# The real-world fixture corpus (see testdata/fixtures/FIXTURES.md) needs
+# the same protection for a stronger reason: these files are not
+# regenerable at all. They are exactly what the software that produced
+# them emitted, so a checkout that rewrote their line endings would be
+# silently unrecoverable rather than merely stale.
+testdata/fixtures/real-world/*.pdf binary

@@ -488,6 +488,116 @@ func TestJBIG2SymbolTextMalformedStreams(t *testing.T) {
 	}
 }
 
+// jbig2SymbolDictHeader builds a symbol dictionary segment's fixed
+// header fields (arithmetic coding, GBTEMPLATE 0, default AT pixels)
+// declaring the given export and new-symbol counts, followed by body as
+// its coded data.
+func jbig2SymbolDictHeader(numExSyms, numNewSyms uint32, body []byte) []byte {
+	data := []byte{0x00, 0x00}
+	for _, p := range defaultATPixels[0] {
+		data = append(data, byte(int8(p.dx)), byte(int8(p.dy)))
+	}
+	data = appendBE32(data, numExSyms)
+	data = appendBE32(data, numNewSyms)
+	return append(data, body...)
+}
+
+func TestJBIG2SymbolModeBoundsHostileInput(t *testing.T) {
+	// A few bytes can declare an enormous amount of work: symbol counts
+	// and dimensions are read from the coded stream, and a stream that
+	// simply ends does not stop the arithmetic decoder - it keeps
+	// producing values from its end-of-data padding (see
+	// mqDecoder.byteAt). Every bound below exists so that such an input
+	// is refused rather than decoded at length; see the limits' own doc
+	// comments.
+	t.Run("declared symbol counts", func(t *testing.T) {
+		for _, counts := range [][2]uint32{
+			{maxSymbolsPerDictionary + 1, 1},
+			{1, maxSymbolsPerDictionary + 1},
+			{0xFFFFFFFF, 0xFFFFFFFF},
+		} {
+			data := jbig2SymbolDictHeader(counts[0], counts[1], nil)
+			if _, err := decodeSymbolDictSegment(data, nil); !errors.Is(err, pdferror.ErrUnsupported) {
+				t.Errorf("counts %v: got %v, want an error wrapping %v", counts, err, pdferror.ErrUnsupported)
+			}
+		}
+	})
+
+	t.Run("truncated dictionaries terminate", func(t *testing.T) {
+		// Each of these declares symbols it does not contain, leaving the
+		// decoder to invent every height and width. None may hang: the
+		// pixel budget, and the bound on how many height classes may pass
+		// without accounting for the declared symbols, together guarantee
+		// an exit. (A hang would fail this test by exceeding `go test`'s
+		// own timeout, which is the only check that can catch one.)
+		rng := rand.New(rand.NewSource(2))
+		for i := 0; i < 64; i++ {
+			body := make([]byte, rng.Intn(24))
+			rng.Read(body)
+			if _, err := decodeSymbolDictSegment(jbig2SymbolDictHeader(200, 200, body), nil); err == nil {
+				t.Errorf("body %x: a dictionary with no real symbol data decoded successfully", body)
+			}
+		}
+	})
+
+	t.Run("text region composited area", func(t *testing.T) {
+		// The instance count alone does not bound the work a text region
+		// does, since each instance costs time proportional to its
+		// symbol's area. One large symbol placed repeatedly must
+		// therefore run into the area budget.
+		//
+		// The region is deliberately tiny, so compositing a symbol far
+		// larger than it costs almost nothing (every row is rejected as
+		// out of bounds immediately) - this test is about the budget
+		// being enforced, not about waiting for the work it prevents.
+		const symbolDim = 4000
+		big := newJBIG2Bitmap(symbolDim, symbolDim, 0)
+		symbols := []*jbig2Bitmap{big}
+		allowed := maxTextRegionCompositedPixels / (symbolDim * symbolDim)
+
+		p := &textRegionParams{
+			width: 4, height: 4,
+			stripSize: 1, refCorner: refCornerTopLeft, combOp: combOpOr,
+			numInstances: allowed + 1,
+		}
+
+		enc := newMQEncoder()
+		iadt, iafs, iads := newArithIntCtx(), newArithIntCtx(), newArithIntCtx()
+		iaid := newArithIAIDCtx(symbolCodeLength(len(symbols)))
+		enc.encodeInt(iadt, 0)
+		enc.encodeInt(iadt, 0)
+		enc.encodeInt(iafs, 0)
+		for i := 0; i <= allowed; i++ {
+			if i > 0 {
+				enc.encodeInt(iads, 0)
+			}
+			enc.encodeIAID(iaid, 0)
+		}
+		enc.encodeOOB(iads)
+
+		_, err := decodeTextRegionBitmap(newMQDecoder(enc.flush()), p, symbols, nil)
+		if !errors.Is(err, pdferror.ErrUnsupported) {
+			t.Fatalf("got %v, want an error wrapping %v", err, pdferror.ErrUnsupported)
+		}
+	})
+
+	t.Run("declared instance count", func(t *testing.T) {
+		symbols := jbig2TestSymbols()
+		text := encodeTextRegionSegment(1, []uint32{0}, 40, 20, symbols,
+			[]textInstance{{symbol: 0, x: 1, y: 1}}, 0, 0, combOpOr)
+		// The instance count is the four bytes after the 12-byte header,
+		// the 17-byte region information field and the two flags bytes.
+		const instOffset = 12 + 17 + 2
+		for i, b := range []byte{0xFF, 0xFF, 0xFF, 0xFF} {
+			text[instOffset+i] = b
+		}
+		stream := append(encodeSymbolDictSegment(0, symbols, 0), text...)
+		if _, err := decodeJBIG2(stream, nil); !errors.Is(err, pdferror.ErrUnsupported) {
+			t.Fatalf("got %v, want an error wrapping %v", err, pdferror.ErrUnsupported)
+		}
+	})
+}
+
 func TestJBIG2SymbolCodeLength(t *testing.T) {
 	// ceil(log2(n)), except that a single-symbol dictionary still costs
 	// one bit - see symbolCodeLength's doc comment on T.88's erratum.

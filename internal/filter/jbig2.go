@@ -7,18 +7,36 @@ import (
 	"github.com/tucats/pdf-viewer/internal/syntax"
 )
 
-// This file implements decodeJBIG2, reversing PDF's JBIG2Decode filter -
-// see docs/PLAN2.md's Phase 8 for the scope decision this file
-// implements: JBIG2's "generic region" coding procedure (ITU-T T.88
-// clause 6.2), which is what a scanner or "print to PDF" pipeline
-// producing a plain black-and-white page image normally emits, but not
-// JBIG2's symbol-dictionary/text-region machinery (clause 6.4/6.5 -
-// used for JBIG2's very highest compression ratios on large text scans
-// by recognizing repeated glyph shapes and coding each occurrence as a
-// small reference into a shared "symbol dictionary" rather than raw
-// pixels). A file using the latter is reported as pdferror.ErrUnsupported
-// naming the specific unimplemented segment type, rather than silently
-// producing a blank or partially-wrong page.
+// This file implements decodeJBIG2, reversing PDF's JBIG2Decode filter,
+// and the segment walk every other jbig2*.go file hangs off - see
+// docs/PLAN2.md's Phase 8 for the scope decisions behind it.
+//
+// # How the pieces fit together
+//
+// A JBIG2Decode stream is a sequence of self-describing "segments" (see
+// the embedded-organization section below), and each segment type has
+// its own file here:
+//
+//   - jbig2mq.go is the MQ arithmetic coder every other piece rides on:
+//     it turns coded bytes into a stream of yes/no decisions, each
+//     against an adaptive probability estimate selected by context.
+//   - jbig2arith.go reads whole *numbers* out of that same decision
+//     stream (T.88 Annex A), which everything but a generic region needs.
+//   - jbig2generic.go decodes a generic region: a bitmap coded pixel by
+//     pixel from its own already-decoded neighborhood. This is what a
+//     scanner emitting a plain black-and-white page image produces.
+//   - jbig2symbol.go and jbig2text.go decode a symbol dictionary and a
+//     text region: JBIG2's highest-compression mode, where each distinct
+//     glyph shape is coded once and each occurrence becomes an index
+//     plus a position. Most real scan-to-PDF and OCR output uses this.
+//   - jbig2refine.go decodes a bitmap as a *correction* of one already
+//     decoded, which is how lossy encoders fix up an individual symbol
+//     instance whose dictionary shape was not quite right.
+//
+// A feature this package does not implement (see the scope section at
+// the end) is reported as pdferror.ErrUnsupported naming that specific
+// feature, rather than silently producing a blank or partially-wrong
+// page.
 //
 // # JBIG2's "embedded organization"
 //
@@ -61,29 +79,41 @@ import (
 // practical). The MQ arithmetic coder it decodes generic regions with
 // (jbig2mq.go) is, however, the identical standard algorithm essentially
 // every independent implementation shares - see that file's own doc
-// comment for the fuller provenance discussion, including this
-// package's inability to validate against any real-world-encoder-
-// produced JBIG2 sample and how its own tests compensate.
+// comment for the fuller provenance discussion, including the
+// round-trip-against-this-package's-own-encoder testing strategy this
+// code was originally written under.
+//
+// That strategy's one structural weakness - an encoder and a decoder
+// written by the same project can agree with each other and both be
+// wrong about the standard - is now partly covered: this package is
+// validated against one real scanner's output as well, via
+// testdata/fixtures/real-world/pdf-with-jbig2.pdf (see that corpus's
+// entry in FIXTURES.md for why carrying it is worth the trouble). That
+// file exercises symbol mode thoroughly and generic regions not at all,
+// so the two kinds of test complement rather than replace each other.
 //
 // # Scope limitations, deliberately not implemented
 //
-//   - Only the arithmetic-coded form of a generic region is supported,
-//     not its alternative MMR (Modified Modified READ, i.e. plain
-//     CCITT Group 4) coding - real-world JBIG2 encoders overwhelmingly
-//     choose arithmetic coding for a generic region specifically
-//     because it compresses better, which is the entire point of using
-//     JBIG2 over CCITTFaxDecode in the first place, so MMR-coded generic
-//     regions are vanishingly rare in practice.
-//   - Symbol dictionary and text region segments (and the rarer halftone
-//     and refinement region segments) are reported as
-//     pdferror.ErrUnsupported - see docs/PLAN2.md's Phase 8 note on
-//     symbol/text-region compression as a possible follow-on phase.
-//   - /JBIG2Globals (a /DecodeParms entry naming a second stream of
-//     segments shared across multiple images, used only to carry a
-//     symbol dictionary multiple pages' text regions reference in
-//     common) is therefore also not consulted: a file that relies on it
-//     necessarily uses symbol/text regions, which already stop this
-//     decoder with ErrUnsupported before /JBIG2Globals would matter.
+// Each of these reports pdferror.ErrUnsupported naming the specific
+// feature:
+//
+//   - Huffman-coded symbol dictionaries and text regions (SDHUFF /
+//     SBHUFF), along with the custom table segments and MMR-coded
+//     collective bitmaps they imply. Real encoders overwhelmingly choose
+//     arithmetic coding, which is the whole reason to use JBIG2's symbol
+//     mode over CCITTFaxDecode in the first place.
+//   - MMR (Modified Modified READ, i.e. plain CCITT Group 4) coding of a
+//     generic region, for the same reason.
+//   - Halftone regions and pattern dictionaries (T.88 6.6/6.7), which
+//     code dithered greyscale imagery rather than text and are rare in
+//     the scanned documents this filter exists to render.
+//   - A symbol dictionary that imports another segment's adapted
+//     arithmetic contexts (the "bitmap coding context used" flag), a
+//     saving that only pays off for dictionaries split across many
+//     segments.
+//   - A segment whose data length is the "unknown" sentinel, which is
+//     only discoverable by scanning for a terminating marker; real PDF
+//     producers give every segment a known length.
 func decodeJBIG2(data, globals []byte) ([]byte, error) {
 	d := &jbig2Decoder{symbolDicts: make(map[uint32][]*jbig2Bitmap)}
 

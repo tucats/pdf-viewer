@@ -79,9 +79,12 @@ option and fails with a distinguishable error given a wrong one or none.
 
 ## Phase 8: JBIG2Decode
 
-**Status: Done (8a, 8b and 8c).** Generic-region coding only - see
-`docs/capability-matrix.md`'s JBIG2Decode row for exactly which JBIG2
-features are and are not implemented.
+**Status: Done (8a through 8h).** Every arithmetic-coded JBIG2 mode -
+generic regions, symbol dictionaries, text regions and refinement - plus
+`/JBIG2Globals`. Huffman-coded symbol dictionaries and text regions,
+halftone regions and pattern dictionaries, and MMR-coded generic regions
+remain unimplemented and report `ErrUnsupported` naming the feature; see
+`docs/capability-matrix.md`'s JBIG2Decode row for the exact list.
 
 JBIG2 is a common compression choice for black-and-white scanned pages
 specifically because it beats CCITT Group 4 (already supported) on
@@ -100,7 +103,22 @@ practice (ahead of JPEG 2000 - see Phase 14).
     for scanned text. JBIG2's symbol/text-region dictionary-based
     compression (used for the highest compression ratios on large text
     scans) can follow as a further sub-phase if the generic-region path
-    proves insufficient against real fixtures.
+    proves insufficient against real fixtures. *It did:* the first
+    real-world sample this project was given (a Xerox copier scan) used
+    symbol mode and failed outright, which is what prompted 8d-8h below.
+- **8d: the arithmetic integer decoding procedures** (T.88 Annex A) -
+    reading whole numbers, rather than single pixels, out of the same
+    MQ-coded stream. A prerequisite for everything after it.
+- **8e: symbol dictionary and text region decoding** - the mode that
+    prompted this continuation, and the one most real scan-to-PDF and
+    OCR output actually uses.
+- **8f: `/JBIG2Globals`** - resolving the second stream a shared symbol
+    dictionary lives in, which needs a cross-reference table and so a
+    resolver interface `internal/parser` satisfies.
+- **8g: generic refinement regions** (T.88 6.3) - how lossy encoders
+    correct an individual symbol instance, and how a dictionary defines
+    one symbol as a refinement or aggregate of others.
+- **8h: fixtures, real-world sample and documentation.**
 - **8c: fixtures, end-to-end render test and documentation** - a
     `tools/genfixtures` JBIG2 builder, a render test proving a
     JBIG2-encoded page image decodes and draws, and the
@@ -115,7 +133,9 @@ practice (ahead of JPEG 2000 - see Phase 14).
 **Exit criteria:** a representative scanned-document fixture using
 JBIG2 generic-region encoding decodes and renders correctly; the matrix
 row moves from "Not scheduled" to "Done" or "Partial" with any remaining
-JBIG2 feature (e.g. refinement regions) explicitly noted.
+JBIG2 feature (e.g. refinement regions) explicitly noted. For 8d-8h,
+additionally: a real scanner's symbol-mode page decodes and renders
+correctly end to end.
 
 ## Phase 9: Non-Identity Type 0/CID encodings (CJK support)
 
@@ -751,3 +771,182 @@ in order, not rewritten later except to fix mistakes.
     them fails cleanly with `ErrUnsupported` naming the segment type, so
     the gap is visible rather than silent, and a follow-on phase can add
     them if real-world files turn out to need it.
+
+### Phase 8d: JBIG2 arithmetic integer decoding procedures — done (2026-09-09)
+
+- **What prompted the continuation.** 8c's carried-forward note said a
+    follow-on phase could add symbol/text regions "if real-world files
+    turn out to need it". The first real-world JBIG2 file this project
+    was handed - a Xerox WorkCentre 5030 scan - needed it: a symbol
+    dictionary in `/JBIG2Globals` and two text regions, failing outright
+    with the `ErrUnsupported` 8b had deliberately put there. That is the
+    scope decision 8d-8h implement.
+- **`internal/filter/jbig2arith.go`.** T.88 Annex A's integer decoding
+    procedure (A.2 - a sign bit, a prefix selecting one of six magnitude
+    ranges, then that range's value bits, every decision against a
+    context selected by the bits of the same integer decoded so far) and
+    symbol-ID procedure (A.3). Both directions, for the same round-trip
+    reason 8a's MQ coder has both, though the encoding direction is not
+    in the standard at all - it is derived here as the decoder's exact
+    inverse. Magnitudes are bounded well below the 2^32 the largest
+    range could spell out, since anything near that neither fits an
+    `int` on a 32-bit platform nor describes any real image.
+- **Tests.** Round trips over every Table A.1 range boundary, the "OOB"
+    out-of-band sentinel mixed with real zeros (it is spelled as
+    negative zero, so confusing the two is the obvious failure), and
+    2000 random values through one shared, adapting context set. One
+    test instead drives the decoder with a bit sequence written out
+    literally from the standard's table, so a shared misreading of the
+    table itself would not pass unnoticed.
+
+### JBIG2 adaptive-template pixel positions — done (2026-09-09)
+
+- **Why here.** 8b accepted only the default adaptive-template (AT)
+    pixel positions, because it derived each template's context bit
+    layout by sorting the combined fixed and adaptive points into raster
+    order - which reproduces T.88's own bit numbering exactly when the
+    AT pixels sit where the template figures draw them, and not
+    otherwise. Symbol dictionaries in real files do move them, so this
+    had to be fixed before 8e rather than after.
+- **What changed.** `codingTemplates` now spells each template's bit
+    layout out as an ordered list of slots, each either a fixed neighbor
+    or an AT index, so a moved AT pixel keeps its assigned bit position
+    while reading from its new location. The generic bitmap coding loops
+    also split out from the segment-level code in both directions, so a
+    decoder and its context set can be passed in - which 8e needs, since
+    a symbol dictionary decodes many small bitmaps from one continuing
+    stream with one continuously-adapting context set.
+- **Tests.** All four templates round-trip with both default and moved
+    AT positions. The existing bit-layout test can only describe the
+    default case (a moved pixel has no simple "read it off the figure"
+    expected form), and now says so explicitly rather than appearing to
+    cover more than it does.
+
+### Phase 8e: JBIG2 symbol dictionary and text region decoding — done (2026-09-09)
+
+- **`internal/filter/jbig2symbol.go`** (T.88 7.4.3 and 6.5). Symbols are
+    grouped into height classes and coded as differences between
+    consecutive heights and widths, with every symbol bitmap decoded
+    from one continuing stream through one continuing context set - that
+    sharing is most of why a dictionary of similar glyphs compresses so
+    well. Also the export-flag runs (6.5.10) deciding which of the
+    imported and newly-decoded symbols a dictionary passes on.
+- **`internal/filter/jbig2text.go`** (T.88 7.4.4 and 6.4). The strip
+    walk placing symbol instances by index and positional delta, all
+    four reference corners, and transposed regions. The one subtlety
+    worth recording: untransposed, a symbol's left edge sits at S
+    regardless of which corner is the reference, because for a
+    right-hand corner T.88 advances S past the symbol *before* placing
+    it rather than after - so only the vertical placement actually
+    differs between corners.
+- **Segment registry.** Segment headers now record their referred-to
+    segment numbers (8b parsed them only to know how many bytes to skip
+    past), and `decodeJBIG2` keeps a registry keyed by segment number,
+    since a text region names the dictionaries whose symbols it draws
+    with and a dictionary may import another's.
+- **Tests.** The expected page is built by plain compositing, sharing no
+    code with the text region decoder, so a misread position, symbol ID
+    or strip boundary is caught even though the encoder and decoder do
+    share the coding tables. Covers all four GBTEMPLATEs, dictionary
+    chaining, every reference corner, transposed placement, and multi-row
+    strips.
+
+### Phase 8f: JBIG2 `/JBIG2Globals` — done (2026-09-09)
+
+- **The dependency problem.** A shared symbol dictionary lives in a
+    separate stream the image's `/DecodeParms` names by indirect
+    reference, and `internal/filter` cannot follow one - that needs a
+    cross-reference table, which is `internal/parser`'s job. So the
+    filter package declares a `StreamResolver` interface and a
+    `DecodeWith` entry point, and `parser.Document` satisfies it,
+    keeping the dependency pointing the way it already did. `Decode`
+    keeps its signature for the callers with no document to resolve
+    against.
+- **Recursion.** `Document.DecodeReferencedStream` deliberately decodes
+    the second stream *without* passing itself along again, so a file
+    whose globals stream names itself cannot recurse without end.
+    Nothing legitimate needs the chain: a globals stream is
+    Flate-compressed or raw, never JBIG2-coded itself.
+
+### Phase 8g: JBIG2 generic refinement regions — done (2026-09-09)
+
+- **`internal/filter/jbig2refine.go`** (T.88 6.3 and 7.4.7). Both
+    GRTEMPLATEs, their adaptive pixels, and TPGRON typical prediction
+    (where a pixel whose 3x3 reference neighborhood is uniform is not
+    coded at all). Wired into all three of its users: standalone
+    refinement region segments, a text region's per-instance SBREFINE,
+    and a symbol dictionary's SDREFAGG - including the aggregate form,
+    where a new symbol is a collage of existing ones coded as a
+    miniature text region sharing the dictionary's own stream and
+    contexts. That sharing is why the text region's contexts became a
+    named group passed in rather than a dozen locals.
+- **The test that matters most.** Round trips prove the two directions
+    agree, but would not notice a decoder that ignored the *reference*
+    half of the context entirely, since both directions would ignore it
+    together. So one test asserts that refining against a
+    near-identical reference really is smaller than coding the same
+    bitmap from scratch - which is only true if the reference is being
+    consulted.
+
+### Phase 8h: JBIG2 fixtures, real-world sample and documentation — done (2026-09-09)
+
+- **`image-jbig2-text.pdf`** (`tools/genfixtures`, `buildImageJBIG2Text`).
+    A 40x40 symbol-mode image whose two-symbol dictionary lives in a
+    separate `/JBIG2Globals` stream: a solid square in one quadrant and
+    a hollow one in two others. The shapes differ in both size and
+    interior, so swapping symbol IDs, misplacing an instance, dropping
+    the dictionary's second height class, or inverting black and white
+    each change a point `TestRenderJBIG2SymbolTextImage` asserts. As with
+    `image-jbig2.pdf`, the bytes come from this project's own encoder, so
+    the fixture stays reproducible from this project's own code.
+- **The first real-world fixture** (`testdata/fixtures/real-world/`,
+    a directory `FIXTURES.md` had reserved since Phase 0 and which was
+    empty until now). `pdf-with-jbig2.pdf` is a Xerox WorkCentre 5030
+    scan: a 55-symbol dictionary in `/JBIG2Globals`, a second 114-symbol
+    dictionary in the image stream, and two text regions placing 1025
+    instances from both dictionaries at once, with 4- and 8-row strips, a
+    non-zero `SBDSOFFSET`, and `/Rotate 270`. `TestRenderRealWorldJBIG2Sample`
+    renders it against a golden image.
+    
+    This is worth more than its size suggests. Every JBIG2 fixture
+    before it was built by this package's own encoder, and a round trip
+    between an encoder and decoder written by the same project proves
+    they agree with each other, not that either matches T.88. This is
+    the first test here that could catch that class of error. Its
+    provenance and license are recorded in `FIXTURES.md` as Phase 0
+    requires.
+- **Bounded work, found by fuzzing.** `FuzzOpenAndRender` produced a
+    failure whose saved input did not reproduce on its own, which is the
+    signature of resource exhaustion rather than a crash: symbol mode's
+    first limits were too loose. A stream of a few dozen bytes could
+    declare thousands of symbols and simply end, leaving the arithmetic
+    decoder to invent their dimensions from its end-of-data padding -
+    about a second of work and tens of megabytes, multiplied by every
+    parallel fuzz worker. Three bounds were tightened or added: a
+    dictionary's total symbol area (a glyph is not a page, so the
+    whole-page limit was the wrong scale), a text region's total
+    composited area (the instance count alone does not bound work, since
+    each instance costs its symbol's area), and the number of height
+    classes a dictionary may spend without accounting for its declared
+    symbols (a class need not contain any symbols, so the loop could not
+    be required to make progress otherwise). Worst-case time for a
+    hostile input dropped about fourfold, and the fuzzer's throughput
+    stopped collapsing on slow inputs - 12M executions on
+    `internal/filter`'s target and 95M on the root package's, both clean.
+    `TestJBIG2SymbolModeBoundsHostileInput` pins each bound.
+- **Documentation.** `docs/capability-matrix.md`'s JBIG2 rows list
+    everything 8d-8h added and name every remaining unimplemented
+    feature; `FIXTURES.md` documents both new fixtures and the
+    `real-world/` section's rules; `.gitattributes` marks the new
+    directory binary, for a stronger reason than the generated corpus -
+    those files cannot be regenerated at all.
+- **What's carried forward.** Huffman-coded symbol dictionaries and text
+    regions (including the custom table segments and MMR collective
+    bitmaps they imply), halftone regions and pattern dictionaries,
+    MMR-coded generic regions, symbol dictionaries importing another
+    segment's arithmetic contexts, and unknown-length segments all still
+    report `ErrUnsupported` naming the specific feature. Huffman coding
+    is the most plausible of these to meet in the wild, and would be the
+    natural next sub-phase if a real file ever needs it - the same
+    "wait for a real file" judgment 8c made about symbol mode, which
+    turned out to be needed within a day.

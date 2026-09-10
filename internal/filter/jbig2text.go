@@ -51,10 +51,10 @@ import (
 //
 // # Scope
 //
-// Only the arithmetic-coded form is implemented (SBHUFF = 0), and
-// refinement of individual instances (SBREFINE) is reported as
-// unsupported rather than mis-decoded; see jbig2.go's doc comment for
-// this package's overall JBIG2 scope.
+// Only the arithmetic-coded form is implemented (SBHUFF = 0); a
+// Huffman-coded text region is reported as unsupported rather than
+// mis-decoded. See jbig2.go's doc comment for this package's overall
+// JBIG2 scope.
 
 // Reference corner codes (T.88 Table 34): which corner of a symbol's
 // bitmap the instance's coded (S, T) position names.
@@ -66,11 +66,25 @@ const (
 )
 
 // maxTextRegionInstances bounds how many symbol instances one text
-// region may place. Each instance costs a bounded amount of work
-// (compositing one symbol bitmap), so this is really a bound on total
-// decoding time against a stream that declares an absurd instance count;
-// a full page of dense text runs to a few thousand.
-const maxTextRegionInstances = 10_000_000
+// region may place. A full page of dense text runs to a few thousand
+// (the real scanner sample this package is tested against places 1025),
+// so a million is far past anything legitimate while keeping a stream
+// that declares an absurd instance count from being taken at its word.
+const maxTextRegionInstances = 1_000_000
+
+// maxTextRegionCompositedPixels bounds the total area of every symbol
+// instance a single text region draws, counted whether or not the
+// instance lands inside the region. The instance count alone is not a
+// sufficient bound on work: instances are cheap to *declare* and each
+// one costs time proportional to its symbol's area, so a stream pairing
+// a large instance count with large symbols would otherwise ask for
+// arbitrarily much compositing.
+//
+// Legitimate content stays far below this. The symbols a page draws are
+// its ink, so their total area is on the order of the page's own -
+// glyphs do not overlap much - which makes a budget equal to the
+// whole-page pixel limit generous by a wide margin.
+const maxTextRegionCompositedPixels = maxGenericRegionPixels
 
 // textRegionParams is a text region segment's parsed header (T.88
 // 7.4.4), separated from the coded data that follows it.
@@ -244,6 +258,7 @@ func decodeTextRegionBitmap(dec *mqDecoder, p *textRegionParams, symbols []*jbig
 
 	firstS := 0
 	instances := 0
+	compositedPixels := 0
 	for instances < p.numInstances {
 		// A new strip: its T position is a delta from the previous one.
 		dt, ok, bad := dec.decodeInt(iadt)
@@ -299,6 +314,11 @@ func decodeTextRegionBitmap(dec *mqDecoder, p *textRegionParams, symbols []*jbig
 					return nil, err
 				}
 				symbol = refined
+			}
+
+			compositedPixels += symbol.width * symbol.height
+			if compositedPixels > maxTextRegionCompositedPixels {
+				return nil, pdferror.Unsupportedf("JBIG2Decode: text region's symbol instances cover more than this package's %d-pixel limit", maxTextRegionCompositedPixels)
 			}
 
 			curS = drawTextSymbol(region, symbol, p, curS, stripT+curT)
@@ -395,6 +415,60 @@ func drawTextSymbol(region, symbol *jbig2Bitmap, p *textRegionParams, s, t int) 
 type textInstance struct {
 	symbol int
 	x, y   int
+}
+
+// JBIG2Symbol is one glyph bitmap for EncodeJBIG2SymbolText: Pix holds
+// one byte per pixel, row-major, Width*Height long, each 0 for
+// background (white) or 1 for foreground (black).
+type JBIG2Symbol struct {
+	Width, Height int
+	Pix           []byte
+}
+
+// JBIG2Instance places one symbol - by index into
+// EncodeJBIG2SymbolText's symbol list - with its top-left corner at
+// (X, Y) on the page.
+type JBIG2Instance struct {
+	Symbol int
+	X, Y   int
+}
+
+// EncodeJBIG2SymbolText encodes a page in JBIG2's symbol mode, split the
+// way a real PDF splits it: globals holds a symbol dictionary segment
+// (the bytes a /JBIG2Globals stream carries), and page holds a text
+// region segment referring to it (the bytes the image XObject's own
+// stream carries). Passing globals to a JBIG2Decode stream's
+// /JBIG2Globals and page as its data reproduces exactly the arrangement
+// a scan-to-PDF encoder emits.
+//
+// symbols must be ordered by non-decreasing Height, and instances by
+// non-decreasing Y and then X - see encodeSymbolDictImporting and
+// encodeTextRegionSegment, which explain why and panic otherwise.
+//
+// Like EncodeJBIG2GenericRegion, this exists to build known-correct
+// input for this package's own tests and tools/genfixtures, not because
+// JBIG2 encoding is in this project's scope; see jbig2mq.go's mqEncoder
+// doc comment.
+func EncodeJBIG2SymbolText(width, height int, symbols []JBIG2Symbol, instances []JBIG2Instance) (globals, page []byte) {
+	bitmaps := make([]*jbig2Bitmap, len(symbols))
+	for i, s := range symbols {
+		if len(s.Pix) != s.Width*s.Height {
+			panic("filter: EncodeJBIG2SymbolText: symbol Pix does not match Width*Height")
+		}
+		bitmaps[i] = &jbig2Bitmap{width: s.Width, height: s.Height, pix: s.Pix}
+	}
+
+	placements := make([]textInstance, len(instances))
+	for i, inst := range instances {
+		placements[i] = textInstance{symbol: inst.Symbol, x: inst.X, y: inst.Y}
+	}
+
+	// Segment 0 is the dictionary (in the globals stream) and segment 1
+	// the text region referring to it, matching how the two streams are
+	// decoded as one continuing sequence.
+	globals = encodeSymbolDictSegment(0, bitmaps, 0)
+	page = encodeTextRegionSegment(1, []uint32{0}, width, height, bitmaps, placements, 0, 0, combOpOr)
+	return globals, page
 }
 
 // encodeTextRegionSegment builds a complete text region segment (header

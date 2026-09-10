@@ -293,7 +293,7 @@ types), not re-scoped.
 
 ## Phase 14: JPXDecode (JPEG 2000)
 
-**Status: Not started.**
+**Status: 14a done.**
 
 Same class of gap as JBIG2 (Phase 8) - a page using this filter fails
 outright - but JPEG 2000 in practice appears mostly in narrower
@@ -302,13 +302,81 @@ archival scanning standards like PDF/A with JPX for high-fidelity
 images) rather than general office/consumer documents, so it is ranked
 below JBIG2 despite being the same severity of failure.
 
-- No standard-library JPEG 2000 decoder exists. Evaluate scope
-    carefully before committing: a full JPEG 2000 (wavelet-based, richly
-    featured) decoder is a substantially larger undertaking than CCITT or
-    even JBIG2's generic-region mode. Consider whether a minimal
-    subset (e.g. only the common lossy/lossless codestream profiles
-    actually seen in PDF-embedded JPX, not the full standard) is
-    sufficient before treating this as full-format work.
+No standard-library JPEG 2000 decoder exists, and a full decoder is a
+substantially larger undertaking than CCITT or even JBIG2's
+symbol/text-region mode: a wavelet transform, an arithmetic-coded
+bit-plane entropy coder, and a packet/layer container format, each with
+real complexity of its own. This phase's scope decision (see
+`internal/jpx/doc.go`'s own "Scope" section for the authoritative,
+living version): implement the common real-world subset a PDF's
+JPXDecode stream actually needs - both wavelet filters and both
+component transforms (a decoder cannot choose which one an encoder
+used, so these are not optional), all five progression orders (ditto -
+progression order only changes packet sequencing, which a general
+decoder must follow regardless), and multiple tiles/tile-parts (common
+in the large geospatial/medical images this filter mostly shows up
+in) - while explicitly not implementing region-of-interest coding (the
+RGN marker) or JPEG 2000 Part 2 extensions, reporting each by name via
+`ErrUnsupported` rather than mis-decoding it, the same policy this
+project applies to JBIG2's own deferred features.
+
+**New package, not new files in `internal/filter`.** Unlike CCITT and
+JBIG2 (each one or a few files within `internal/filter`), this
+decoder lives in its own `internal/jpx` package that deliberately does
+not import `internal/syntax` or `internal/pdferror` - see that
+package's doc comment's "Why this package exists" section. The goal is
+a clean enough boundary that `internal/jpx` could later be pulled out
+into its own standalone Go module without touching its own code, only
+the thin adapter `internal/filter` will eventually gain (14f) to
+translate between the two. Following JBIG2's own precedent (8a's MQ
+coder, 8d's arithmetic integer decoding procedures), this package is
+written directly from the ITU-T T.800 specification's algorithmic
+description rather than mechanically ported from another
+implementation, and - since this project again has no
+independently-produced real-world JPX sample - validates itself with
+its own from-scratch, test-and-fixture-only encoder for round-trip
+testing, the same "write both directions from opposite ends of the
+standard's own description" approach 8a used for the same reason.
+
+Sub-phases (see `internal/jpx/doc.go`'s development plan for the
+living, authoritative version of this list - update both together if
+they ever need to diverge):
+
+- **14a: package skeleton, JP2 container parsing, and codestream
+    main-header marker parsing.** No entropy decoding or pixel output
+    yet - `jpx.ParseHeader` extracts image/tile geometry, per-component
+    sample format, coding style (COD/COC) and quantization style
+    (QCD/QCC), and every tile-part's byte range, from either a bare
+    codestream or a JP2-boxed one.
+- **14b: the MQ arithmetic coder** (a second, independent
+    implementation from `internal/filter`'s JBIG2 one, since
+    `internal/jpx` cannot import an unexported type from a different
+    package it should not depend on anyway) **and tier-2 packet header
+    parsing** - tag trees, inclusion/zero-bit-plane information, and
+    packet iteration in whichever progression order the codestream
+    declares.
+- **14c: tier-1 coding** - the EBCOT bit-plane coding passes
+    (significance propagation, magnitude refinement, cleanup) that turn
+    a code-block's compressed bytes into quantized wavelet coefficients.
+- **14d: dequantization and the inverse discrete wavelet transform**
+    (both the 5/3 reversible integer filter and the 9/7 irreversible
+    filter), reassembling one tile-component's samples from its
+    subbands.
+- **14e: the multiple component transform** (reversible RCT /
+    irreversible ICT), DC level shifting, and tile compositing into a
+    final image.
+- **14f: `internal/filter` wiring** (the JPXDecode case in
+    `filter.go`) and the PDF-specific behaviors ISO 32000-1 7.4.9
+    documents for this filter specifically: a `/ColorSpace`-absent image
+    falls back to the JPX data's own embedded color space (from
+    `internal/jpx`'s JP2 box parsing), and `/SMaskInData` controls
+    whether an embedded opacity channel is used as the image's soft
+    mask.
+- **14g: fixtures** (built with this package's own from-scratch
+    encoder), **end-to-end render tests, and documentation** -
+    `tools/genfixtures`, `docs/capability-matrix.md`, and
+    `FIXTURES.md` all updated together, mirroring Phase 8c's own
+    closeout.
 
 **Exit criteria:** a representative JPX-encoded image fixture decodes
 and renders correctly, with any deliberately-unsupported JPEG 2000
@@ -2356,3 +2424,82 @@ in order, not rewritten later except to fix mistakes.
 - **Phase 17 closeout.** All three sub-phases (17a plumbing, 17b
     building a real mask from `/SMask`, 17c fixtures/tests/docs) are
     done; ExtGState-level soft masks are no longer a Backlog item.
+
+### Phase 14a: JPX package skeleton, container and main-header parsing — done (2026-09-10)
+
+- **New package `internal/jpx`.** Deliberately imports nothing from the
+    rest of this module - no `internal/syntax`, no `internal/pdferror` -
+    so it could later be pulled out into its own standalone Go module
+    with no code changes of its own; see its `doc.go` for the full
+    rationale, the sub-phase plan this Phase 14 section above now
+    mirrors, and the "write it from the specification, not ported from
+    another implementation" provenance decision (the same call Phase 8's
+    harder JBIG2 pieces made, for the same reason: no reference
+    implementation this project could legally and mechanically check
+    itself against). `errors.go` defines the package's own
+    `ErrMalformed`/`ErrUnsupported` sentinels rather than reusing
+    `internal/pdferror`'s, for the same import-direction reason.
+- **`box.go`.** JP2 file-format ("box") parsing (Annex I): `readBoxes`
+    walks a flat box sequence handling all three length encodings
+    (ordinary 4-byte, the `LBox==1` 8-byte extended form, and the
+    `LBox==0` "runs to the end of the data" form); `parseContainer`
+    locates the `jp2c` (codestream) box and reads `jp2h`'s `ihdr`
+    (image size/component count cross-check) and `colr` (embedded color
+    space - enumerated or ICC) children, which a JPXDecode image with no
+    PDF `/ColorSpace` falls back to per ISO 32000-1 7.4.9 (the actual
+    fallback wiring is 14f's job; this sub-phase only extracts the data).
+    `looksLikeJP2` distinguishes a JP2-wrapped file from a bare
+    codestream by its fixed 12-byte signature box, since nothing in a
+    PDF image dictionary says which form was used.
+- **`siz.go`, `coding.go`, `quant.go`.** Parse the SIZ (image/tile
+    geometry and per-component bit depth/signedness), COD/COC (coding
+    style: progression order, layer count, decomposition levels,
+    code-block size, wavelet filter, precinct sizes) and QCD/QCC
+    (quantization style and per-subband step sizes) marker segments -
+    COC/QCC's per-component overrides land in `Header.ComponentCoding`/
+    `ComponentQuant` maps, falling back to the COD/QCD-derived default
+    via `codingStyleFor`/`quantStyleFor`. `quant.go` deliberately derives
+    each QCD/QCC's subband count from the marker segment's own remaining
+    byte length rather than from the decomposition-level count a COD/COC
+    segment carries, so this file's parsing has no ordering dependency
+    on COD/COC being parsed first.
+- **`markers.go`.** `ParseHeader`, this sub-phase's top-level entry
+    point: strips a JP2 wrapper if present, then walks the codestream's
+    main header (SOC, SIZ, COD, QCD, any COC/QCC/COM, recognizing but
+    skipping TLM/PLM/PPM) followed by every tile-part (SOT through SOD,
+    tolerating per-tile COD/COC/QCD/QCC/PLT/PPT override segments by
+    skipping rather than applying them - see `parseTilePartHeader`'s doc
+    comment on why applying them needs per-tile state no sub-phase before
+    14b has reason to carry, and why a future sub-phase threading that
+    state through must remember to re-parse each tile's own header
+    rather than assuming the codestream-wide `Header` alone is enough
+    context). Each tile-part's compressed-data byte range is located via
+    its SOT's `Psot` field, or - the rarer `Psot=0` ("length not given")
+    case - by scanning forward for the next marker, which is safe because
+    of a guarantee the MQ coder's own output procedure upholds (a coded
+    `0xFF` byte is never followed by a byte with its top bit set; see
+    `tilePartData`'s doc comment, which cross-references
+    `internal/filter/jbig2mq.go`'s `byteOut` for the JBIG2 side of the
+    same guarantee). The RGN and POC markers are recognized and rejected
+    with `ErrUnsupported` naming them, per this phase's scope decision.
+- **Tests.** `testutil_test.go` is a from-scratch, byte-level
+    codestream/JP2-file builder (no real-world JPX sample exists to test
+    against - see doc.go's Provenance section) used by `markers_test.go`
+    (single- and multi-tile codestreams, COC/QCC overrides, JP2-wrapped
+    input, malformed-input table covering truncated/missing/corrupt
+    markers, the `Psot=0` scanning fallback, tolerating a missing
+    trailing EOC) and `box_test.go` (box extraction and color-space
+    parsing, the length-0 and extended-length box forms, a malformed-box
+    table). `FuzzParseHeader` seeds from the same builder; a 20-second,
+    20M-execution run found no panic or hang. Full test suite, `go vet`,
+    and `gofmt` all pass clean; `go build ./...` succeeds with the new
+    package wired into the module.
+- **What's carried forward.** No entropy decoding, wavelet transform, or
+    pixel output exists yet - `ParseHeader` only describes geometry,
+    coding/quantization parameters, and tile-part byte ranges. Per-tile
+    COD/COC/QCD/QCC overrides are parsed but not yet applied (see
+    `parseTilePartHeader`'s doc comment above). Nothing in
+    `internal/filter` or `docs/capability-matrix.md` changes yet - a
+    JPXDecode stream still fails with `ErrUnsupported`, unchanged from
+    before this sub-phase, since no decoding capability exists to wire in
+    until 14f. See this section's sub-phase list above for 14b onward.

@@ -154,6 +154,64 @@ func FuzzParseCFFFont(f *testing.F) {
 	})
 }
 
+// FuzzParseType1Font is type1.go's counterpart to FuzzParseCFFFont
+// above: the same "never panics, always terminates" property, applied
+// to this file's own parsing surface (eexec/charstring decryption, the
+// PostScript-source tokenizer parseType1Private and friends walk) and,
+// for every glyph a successful parse reports, the Type 1 Charstring
+// interpreter (type1Font.GlyphOutline) that parse unlocks - including
+// its callothersubr-driven flex/hint-replacement handling
+// (opCallothersubr), which is by far this file's largest attack surface
+// for hostile or corrupted input in the same way charstringInterp.exec
+// is cff.go's.
+func FuzzParseType1Font(f *testing.F) {
+	notdef := new(t1).num(0).num(0).op(t1Hsbw).op(t1Endchar).bytes()
+	seedData, length1, length2 := EncodeType1FontProgram([]Type1TestGlyph{
+		{Name: ".notdef", Charstring: notdef},
+		{Name: "A", Charstring: squareType1Charstring()},
+	}, nil, 0)
+	f.Add(seedData, length1, length2)
+
+	// A second seed exercising callsubr and the flex OtherSubrs idiom -
+	// the same bytecode shape TestType1_Flex builds and explains.
+	flex := new(t1)
+	flex.num(0).num(0).op(t1Hsbw)
+	flex.num(100).num(100).op(t1Rmoveto)
+	flex.num(0).num(1).esc(t1EscCallother)
+	for _, d := range [][2]int{{5, 5}, {15, 15}, {15, -15}, {15, 15}, {15, 15}, {15, -15}, {15, 15}} {
+		flex.num(d[0]).num(d[1]).op(t1Rmoveto)
+		flex.num(0).num(2).esc(t1EscCallother)
+	}
+	flex.num(50).num(195).num(135).num(3).num(0).esc(t1EscCallother)
+	flex.esc(t1EscPop).esc(t1EscPop).esc(t1EscSetCur)
+	flex.op(t1Endchar)
+
+	subrCaller := new(t1).num(0).op(t1Callsubr).op(t1Endchar).bytes()
+	subr0 := new(t1).num(100).num(0).op(t1Rlineto).op(t1Return).bytes()
+	flexData, flexLength1, flexLength2 := EncodeType1FontProgram([]Type1TestGlyph{
+		{Name: "A", Charstring: flex.bytes()},
+		{Name: "B", Charstring: subrCaller},
+	}, [][]byte{subr0}, 0)
+	f.Add(flexData, flexLength1, flexLength2)
+
+	f.Add([]byte{}, 0, 0)
+	f.Add([]byte("currentfile eexec"), 0, 0)
+
+	f.Fuzz(func(t *testing.T, data []byte, length1, length2 int) {
+		font, ok := parseType1Font(data, length1, length2)
+		if !ok {
+			return
+		}
+		limit := len(font.charstrings)
+		if limit > 4096 {
+			limit = 4096
+		}
+		for gid := 0; gid < limit; gid++ {
+			font.GlyphOutline(uint16(gid)) //nolint:errcheck // only absence of a panic/hang is under test
+		}
+	})
+}
+
 // FuzzParseCMap feeds arbitrary byte slices into parseCMap (cidcmap.go) -
 // an embedded Type0 font's /Encoding stream, or (once a caller has
 // configured pdfviewer.WithPredefinedCMaps) a predefined CJK encoding

@@ -17,18 +17,17 @@ import (
 // (/FontFile for a Type 1 program, /FontFile2 for TrueType, /FontFile3
 // for a CFF/Type1C or OpenType/CFF program, or no /FontFile* at all for
 // a non-embedded font expected to be supplied by whatever renders the
-// page), this package parses /FontFile2 (see truetype.go) and
-// /FontFile3 (see cff.go and loadEmbeddedCFF below) - tried in that
-// order (see loadSimpleFont). Type 1's own charstring format (/FontFile,
-// distinct from - and, despite the similar name, not read by - cff.go's
-// CFF/Type2 support) remains unimplemented (see docs/capability-matrix.md),
-// and a non-embedded font's actual outlines are simply not available at
-// all without querying a system font service, which the README's
-// "Dependency and safety policy" forbids this package from ever doing
-// (see this package's own doc comment). Both of those remaining cases
-// still produce a fully usable Font - see font.go's doc comment on
-// Font's fallback policy - just one that paints notdefGlyph's
-// placeholder box instead of a real outline.
+// page), this package parses /FontFile2 (see truetype.go), /FontFile3
+// (see cff.go and loadEmbeddedCFF below), and /FontFile (see type1.go
+// and loadEmbeddedType1 below) - tried in that order (see
+// loadSimpleFont). A non-embedded font's actual outlines are simply not
+// available at all without querying a system font service, which the
+// README's "Dependency and safety policy" forbids this package from
+// ever doing (see this package's own doc comment) - unless font
+// substitution (trySubstitute below) is enabled and finds a usable
+// stand-in. Even without that, this still produces a fully usable Font
+// - see font.go's doc comment on Font's fallback policy - just one that
+// paints notdefGlyph's placeholder box instead of a real outline.
 const defaultMissingWidth = 500
 
 // loadSimpleFont builds a Font from a simple font dictionary.
@@ -60,22 +59,26 @@ func loadSimpleFont(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	// Try an embedded TrueType program first (/FontFile2, by far the
 	// most common case for a simple font this package can extract real
 	// outlines from), then an embedded CFF program (/FontFile3 - see
-	// loadEmbeddedCFF's doc comment for the two shapes it accepts).
-	// Exactly one of these ever succeeds in practice (a font dictionary
-	// embeds at most one font program), but trying both in order rather
-	// than switching on /Subtype keeps this package tolerant of a
-	// dictionary whose /Subtype does not quite match which /FontFile*
-	// entry it actually carries - the same "trust what is actually
-	// there over what a field merely claims" precedent probeFace/
-	// ProbeFontFile already establish for a candidate font file.
+	// loadEmbeddedCFF's doc comment for the two shapes it accepts), then
+	// an embedded Type 1 program (/FontFile - see type1.go). Exactly one
+	// of these ever succeeds in practice (a font dictionary embeds at
+	// most one font program), but trying all three in order rather than
+	// switching on /Subtype keeps this package tolerant of a dictionary
+	// whose /Subtype does not quite match which /FontFile* entry it
+	// actually carries - the same "trust what is actually there over
+	// what a field merely claims" precedent probeFace/ProbeFontFile
+	// already establish for a candidate font file.
 	if sfnt, ok := loadEmbeddedTrueType(descriptor, resolver); ok {
 		f.glyphSource = &sfnt
 		f.lookupGID = simpleGlyphLookup(&sfnt, encoding, symbolic)
 	} else if cff, ok := loadEmbeddedCFF(descriptor, resolver); ok {
 		f.glyphSource = &cff
 		f.lookupGID = simpleRuneGlyphLookup(&cff, encoding)
+	} else if t1, ok := loadEmbeddedType1(descriptor, resolver); ok {
+		f.glyphSource = &t1
+		f.lookupGID = simpleRuneGlyphLookup(&t1, encoding)
 	} else if !trySubstitute(f, dict, resolver, encoding) {
-		diag.Note(resolver, "font %v (%v) has no usable embedded TrueType or CFF outline data (no /FontFile2 or /FontFile3, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"], dict["Subtype"])
+		diag.Note(resolver, "font %v (%v) has no usable embedded TrueType, CFF, or Type 1 outline data (no /FontFile2, /FontFile3, or /FontFile, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"], dict["Subtype"])
 	}
 	return f, nil
 }
@@ -296,6 +299,66 @@ func loadEmbeddedCFF(descriptor syntax.Dictionary, resolver Resolver) (cffFont, 
 		}
 	}
 	return cffFont{}, false
+}
+
+// readType1FontFileStream resolves and filter-decodes descriptor's
+// /FontFile stream (a Type 1 embedded font program - see type1.go) and
+// also returns its /Length1 and /Length2 dictionary entries, resolving
+// one level of indirect reference for each exactly like every other
+// numeric dictionary entry this package reads (see, for example,
+// simpleWidths's identical resolveIfRef-then-numberValue pattern).
+// Unlike readFontFileStream (used for /FontFile2 and /FontFile3, whose
+// formats are entirely self-describing once decoded), a /FontFile
+// stream's cleartext-versus-encrypted-binary boundary is not itself
+// recoverable from the decoded bytes alone without these two lengths -
+// see parseType1Font's fallback behavior for when either is absent or
+// untrustworthy. ok=false for every reason readFontFileStream's own
+// doc comment already lists (missing, unresolvable, not a stream, or
+// undecodable) - /Length1 and /Length2 being absent is not by itself
+// such a failure, since parseType1Font has its own recovery for that.
+func readType1FontFileStream(descriptor syntax.Dictionary, resolver Resolver) (data []byte, length1, length2 int, ok bool) {
+	if descriptor == nil {
+		return nil, 0, 0, false
+	}
+	ref, ok := descriptor["FontFile"]
+	if !ok {
+		return nil, 0, 0, false
+	}
+	resolved, err := resolveIfRef(resolver, ref)
+	if err != nil {
+		return nil, 0, 0, false
+	}
+	stream, ok := resolved.(syntax.Stream)
+	if !ok {
+		return nil, 0, 0, false
+	}
+	data, err = resolver.DecodeStream(stream)
+	if err != nil {
+		return nil, 0, 0, false
+	}
+
+	if v, err := resolveIfRef(resolver, stream.Dict["Length1"]); err == nil {
+		if n, ok := numberValue(v); ok {
+			length1 = int(n)
+		}
+	}
+	if v, err := resolveIfRef(resolver, stream.Dict["Length2"]); err == nil {
+		if n, ok := numberValue(v); ok {
+			length2 = int(n)
+		}
+	}
+	return data, length1, length2, true
+}
+
+// loadEmbeddedType1 reads and parses descriptor's /FontFile stream -
+// see type1.go for the format itself. Returns ok=false if there is
+// none, it cannot be resolved, or it fails to parse.
+func loadEmbeddedType1(descriptor syntax.Dictionary, resolver Resolver) (type1Font, bool) {
+	data, length1, length2, ok := readType1FontFileStream(descriptor, resolver)
+	if !ok {
+		return type1Font{}, false
+	}
+	return parseType1Font(data, length1, length2)
 }
 
 // simpleGlyphLookup returns the lookupGID function (see Font's doc

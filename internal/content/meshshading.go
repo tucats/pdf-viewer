@@ -364,8 +364,20 @@ func (in *interpreter) buildMeshShading(dict syntax.Dictionary, stream syntax.St
 			return nil, pdferror.Malformedf("mesh shading /VerticesPerRow must be at least 2, got %d", verticesPerRow)
 		}
 		triangles = decodeType5Mesh(br, params, verticesPerRow)
+	case 6:
+		bitsPerFlag, err := requiredIntEntry(in.resolver, dict, "BitsPerFlag")
+		if err != nil {
+			return nil, err
+		}
+		if !validMeshBitWidth(bitsPerFlag, true) {
+			return nil, pdferror.Malformedf("mesh shading /BitsPerFlag %d is not one of 2, 4, 8", bitsPerFlag)
+		}
+		triangles, err = decodeType6Mesh(br, params, bitsPerFlag)
+		if err != nil {
+			return nil, err
+		}
 	default:
-		return nil, pdferror.Unsupportedf("mesh shading type %d (Coons/tensor patch mesh shadings are not yet supported)", shadingType)
+		return nil, pdferror.Unsupportedf("mesh shading type %d (tensor-product patch mesh shadings are not yet supported)", shadingType)
 	}
 
 	return &graphics.Shading{
@@ -461,4 +473,243 @@ func decodeType5Mesh(br *bitReader, p meshParams, verticesPerRow int) []graphics
 	// the same "tolerate truncated trailing data" policy
 	// decodeType4Mesh's own final-triangle handling uses.
 	return latticeToTriangles(rows)
+}
+
+// meshPatch is one decoded Coons (Type 6) or tensor-product (Type 7)
+// patch's full 4x4 grid of bicubic Bezier control points, plus its four
+// corner colors - the shape both patch types reduce to before rendering
+// (see patchToTriangles), even though they arrive at it differently
+// (Type 6 computes its 4 internal control points from the 12 boundary
+// ones; Type 7 reads all 16 directly from the stream - see
+// decodeType6Mesh/decodeType7Mesh).
+//
+// pts is indexed pts[row*4+col], row and col both running 0 (u=0 or v=0)
+// to 3 (u=1 or v=1) - row is the "v" direction, col the "u" direction, an
+// arbitrary but fixed choice matching patchToTriangles' own use of it.
+// The four corners are pts[0] (u=0,v=0), pts[3] (u=1,v=0), pts[12]
+// (u=0,v=1), and pts[15] (u=1,v=1) - colors follows that same order:
+// colors[0]<->pts[0], colors[1]<->pts[3], colors[2]<->pts[12],
+// colors[3]<->pts[15].
+type meshPatch struct {
+	pts    [16]point2D
+	colors [4]graphics.Color
+}
+
+// applyPatchBoundary fills patch's 12 boundary control points (every
+// index of pts except the 4 internal ones, 5, 6, 9, and 10) and all 4
+// corner colors from newPts/newCols, per 8.7.4.5.7's edge-flag rule
+// shared identically by Type 6 and Type 7 (only how many *internal*
+// points a patch carries differs between the two - see
+// decodeType6Mesh/decodeType7Mesh, which fill pts[5,6,9,10] themselves
+// after calling this):
+//
+//   - flag 0: an independent patch. newPts holds all 12 boundary points
+//     and newCols all 4 corner colors, read directly off the stream in
+//     the specification's own boundary-traversal order.
+//   - flags 1-3: this patch shares one edge (4 points, 2 colors) with the
+//     *previous* patch, each flag selecting a different edge of that
+//     previous patch and a different rotation - newPts holds only the
+//     remaining 8 new boundary points and newCols only the 2 new corner
+//     colors.
+//
+// This function's exact index arithmetic for flags 1-3 was cross-checked
+// against pdf.js (see this file's own doc comment) rather than derived
+// from the specification's prose alone, for the same reason 13b's own
+// entry in docs/PLAN2.md gives: a transposition here would silently
+// produce a plausible-but-wrong mesh, not an error.
+func applyPatchBoundary(patch *meshPatch, prev *meshPatch, flag uint32, newPts []point2D, newCols []graphics.Color) error {
+	switch flag {
+	case 0:
+		patch.pts[0], patch.pts[4], patch.pts[8], patch.pts[12] = newPts[0], newPts[1], newPts[2], newPts[3]
+		patch.pts[13], patch.pts[14], patch.pts[15] = newPts[4], newPts[5], newPts[6]
+		patch.pts[11], patch.pts[7], patch.pts[3], patch.pts[2], patch.pts[1] = newPts[7], newPts[8], newPts[9], newPts[10], newPts[11]
+		patch.colors[0], patch.colors[2], patch.colors[3], patch.colors[1] = newCols[0], newCols[1], newCols[2], newCols[3]
+	case 1:
+		patch.pts[12], patch.pts[8], patch.pts[4], patch.pts[0] = prev.pts[15], prev.pts[14], prev.pts[13], prev.pts[12]
+		patch.pts[13], patch.pts[14], patch.pts[15] = newPts[0], newPts[1], newPts[2]
+		patch.pts[11], patch.pts[7], patch.pts[3], patch.pts[2], patch.pts[1] = newPts[3], newPts[4], newPts[5], newPts[6], newPts[7]
+		patch.colors[2], patch.colors[0] = prev.colors[3], prev.colors[2]
+		patch.colors[3], patch.colors[1] = newCols[0], newCols[1]
+	case 2:
+		patch.pts[12], patch.pts[8], patch.pts[4], patch.pts[0] = prev.pts[3], prev.pts[7], prev.pts[11], prev.pts[15]
+		patch.pts[13], patch.pts[14], patch.pts[15] = newPts[0], newPts[1], newPts[2]
+		patch.pts[11], patch.pts[7], patch.pts[3], patch.pts[2], patch.pts[1] = newPts[3], newPts[4], newPts[5], newPts[6], newPts[7]
+		patch.colors[2], patch.colors[0] = prev.colors[1], prev.colors[3]
+		patch.colors[3], patch.colors[1] = newCols[0], newCols[1]
+	case 3:
+		patch.pts[12], patch.pts[8], patch.pts[4], patch.pts[0] = prev.pts[0], prev.pts[1], prev.pts[2], prev.pts[3]
+		patch.pts[13], patch.pts[14], patch.pts[15] = newPts[0], newPts[1], newPts[2]
+		patch.pts[11], patch.pts[7], patch.pts[3], patch.pts[2], patch.pts[1] = newPts[3], newPts[4], newPts[5], newPts[6], newPts[7]
+		patch.colors[2], patch.colors[0] = prev.colors[0], prev.colors[1]
+		patch.colors[3], patch.colors[1] = newCols[0], newCols[1]
+	default:
+		return pdferror.Malformedf("mesh patch: invalid edge flag %d", flag)
+	}
+	return nil
+}
+
+// coonsInternal evaluates one of a Coons patch's four internal Bezier
+// control points from its 8 nearest boundary points, via the standard
+// Coons-patch-to-bicubic-Bezier conversion formula (an informative
+// consequence of the Coons patch's own bilinear-blend definition, not
+// something this project invented): point = (-4*a - b + 6*(c+d) -
+// 2*(e+f) + 3*(g+h)) / 9. fillCoonsInternalPoints below supplies each of
+// the four internal points' own particular 8-point argument order.
+func coonsInternal(a, b, c, d, e, f, g, h point2D) point2D {
+	return point2D{
+		X: (-4*a.X - b.X + 6*(c.X+d.X) - 2*(e.X+f.X) + 3*(g.X+h.X)) / 9,
+		Y: (-4*a.Y - b.Y + 6*(c.Y+d.Y) - 2*(e.Y+f.Y) + 3*(g.Y+h.Y)) / 9,
+	}
+}
+
+// fillCoonsInternalPoints computes a Type 6 (Coons) patch's 4 internal
+// control points (pts[5], pts[6], pts[9], pts[10]) from its 12 boundary
+// points, already filled in by applyPatchBoundary - a Coons patch's own
+// data never carries these directly (unlike Type 7's tensor-product
+// patch, which reads them from the stream - see decodeType7Mesh, a later
+// sub-phase).
+func fillCoonsInternalPoints(patch *meshPatch) {
+	p := &patch.pts
+	p[5] = coonsInternal(p[0], p[15], p[4], p[1], p[12], p[3], p[13], p[7])
+	p[6] = coonsInternal(p[3], p[12], p[2], p[7], p[0], p[15], p[4], p[14])
+	p[9] = coonsInternal(p[12], p[3], p[8], p[13], p[0], p[15], p[11], p[1])
+	p[10] = coonsInternal(p[15], p[0], p[11], p[14], p[12], p[3], p[2], p[8])
+}
+
+// bernstein returns the four cubic Bernstein basis polynomial values at
+// parameter t in [0,1] - B0(t)=(1-t)^3, B1(t)=3t(1-t)^2, B2(t)=3t^2(1-t),
+// B3(t)=t^3 - the weights a cubic Bezier curve (or, applied along both
+// axes at once, a bicubic Bezier surface) blends its 4 (or 4x4) control
+// points by.
+func bernstein(t float64) [4]float64 {
+	mt := 1 - t
+	return [4]float64{mt * mt * mt, 3 * t * mt * mt, 3 * t * t * mt, t * t * t}
+}
+
+// lerpColor linearly interpolates between colors a (t=0) and b (t=1) -
+// used by patchToTriangles for a patch's *color*, which the specification
+// only ever blends bilinearly across a patch, never through the same
+// cubic Bezier basis its geometry uses.
+func lerpColor(a, b graphics.Color, t float64) graphics.Color {
+	return graphics.Color{
+		R: a.R + (b.R-a.R)*t,
+		G: a.G + (b.G-a.G)*t,
+		B: a.B + (b.B-a.B)*t,
+	}
+}
+
+// meshPatchSubdivisions is how many equal steps patchToTriangles divides
+// each of a patch's two parametric axes into - (meshPatchSubdivisions+1)^2
+// sample points, triangulated into 2*meshPatchSubdivisions^2 triangles
+// per patch. A fixed subdivision count, rather than pdf.js's own
+// area-adaptive density, is a deliberate simplification: correctness (a
+// patch's curved surface is approximated closely enough to look smooth
+// at typical page-rendering resolutions) rather than pdf.js's specific
+// performance tuning is this project's goal here. 16 is comfortably fine
+// enough that a patch spanning a large fraction of a typical page does
+// not show visible faceting, while keeping the triangle count per patch
+// bounded and small regardless of the patch's own device-space size.
+const meshPatchSubdivisions = 16
+
+// patchToTriangles evaluates patch's bicubic Bezier surface S(u,v) =
+// sum over r,c of B_r(v)*B_c(u)*pts[r*4+c] (see meshPatch's own doc
+// comment for the row=v/col=u indexing convention) at a regular
+// (meshPatchSubdivisions+1) x (meshPatchSubdivisions+1) grid of (u,v)
+// parameter values, bilinearly interpolating color the same way
+// buildLatticeFormTriangleMeshShading-style vertex grids do, and hands
+// the resulting lattice to latticeToTriangles - the same function Type 5
+// itself uses, since by this point a patch has been reduced to exactly
+// that shape.
+func patchToTriangles(patch meshPatch) []graphics.MeshTriangle {
+	n := meshPatchSubdivisions
+	rows := make([][]meshVertex, n+1)
+	for i := 0; i <= n; i++ {
+		v := float64(i) / float64(n)
+		bv := bernstein(v)
+		// The two color-interpolation edges at this row: u=0 (between the
+		// two "v" corners colors[0] and colors[2]) and u=1 (between
+		// colors[1] and colors[3]).
+		left := lerpColor(patch.colors[0], patch.colors[2], v)
+		right := lerpColor(patch.colors[1], patch.colors[3], v)
+
+		row := make([]meshVertex, n+1)
+		for j := 0; j <= n; j++ {
+			u := float64(j) / float64(n)
+			bu := bernstein(u)
+			var x, y float64
+			for r := 0; r < 4; r++ {
+				for c := 0; c < 4; c++ {
+					w := bv[r] * bu[c]
+					pt := patch.pts[r*4+c]
+					x += pt.X * w
+					y += pt.Y * w
+				}
+			}
+			row[j] = meshVertex{X: x, Y: y, C: lerpColor(left, right, u)}
+		}
+		rows[i] = row
+	}
+	return latticeToTriangles(rows)
+}
+
+// readPoints reads n consecutive (x, y) coordinate pairs - the shape a
+// Type 6 or Type 7 patch's own boundary/internal control points come in.
+func readPoints(br *bitReader, p meshParams, n int) []point2D {
+	pts := make([]point2D, n)
+	for i := range pts {
+		pts[i] = readCoordinate(br, p.bitsPerCoordinate, p.decode)
+	}
+	return pts
+}
+
+// readColors reads n consecutive colors, each already converted through
+// the optional /Function and the shading's color space via meshColor.
+func readColors(br *bitReader, p meshParams, n int) []graphics.Color {
+	cols := make([]graphics.Color, n)
+	for i := range cols {
+		cols[i] = meshColor(readColor(br, p.bitsPerComponent, p.decode, p.numComps), p.fn, p.cs)
+	}
+	return cols
+}
+
+// decodeType6Mesh implements 8.7.4.5.7 (Coons patch mesh): a stream of
+// patch records, each an edge flag followed by either 12 boundary control
+// points + 4 corner colors (flag 0, an independent patch) or 8 new
+// boundary points + 2 new colors (flags 1-3, sharing one edge with the
+// immediately preceding patch - see applyPatchBoundary). Patch records
+// are packed with no byte alignment at all (like Types 5 and 7, unlike
+// Type 4 - see this file's own doc comment). Each patch's 4 internal
+// control points are always derived from its own boundary
+// (fillCoonsInternalPoints) rather than read from the stream - the one
+// structural difference from Type 7's tensor-product patch.
+func decodeType6Mesh(br *bitReader, p meshParams, bitsPerFlag int) ([]graphics.MeshTriangle, error) {
+	var triangles []graphics.MeshTriangle
+	var prev *meshPatch
+	for br.hasData() {
+		flag := br.read(bitsPerFlag)
+		if flag > 3 {
+			return nil, pdferror.Malformedf("Type 6 mesh shading: invalid edge flag %d", flag)
+		}
+		if flag != 0 && prev == nil {
+			return nil, pdferror.Malformedf("Type 6 mesh shading: edge flag %d before any patch exists", flag)
+		}
+
+		nPts, nCols := 12, 4
+		if flag != 0 {
+			nPts, nCols = 8, 2
+		}
+		newPts := readPoints(br, p, nPts)
+		newCols := readColors(br, p, nCols)
+
+		var patch meshPatch
+		if err := applyPatchBoundary(&patch, prev, flag, newPts, newCols); err != nil {
+			return nil, err
+		}
+		fillCoonsInternalPoints(&patch)
+
+		triangles = append(triangles, patchToTriangles(patch)...)
+		patchCopy := patch
+		prev = &patchCopy
+	}
+	return triangles, nil
 }

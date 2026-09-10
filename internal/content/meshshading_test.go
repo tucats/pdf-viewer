@@ -3,6 +3,7 @@ package content
 import (
 	"testing"
 
+	"github.com/tucats/pdf-viewer/internal/graphics"
 	pdfimage "github.com/tucats/pdf-viewer/internal/image"
 	"github.com/tucats/pdf-viewer/internal/syntax"
 )
@@ -383,5 +384,193 @@ func TestDecodeType5MeshNoByteAlignmentBetweenVertices(t *testing.T) {
 	}
 	if diff := triangles[1].Y1 - 8; diff > eps || diff < -eps {
 		t.Fatalf("4th vertex Y = %v, want ~8", triangles[1].Y1)
+	}
+}
+
+func approxEqualPoint(t *testing.T, label string, got, want point2D) {
+	t.Helper()
+	const eps = 1e-9
+	if got.X-want.X > eps || got.X-want.X < -eps || got.Y-want.Y > eps || got.Y-want.Y < -eps {
+		t.Errorf("%s = %+v, want %+v", label, got, want)
+	}
+}
+
+// flatRectanglePatch returns a meshPatch whose 12 boundary points trace
+// the boundary of an axis-aligned 9x9 square with each edge's own 4
+// Bezier control points evenly spaced along that edge (0, 3, 6, 9) - the
+// specific shape that makes a Coons patch bilinear (perfectly flat, no
+// curvature), so its own well-known bilinear grid positions
+// (3,3)/(6,3)/(3,6)/(6,6) become an easy, independently-derivable
+// expected value for fillCoonsInternalPoints to be checked against.
+// Corner colors are red/green/blue/yellow at pts[0]/pts[3]/pts[12]/pts[15]
+// respectively.
+func flatRectanglePatch() meshPatch {
+	var patch meshPatch
+	patch.pts[0], patch.pts[1], patch.pts[2], patch.pts[3] = point2D{0, 0}, point2D{3, 0}, point2D{6, 0}, point2D{9, 0}
+	patch.pts[4], patch.pts[7] = point2D{0, 3}, point2D{9, 3}
+	patch.pts[8], patch.pts[11] = point2D{0, 6}, point2D{9, 6}
+	patch.pts[12], patch.pts[13], patch.pts[14], patch.pts[15] = point2D{0, 9}, point2D{3, 9}, point2D{6, 9}, point2D{9, 9}
+	patch.colors = [4]graphics.Color{{R: 1}, {G: 1}, {B: 1}, {R: 1, G: 1}}
+	return patch
+}
+
+func TestFillCoonsInternalPointsFlatRectangle(t *testing.T) {
+	patch := flatRectanglePatch()
+	fillCoonsInternalPoints(&patch)
+	approxEqualPoint(t, "pts[5]", patch.pts[5], point2D{3, 3})
+	approxEqualPoint(t, "pts[6]", patch.pts[6], point2D{6, 3})
+	approxEqualPoint(t, "pts[9]", patch.pts[9], point2D{3, 6})
+	approxEqualPoint(t, "pts[10]", patch.pts[10], point2D{6, 6})
+}
+
+// TestPatchToTrianglesCornersMatchControlPoints exercises a property of
+// *any* Bezier surface, flat or not: it interpolates its own 4 corner
+// control points exactly, since the Bernstein basis at u,v in {0,1}
+// reduces to a single weight of 1 (all others 0) - so the resulting
+// lattice's own 4 corners must equal patch.pts[0]/[3]/[12]/[15] and
+// patch.colors[0..3] exactly, regardless of internal-point placement or
+// meshPatchSubdivisions' own value.
+func TestPatchToTrianglesCornersMatchControlPoints(t *testing.T) {
+	patch := flatRectanglePatch()
+	fillCoonsInternalPoints(&patch)
+	triangles := patchToTriangles(patch)
+
+	wantTriangleCount := 2 * meshPatchSubdivisions * meshPatchSubdivisions
+	if len(triangles) != wantTriangleCount {
+		t.Fatalf("len(triangles) = %d, want %d", len(triangles), wantTriangleCount)
+	}
+
+	// The lattice's own first vertex (row 0, col 0) is triangles[0]'s
+	// first corner: u=0,v=0.
+	first := triangles[0]
+	approxEqualPoint(t, "(u=0,v=0) position", point2D{first.X0, first.Y0}, patch.pts[0])
+	if first.C0 != patch.colors[0] {
+		t.Fatalf("(u=0,v=0) color = %+v, want %+v", first.C0, patch.colors[0])
+	}
+}
+
+func TestApplyPatchBoundaryFlag0(t *testing.T) {
+	var patch meshPatch
+	newPts := []point2D{{0, 0}, {0, 3}, {0, 6}, {0, 9}, {3, 9}, {6, 9}, {9, 9}, {9, 6}, {9, 3}, {9, 0}, {6, 0}, {3, 0}}
+	newCols := []graphics.Color{{R: 1}, {B: 1}, {R: 1, G: 1}, {G: 1}} // red, blue, yellow, green
+	if err := applyPatchBoundary(&patch, nil, 0, newPts, newCols); err != nil {
+		t.Fatalf("applyPatchBoundary: %v", err)
+	}
+	approxEqualPoint(t, "pts[0]", patch.pts[0], point2D{0, 0})
+	approxEqualPoint(t, "pts[3]", patch.pts[3], point2D{9, 0})
+	approxEqualPoint(t, "pts[12]", patch.pts[12], point2D{0, 9})
+	approxEqualPoint(t, "pts[15]", patch.pts[15], point2D{9, 9})
+	if patch.colors[0] != (graphics.Color{R: 1}) || patch.colors[1] != (graphics.Color{G: 1}) ||
+		patch.colors[2] != (graphics.Color{B: 1}) || patch.colors[3] != (graphics.Color{R: 1, G: 1}) {
+		t.Fatalf("colors = %+v, want [red green blue yellow]", patch.colors)
+	}
+}
+
+// TestApplyPatchBoundaryFlag1SharesRightEdgeAsNewLeftEdge confirms flag
+// 1's specific rotation: the previous patch's pts[12,13,14,15] (its own
+// v=1 edge, u=0..1) becomes the new patch's pts[12,8,4,0] (v=1 down to
+// v=0, at u=0) - reversed order, not the same order, which is exactly the
+// kind of subtle transposition a hand-derivation could get backwards.
+func TestApplyPatchBoundaryFlag1SharesRightEdgeAsNewLeftEdge(t *testing.T) {
+	prev := flatRectanglePatch()
+	fillCoonsInternalPoints(&prev)
+
+	var patch meshPatch
+	newPts := []point2D{{20, 9}, {20, 6}, {20, 3}, {20, 0}, {17, 0}, {14, 0}, {11, 0}, {11, 3}}
+	newCols := []graphics.Color{{R: 1, B: 1}, {G: 1, B: 1}} // magenta, cyan
+	if err := applyPatchBoundary(&patch, &prev, 1, newPts, newCols); err != nil {
+		t.Fatalf("applyPatchBoundary: %v", err)
+	}
+	// New pts[12] (u=0,v=1) must equal prev's pts[15] (its own u=1,v=1
+	// corner); new pts[0] (u=0,v=0) must equal prev's pts[12] (u=0,v=1).
+	approxEqualPoint(t, "pts[12]", patch.pts[12], prev.pts[15])
+	approxEqualPoint(t, "pts[8]", patch.pts[8], prev.pts[14])
+	approxEqualPoint(t, "pts[4]", patch.pts[4], prev.pts[13])
+	approxEqualPoint(t, "pts[0]", patch.pts[0], prev.pts[12])
+	// The shared corners' colors carry over the same way: new colors[2]
+	// (pts[12]) = prev colors[3] (pts[15]); new colors[0] (pts[0]) = prev
+	// colors[2] (pts[12]).
+	if patch.colors[2] != prev.colors[3] {
+		t.Fatalf("colors[2] = %+v, want prev.colors[3] = %+v", patch.colors[2], prev.colors[3])
+	}
+	if patch.colors[0] != prev.colors[2] {
+		t.Fatalf("colors[0] = %+v, want prev.colors[2] = %+v", patch.colors[0], prev.colors[2])
+	}
+}
+
+func TestApplyPatchBoundaryInvalidFlagIsMalformed(t *testing.T) {
+	var patch meshPatch
+	if err := applyPatchBoundary(&patch, nil, 9, nil, nil); err == nil {
+		t.Fatalf("applyPatchBoundary with flag 9: want an error, got nil")
+	}
+}
+
+// writeType6Patch packs one Type 6 patch record (flag, nPts coordinate
+// pairs, nCols colors - all 8 bits wide) with no trailing byte alignment,
+// matching decodeType6Mesh's own continuous packing.
+func writeType6Patch(w *meshBitWriter, flag byte, pts []point2D, cols [][3]byte) {
+	w.write(uint32(flag), 8)
+	for _, p := range pts {
+		w.write(uint32(p.X), 8)
+		w.write(uint32(p.Y), 8)
+	}
+	for _, c := range cols {
+		w.write(uint32(c[0]), 8)
+		w.write(uint32(c[1]), 8)
+		w.write(uint32(c[2]), 8)
+	}
+}
+
+func TestDecodeType6MeshSinglePatch(t *testing.T) {
+	w := &meshBitWriter{}
+	// The same flat-rectangle boundary as flatRectanglePatch, scaled to
+	// byte-friendly values (0, 85, 170, 255 rather than 0, 3, 6, 9) so an
+	// 8-bit-per-coordinate stream represents it exactly.
+	pts := []point2D{
+		{0, 0}, {0, 85}, {0, 170}, {0, 255}, {85, 255}, {170, 255},
+		{255, 255}, {255, 170}, {255, 85}, {255, 0}, {170, 0}, {85, 0},
+	}
+	cols := [][3]byte{{255, 0, 0}, {0, 0, 255}, {255, 255, 0}, {0, 255, 0}} // red, blue, yellow, green
+	writeType6Patch(w, 0, pts, cols)
+	br := &bitReader{data: w.data}
+
+	params := meshParams{
+		bitsPerCoordinate: 8, bitsPerComponent: 8,
+		decode: []float64{0, 255, 0, 255, 0, 1, 0, 1, 0, 1}, numComps: 3, cs: deviceRGB(t),
+	}
+	triangles, err := decodeType6Mesh(br, params, 8)
+	if err != nil {
+		t.Fatalf("decodeType6Mesh: %v", err)
+	}
+	wantTriangleCount := 2 * meshPatchSubdivisions * meshPatchSubdivisions
+	if len(triangles) != wantTriangleCount {
+		t.Fatalf("len(triangles) = %d, want %d", len(triangles), wantTriangleCount)
+	}
+	first := triangles[0]
+	if diff := first.X0 - 0; diff > 0.01 || diff < -0.01 {
+		t.Fatalf("first vertex X = %v, want ~0", first.X0)
+	}
+	if first.C0.R < 0.99 {
+		t.Fatalf("first vertex color = %+v, want ~red", first.C0)
+	}
+}
+
+func TestDecodeType6MeshInvalidFlagIsMalformed(t *testing.T) {
+	w := &meshBitWriter{}
+	w.write(9, 8) // invalid flag
+	br := &bitReader{data: w.data}
+	params := meshParams{bitsPerCoordinate: 8, bitsPerComponent: 8, decode: []float64{0, 1, 0, 1, 0, 1, 0, 1, 0, 1}, numComps: 3, cs: deviceRGB(t)}
+	if _, err := decodeType6Mesh(br, params, 8); err == nil {
+		t.Fatalf("decodeType6Mesh with edge flag 9: want an error, got nil")
+	}
+}
+
+func TestDecodeType6MeshFlag1WithoutPriorPatchIsMalformed(t *testing.T) {
+	w := &meshBitWriter{}
+	w.write(1, 8) // flag 1 with no earlier patch to share from
+	br := &bitReader{data: w.data}
+	params := meshParams{bitsPerCoordinate: 8, bitsPerComponent: 8, decode: []float64{0, 1, 0, 1, 0, 1, 0, 1, 0, 1}, numComps: 3, cs: deviceRGB(t)}
+	if _, err := decodeType6Mesh(br, params, 8); err == nil {
+		t.Fatalf("decodeType6Mesh with edge flag 1 and no prior patch: want an error, got nil")
 	}
 }

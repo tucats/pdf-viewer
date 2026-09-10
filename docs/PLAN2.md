@@ -261,7 +261,7 @@ checkbox).
 
 ## Phase 13: Mesh and function-based shadings (Types 1, 4-7)
 
-**Status: 13a-13c done; 13d-13e (Types 6-7, Coons/tensor patch meshes) in progress.**
+**Status: 13a-13d done; 13e (Type 7, tensor-product patch mesh) in progress.**
 
 Axial and radial shadings (Types 2-3, the large majority of real-world
 gradients) are done. Function-based (Type 1) and mesh shadings (Types
@@ -1657,3 +1657,92 @@ in order, not rewritten later except to fix mistakes.
     triangle grid before `latticeToTriangles` can take over, rather than
     reading the mesh's final triangle shape directly off the stream the
     way Types 4 and 5 do.
+
+### Phase 13d: Type 6 (Coons patch mesh) — done (2026-09-10)
+
+- **The shape of the problem.** A Coons patch is not read off the stream
+    as a finished triangle mesh the way Types 4/5 are - it is 12 boundary
+    Bezier control points (plus 4 corner colors) describing a *curved*
+    surface, which has to be evaluated at many (u,v) parameter pairs and
+    only then triangulated. `meshPatch` (`internal/content/meshshading.go`)
+    holds one patch's full 4x4 control-point grid (the 12 boundary points
+    plus 4 internal ones this sub-phase derives - see below) and its 4
+    corner colors; `patchToTriangles` evaluates the standard bicubic
+    tensor-product Bezier surface formula S(u,v) = sum of
+    B_r(v)*B_c(u)*P(r,c) over a fixed 16x16 grid of (u,v) samples
+    (`bernstein` supplies the four cubic Bernstein basis values at a given
+    parameter), bilinearly interpolates color across that same grid
+    (`lerpColor` - colors are never blended through the cubic geometry
+    basis, only bilinearly, per spec), and hands the resulting lattice to
+    `latticeToTriangles` - the exact function Type 5 already uses,
+    confirming 13b's "build the mesh-triangle plumbing once, reuse it"
+    plan paid off. A fixed subdivision count (`meshPatchSubdivisions`,
+    16) is a deliberate simplification against pdf.js's own
+    area-adaptive density - see that constant's doc comment for why this
+    project chose correctness/simplicity over that specific performance
+    tuning.
+- **Deriving the 4 internal control points.** A Coons patch's own data
+    never includes them (Type 7's tensor-product patch does - a later
+    sub-phase); they are computed from the 12 boundary points via the
+    standard, specification-informative Coons-to-bicubic-Bezier
+    conversion formula (`coonsInternal`, applied by
+    `fillCoonsInternalPoints`) - point = (-4a - b + 6(c+d) - 2(e+f) +
+    3(g+h)) / 9 for each internal point's own particular 8 nearest
+    boundary points. Verified against an independently-derivable case
+    (`TestFillCoonsInternalPointsFlatRectangle`): a perfectly flat,
+    straight-edged rectangular patch's internal points must fall exactly
+    on that rectangle's own bilinear 1/3, 2/3 grid positions, a property
+    computable by hand without reference to this formula at all.
+- **`applyPatchBoundary`** fills a patch's 12 boundary points and 4
+    corner colors from the stream's own newly-read points/colors, per
+    8.7.4.5.7's edge-flag rule - identical in shape to Type 4's edge
+    flags but operating on a patch's whole shared *edge* (4 points, 2
+    colors) rather than a triangle's single shared vertex: flag 0 is an
+    independent patch (all 12 points, all 4 colors read fresh); flags 1-3
+    each share one edge (4 points, 2 colors) with the *previous* patch,
+    reusing 8 already-known points and reading only the remaining 8 new
+    ones. This function is shared verbatim by Type 7 (a later sub-phase),
+    since the two patch types' boundary-sharing rule is identical - only
+    how each type's 4 *internal* points are obtained differs. As with
+    13b/13c, this function's specific index arithmetic for flags 1-3 was
+    cross-checked against pdf.js rather than derived from the
+    specification's prose alone, and is directly unit-tested
+    (`TestApplyPatchBoundaryFlag1SharesRightEdgeAsNewLeftEdge`) against
+    the exact rotation it performs, not just "no error, plausible output".
+- **`decodeType6Mesh`** walks the patch stream (no per-patch byte
+    alignment, like Types 5 and 7, unlike Type 4), validates each edge
+    flag, calls `applyPatchBoundary` then `fillCoonsInternalPoints`, and
+    accumulates every patch's own `patchToTriangles` output into one flat
+    list.
+- **`internal/content/shading.go` wiring.** `buildMeshShading`'s type
+    switch gained a `case 6`; `TestDoShadingUnsupportedTypeIsError` moved
+    from Type 6 to Type 7 (still genuinely unsupported).
+- **Tests.** `internal/content/meshshading_test.go` gained: the flat-
+    rectangle internal-point derivation test above;
+    `TestPatchToTrianglesCornersMatchControlPoints`, which exploits a
+    property of *any* Bezier surface (it interpolates its own corner
+    control points exactly, flat or curved) to check `patchToTriangles`
+    without needing a from-scratch numerical integration of the curved
+    case; `applyPatchBoundary` flag-0 and flag-1 unit tests plus its
+    invalid-flag error case; and `decodeType6Mesh` tests (a full
+    single-patch round trip through real packed bytes, an invalid flag,
+    and flag-1-with-no-prior-patch). `tools/genfixtures`'s
+    `buildCoonsPatchMeshShading` builds `mesh-shading-type6.pdf`: one flat
+    (straight-edged) patch covering the whole page with the *same* four
+    corners/colors as 13c's `mesh-shading-type5.pdf` - deliberately, so a
+    flat Coons patch's bilinear interior can be cross-checked against a
+    lattice mesh's own known-correct interpolation before a genuinely
+    curved patch is ever involved. `pdfviewer_shading_test.go`'s
+    `TestRenderCoonsPatchMeshShading` reuses the same dominant-color-per-
+    corner checks as the Type 5 render test, and the fixture was added to
+    `TestRenderMatchesReferenceImages`'s golden-image list (visually
+    confirmed near-identical to the Type 5 fixture's own reference image).
+    Full test suite, `go build`, `go vet`, and the race detector all pass
+    clean; a 15-second `FuzzOpenAndRender` run found no panic or hang.
+- **What's carried forward.** Type 7 (tensor-product patch mesh) remains
+    `ErrUnsupported`, tracked as Phase 13e - expected to be a comparatively
+    small addition on top of this sub-phase, since `applyPatchBoundary`,
+    `patchToTriangles`, and every other piece of shared patch machinery
+    already exist; Type 7 only needs its own decode function reading 4
+    extra points directly per patch instead of calling
+    `fillCoonsInternalPoints`.

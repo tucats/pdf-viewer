@@ -120,6 +120,32 @@ func TestRenderLatticeFormTriangleMeshShading(t *testing.T) {
 	}
 }
 
+// TestRenderCoonsPatchMeshShading exercises "sh" painting a Type 6
+// (Coons patch mesh) shading: one flat (straight-edged) patch covering
+// the whole page, red/green/blue/yellow at its four corners - the same
+// corners and colors as TestRenderLatticeFormTriangleMeshShading, since
+// tools/genfixtures's buildCoonsPatchMeshShading deliberately makes this
+// patch bilinear so its expected pixel colors match that test's.
+func TestRenderCoonsPatchMeshShading(t *testing.T) {
+	img := renderFixture(t, "mesh-shading-type6.pdf")
+	dominant := func(x, y int, wantChannel int, other1, other2 int) {
+		t.Helper()
+		vals := []int{0, 0, 0}
+		vals[0], vals[1], vals[2], _ = rgba8(img, x, y)
+		if vals[wantChannel] < 200 || vals[other1] > 60 || vals[other2] > 60 {
+			t.Errorf("pixel (%d,%d) = (%d,%d,%d), want channel %d clearly dominant", x, y, vals[0], vals[1], vals[2], wantChannel)
+		}
+	}
+	dominant(1, 98, 0, 1, 2)  // near red, PDF-space (0,0): bottom-left
+	dominant(98, 98, 1, 0, 2) // near green, PDF-space (100,0): bottom-right
+	dominant(1, 1, 2, 0, 1)   // near blue, PDF-space (0,100): top-left
+
+	r, g, b, _ := rgba8(img, 98, 1)
+	if r < 200 || g < 200 || b > 60 {
+		t.Errorf("pixel (98,1) = (%d,%d,%d), want near-yellow (high R, high G, low B)", r, g, b)
+	}
+}
+
 // TestRenderShadingPatternFill exercises a shading pattern selected via
 // "cs Pattern"/"scn" used to fill an 80x80 square: the gradient (black
 // to white, spanning the square's own x extent) must be visible inside

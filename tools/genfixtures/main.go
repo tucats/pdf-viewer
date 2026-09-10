@@ -117,6 +117,7 @@ func main() {
 		{"function-based-shading.pdf", buildFunctionBasedShading()},
 		{"mesh-shading-type4.pdf", buildFreeFormTriangleMeshShading()},
 		{"mesh-shading-type5.pdf", buildLatticeFormTriangleMeshShading()},
+		{"mesh-shading-type6.pdf", buildCoonsPatchMeshShading()},
 		{"form-xobject.pdf", buildFormXObject()},
 		{"annotation-appearance.pdf", buildAnnotationAppearance()},
 		{"annotation-hidden.pdf", buildAnnotationHidden()},
@@ -1333,6 +1334,63 @@ func buildLatticeFormTriangleMeshShading() []byte {
 
 	shDict := fmt.Sprintf("<< /ShadingType 5 /ColorSpace /DeviceRGB "+
 		"/BitsPerCoordinate 8 /BitsPerComponent 8 /VerticesPerRow 2 "+
+		"/Decode [0 100 0 100 0 1 0 1 0 1] /Length %d >>", len(w.data))
+	b.addObject(5, 0, shDict, w.data)
+
+	return b.finish(1)
+}
+
+// buildCoonsPatchMeshShading returns a single 100x100-point page whose
+// content stream paints a named Coons patch mesh (/ShadingType 6)
+// directly via "sh": one patch, its 12 boundary control points tracing a
+// perfectly flat (straight-edged) rectangle covering the entire page -
+// red at PDF-space (0,0), green at (100,0), blue at (0,100), yellow at
+// (100,100), the same four corners and colors as
+// buildLatticeFormTriangleMeshShading's Type 5 fixture, deliberately: a
+// flat Coons patch's interior is bilinear, identical in principle to a
+// lattice mesh's own interpolation, so this fixture's expected pixel
+// colors are (up to the coarseness of internal/content's fixed
+// subdivision count) the same as that fixture's - a useful cross-check
+// that Type 6 patch subdivision reproduces ordinary bilinear shading
+// correctly before ever exercising a genuinely curved patch.
+//
+// The boundary point order matches 8.7.4.5.7's own traversal (see
+// internal/content/meshshading.go's applyPatchBoundary doc comment):
+// starting at the red corner, up the left edge, across the top, down the
+// right edge, and back across the bottom - with each edge's two
+// non-corner control points evenly spaced (85, 170 out of 255) so an
+// 8-bit-per-coordinate stream can represent them exactly, keeping this
+// patch's edges perfectly straight (a curved edge would need points that
+// are not evenly spaced).
+func buildCoonsPatchMeshShading() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Shading << /Sh0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n0 0 100 100 re\nW\nn\n/Sh0 sh\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	w := &meshBitWriter{}
+	w.write(0, 8) // edge flag: 0, an independent patch
+	boundary := [][2]byte{
+		{0, 0}, {0, 85}, {0, 170}, {0, 255}, {85, 255}, {170, 255},
+		{255, 255}, {255, 170}, {255, 85}, {255, 0}, {170, 0}, {85, 0},
+	}
+	for _, p := range boundary {
+		w.write(uint32(p[0]), 8)
+		w.write(uint32(p[1]), 8)
+	}
+	colors := [][3]byte{{255, 0, 0}, {0, 0, 255}, {255, 255, 0}, {0, 255, 0}} // red, blue, yellow, green
+	for _, c := range colors {
+		w.write(uint32(c[0]), 8)
+		w.write(uint32(c[1]), 8)
+		w.write(uint32(c[2]), 8)
+	}
+
+	shDict := fmt.Sprintf("<< /ShadingType 6 /ColorSpace /DeviceRGB "+
+		"/BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 "+
 		"/Decode [0 100 0 100 0 1 0 1 0 1] /Length %d >>", len(w.data))
 	b.addObject(5, 0, shDict, w.data)
 

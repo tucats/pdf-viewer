@@ -363,6 +363,149 @@ func TestCropBoxDegenerateFallsBackToMediaBox(t *testing.T) {
 	}
 }
 
+// pageBoxAccessors maps each non-inherited page box's PDF name to its
+// Page field, so the BleedBox/TrimBox/ArtBox tests below (which all
+// share identical rules - see resolveNonInheritedBox's doc comment) can
+// be written once and run against all three, rather than tripled by
+// hand.
+var pageBoxAccessors = []struct {
+	name string
+	get  func(Page) Rect
+}{
+	{"BleedBox", func(p Page) Rect { return p.BleedBox }},
+	{"TrimBox", func(p Page) Rect { return p.TrimBox }},
+	{"ArtBox", func(p Page) Rect { return p.ArtBox }},
+}
+
+// TestNonInheritedBoxDefaultsToCropBox confirms BleedBox/TrimBox/ArtBox
+// each default to the page's own (already-resolved) CropBox when the
+// page's dictionary has no entry for that box at all - not to MediaBox
+// directly - per the specification's stated default (ISO 32000-1
+// Table 30).
+func TestNonInheritedBoxDefaultsToCropBox(t *testing.T) {
+	for _, box := range pageBoxAccessors {
+		t.Run(box.name, func(t *testing.T) {
+			data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /CropBox [10 10 600 780] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+`)
+			d := openTestDocument(t, data)
+			page := d.Page(0)
+			want := page.CropBox
+			if got := box.get(page); got != want {
+				t.Errorf("%s = %+v, want %+v (should default to CropBox)", box.name, got, want)
+			}
+		})
+	}
+}
+
+// TestNonInheritedBoxIsNotInherited confirms BleedBox/TrimBox/ArtBox are
+// NOT inherited from an ancestor Pages node - unlike MediaBox/CropBox/
+// Resources/Rotate, the specification does not mark them inheritable
+// (see each field's own doc comment on Page), so a value set only on an
+// intermediate node must be ignored entirely, leaving the leaf page's
+// own CropBox-derived default in effect instead of the ancestor's value.
+func TestNonInheritedBoxIsNotInherited(t *testing.T) {
+	for _, box := range pageBoxAccessors {
+		t.Run(box.name, func(t *testing.T) {
+			data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /`+box.name+` [20 20 400 400] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R >> endobj
+`)
+			d := openTestDocument(t, data)
+			page := d.Page(0)
+			want := page.CropBox // the ancestor's box entry must be ignored
+			if got := box.get(page); got != want {
+				t.Errorf("%s = %+v, want %+v (an ancestor's own %s must not be inherited)", box.name, got, want, box.name)
+			}
+		})
+	}
+}
+
+// TestPageOwnNonInheritedBoxOverridesDefault confirms a page's own
+// /BleedBox, /TrimBox, or /ArtBox entry takes effect when present
+// directly on the leaf page dictionary.
+func TestPageOwnNonInheritedBoxOverridesDefault(t *testing.T) {
+	for _, box := range pageBoxAccessors {
+		t.Run(box.name, func(t *testing.T) {
+			data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] /CropBox [10 10 600 780] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /`+box.name+` [50 50 200 200] >> endobj
+`)
+			d := openTestDocument(t, data)
+			want := Rect{LLX: 50, LLY: 50, URX: 200, URY: 200}
+			if got := box.get(d.Page(0)); got != want {
+				t.Errorf("%s = %+v, want %+v (page's own box should win)", box.name, got, want)
+			}
+		})
+	}
+}
+
+// TestNonInheritedBoxIsClippedToMediaBox mirrors
+// TestCropBoxIsClippedToMediaBox for BleedBox/TrimBox/ArtBox: a box that
+// extends beyond /MediaBox is clipped to it, per the same specification
+// rule CropBox itself follows (clipToMediaBox).
+func TestNonInheritedBoxIsClippedToMediaBox(t *testing.T) {
+	for _, box := range pageBoxAccessors {
+		t.Run(box.name, func(t *testing.T) {
+			data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /`+box.name+` [-50 -50 150 150] >> endobj
+`)
+			d := openTestDocument(t, data)
+			want := Rect{LLX: 0, LLY: 0, URX: 100, URY: 100}
+			if got := box.get(d.Page(0)); got != want {
+				t.Errorf("%s = %+v, want %+v (should be clipped to MediaBox)", box.name, got, want)
+			}
+		})
+	}
+}
+
+// TestNonInheritedBoxDegenerateFallsBackToMediaBox mirrors
+// TestCropBoxDegenerateFallsBackToMediaBox: a box that does not overlap
+// /MediaBox at all falls back to the whole MediaBox rather than
+// producing a degenerate page.
+func TestNonInheritedBoxDegenerateFallsBackToMediaBox(t *testing.T) {
+	for _, box := range pageBoxAccessors {
+		t.Run(box.name, func(t *testing.T) {
+			data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 100 100] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /`+box.name+` [200 200 300 300] >> endobj
+`)
+			d := openTestDocument(t, data)
+			page := d.Page(0)
+			if got := box.get(page); got != page.MediaBox {
+				t.Errorf("%s = %+v, MediaBox = %+v, want them equal when %s does not overlap MediaBox at all", box.name, got, page.MediaBox, box.name)
+			}
+		})
+	}
+}
+
+// TestNonInheritedBoxResolvesIndirectReference confirms an own /BleedBox
+// entry written as an indirect reference, rather than a direct array -
+// legal PDF, and exactly the shape mergeInherited already tolerates for
+// /MediaBox/CropBox/Resources/Rotate - resolves correctly. Exercised for
+// BleedBox only (not tripled across all three) since resolveOwnBox's
+// resolveObject call is shared code, not specific to any one box.
+func TestNonInheritedBoxResolvesIndirectReference(t *testing.T) {
+	data := buildTestDocument(t, `
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /BleedBox 4 0 R >> endobj
+4 0 obj [10 10 500 700] endobj
+`)
+	d := openTestDocument(t, data)
+	want := Rect{LLX: 10, LLY: 10, URX: 500, URY: 700}
+	if got := d.Page(0).BleedBox; got != want {
+		t.Errorf("BleedBox = %+v, want %+v (indirect reference should resolve)", got, want)
+	}
+}
+
 // --- test helpers -----------------------------------------------------
 
 // buildTestDocument assembles a minimal, syntactically valid PDF file

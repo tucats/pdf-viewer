@@ -64,6 +64,43 @@ type Page struct {
 	// including that outer margin.
 	CropBox Rect
 
+	// BleedBox is the page's box in PDF points: the region to which page
+	// content shall be clipped when output in a production (print)
+	// environment, intended to accommodate the physical limitations of
+	// cutting and folding equipment - a bit larger than TrimBox so that
+	// color intended to run all the way to the trimmed edge ("full
+	// bleed") still has margin for a slightly imprecise cut, but usually
+	// smaller than MediaBox's full press sheet. Unlike MediaBox/CropBox/
+	// Resources/Rotate, /BleedBox is NOT an inheritable page attribute
+	// per the specification (ISO 32000-1 Table 30) - only the page's own
+	// dictionary is consulted, never an ancestor Pages node - so a
+	// document that sets /BleedBox on an intermediate node rather than
+	// each leaf page (unusual, but not forbidden by the file format) has
+	// that entry silently ignored, exactly as a real PDF-consuming
+	// application would. When the page's own dictionary has no /BleedBox
+	// entry at all, this defaults to CropBox (see buildPage), then - like
+	// every page box - is clipped to lie within MediaBox if it does not
+	// already.
+	BleedBox Rect
+
+	// TrimBox is the page's box in PDF points: the intended finished
+	// dimensions of the page after trimming, i.e. what the reader
+	// actually sees once a printed, bled sheet has been cut down - the
+	// PDF/X print-production standards use this as "the" page size for
+	// exactly that reason. Same inheritance (none - leaf page dictionary
+	// only), defaulting (to CropBox), and clipping (to MediaBox) rules as
+	// BleedBox above.
+	TrimBox Rect
+
+	// ArtBox is the page's box in PDF points: the extent of the page's
+	// meaningful content as intended by the page's creator, excluding
+	// any surrounding white space - used, for example, when placing a
+	// whole page as a Form XObject into another document, so only its
+	// actual artwork (not incidental margin) is positioned. Same
+	// inheritance (none), defaulting (to CropBox), and clipping (to
+	// MediaBox) rules as BleedBox above.
+	ArtBox Rect
+
 	// RawResources is the page's (possibly inherited) /Resources
 	// dictionary, not yet interpreted. It is exposed now, ahead of the
 	// fonts/images/content-stream work that will actually use it
@@ -348,7 +385,7 @@ func (d *Document) collectPages(node syntax.Object, inherited inheritable, depth
 	// A leaf: either explicitly /Type /Page, or a node with no /Kids at
 	// all (some real-world files omit /Type; a Kids-less node can only
 	// sensibly be a page).
-	page, err := buildPage(dict, inherited)
+	page, err := buildPage(d.parser, dict, inherited)
 	if err != nil {
 		return err
 	}
@@ -429,14 +466,26 @@ func normalizeRotate(deg int) (int, bool) {
 // buildPage constructs a Page from a leaf page dictionary and whatever
 // inheritable attributes it inherited from its ancestors, requiring that
 // a MediaBox was found somewhere along the way (directly or inherited) -
-// per the PDF specification, every page must have one available.
-func buildPage(dict syntax.Dictionary, inherited inheritable) (Page, error) {
+// per the PDF specification, every page must have one available. p is
+// needed (only) to resolve BleedBox/TrimBox/ArtBox, which - unlike
+// MediaBox/CropBox/Resources/Rotate above - are not inheritable, so they
+// are read directly from dict (the leaf page's own dictionary) rather
+// than from the inheritable accumulator collectPages already built while
+// walking down the tree; an indirect reference in dict still needs p to
+// follow, exactly as mergeInherited needs it for the inheritable
+// attributes.
+func buildPage(p *parser.Document, dict syntax.Dictionary, inherited inheritable) (Page, error) {
 	if inherited.mediaBox == nil {
 		return Page{}, pdferror.Malformedf("page has no /MediaBox, direct or inherited")
 	}
+	mediaBox := *inherited.mediaBox
+	cropBox := resolveCropBox(mediaBox, inherited.cropBox)
 	page := Page{
-		MediaBox: *inherited.mediaBox,
-		CropBox:  resolveCropBox(*inherited.mediaBox, inherited.cropBox),
+		MediaBox: mediaBox,
+		CropBox:  cropBox,
+		BleedBox: resolveNonInheritedBox(mediaBox, cropBox, resolveOwnBox(p, dict, "BleedBox")),
+		TrimBox:  resolveNonInheritedBox(mediaBox, cropBox, resolveOwnBox(p, dict, "TrimBox")),
+		ArtBox:   resolveNonInheritedBox(mediaBox, cropBox, resolveOwnBox(p, dict, "ArtBox")),
 		Rotate:   inherited.rotate,
 		dict:     dict,
 	}
@@ -446,34 +495,75 @@ func buildPage(dict syntax.Dictionary, inherited inheritable) (Page, error) {
 	return page, nil
 }
 
+// resolveOwnBox resolves dict's own key entry (following an indirect
+// reference through p if needed) as a page-box rectangle, reporting nil
+// if the entry is absent, unresolvable, or not shaped like a rectangle -
+// BleedBox/TrimBox/ArtBox's own doc comments explain why only dict
+// itself (never an ancestor) is consulted here.
+func resolveOwnBox(p *parser.Document, dict syntax.Dictionary, key syntax.Name) *Rect {
+	obj, ok := dict[key]
+	if !ok {
+		return nil
+	}
+	resolved, err := resolveObject(p, obj)
+	if err != nil {
+		return nil
+	}
+	r, ok := parseRect(resolved)
+	if !ok {
+		return nil
+	}
+	return &r
+}
+
+// resolveNonInheritedBox implements BleedBox/TrimBox/ArtBox's shared
+// defaulting and clipping rule: own is nil when the page's own
+// dictionary has no entry for that box at all, in which case the result
+// is cropBox (itself already resolved and clipped) unchanged, per the
+// specification's stated default; otherwise the result is *own clipped
+// to lie within mediaBox, via the same clipToMediaBox rule /CropBox
+// itself uses (see resolveCropBox).
+func resolveNonInheritedBox(mediaBox, cropBox Rect, own *Rect) Rect {
+	if own == nil {
+		return cropBox
+	}
+	return clipToMediaBox(mediaBox, *own)
+}
+
 // resolveCropBox implements the /CropBox field's own doc comment: cropBox
 // is nil when the page's ancestry had no /CropBox entry at all, in which
 // case the result is simply mediaBox unchanged; otherwise the result is
-// *cropBox clipped to lie within mediaBox, per the specification ("the
-// crop, bleed, trim, and art boxes shall not ordinarily extend beyond
-// the boundaries of the media box... if they do, they shall be clipped
-// to the media box"). Both rectangles are normalized (min, min)-(max,
-// max) first, since PDF does not require a box's corners to be listed
-// in any particular order (see Rect's own doc comment) and an
-// intersection computed from un-normalized corners would be meaningless.
-//
-// If clipping produces a degenerate (zero or negative area) rectangle -
-// a malformed /CropBox that does not actually overlap the media box at
-// all - mediaBox is returned instead, on the theory that showing the
-// whole page is a far more useful fallback than a blank or rejected one
-// for what is, after all, only a viewing hint.
+// *cropBox clipped to lie within mediaBox, via clipToMediaBox.
 func resolveCropBox(mediaBox Rect, cropBox *Rect) Rect {
 	if cropBox == nil {
 		return mediaBox
 	}
+	return clipToMediaBox(mediaBox, *cropBox)
+}
+
+// clipToMediaBox implements the specification's shared clipping rule for
+// every page box beyond MediaBox itself ("the crop, bleed, trim, and art
+// boxes shall not ordinarily extend beyond the boundaries of the media
+// box... if they do, they shall be clipped to the media box"). Both
+// rectangles are normalized (min, min)-(max, max) first, since PDF does
+// not require a box's corners to be listed in any particular order (see
+// Rect's own doc comment) and an intersection computed from
+// un-normalized corners would be meaningless.
+//
+// If clipping produces a degenerate (zero or negative area) rectangle -
+// a malformed box that does not actually overlap the media box at all -
+// mediaBox is returned instead, on the theory that showing the whole
+// page is a far more useful fallback than a blank or rejected one for
+// what is, after all, only a viewing hint.
+func clipToMediaBox(mediaBox, box Rect) Rect {
 	media := normalizeRect(mediaBox)
-	crop := normalizeRect(*cropBox)
+	b := normalizeRect(box)
 
 	clipped := Rect{
-		LLX: math.Max(media.LLX, crop.LLX),
-		LLY: math.Max(media.LLY, crop.LLY),
-		URX: math.Min(media.URX, crop.URX),
-		URY: math.Min(media.URY, crop.URY),
+		LLX: math.Max(media.LLX, b.LLX),
+		LLY: math.Max(media.LLY, b.LLY),
+		URX: math.Min(media.URX, b.URX),
+		URY: math.Min(media.URY, b.URY),
 	}
 	if clipped.URX <= clipped.LLX || clipped.URY <= clipped.LLY {
 		return mediaBox
@@ -482,7 +572,7 @@ func resolveCropBox(mediaBox Rect, cropBox *Rect) Rect {
 }
 
 // normalizeRect reorders r's corners, if needed, so LLX <= URX and
-// LLY <= URY - the (min, min)-(max, max) form resolveCropBox's
+// LLY <= URY - the (min, min)-(max, max) form clipToMediaBox's
 // intersection math (and callers elsewhere that assume this form)
 // requires, but which PDF itself does not guarantee a page box array is
 // already written in.

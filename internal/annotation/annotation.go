@@ -60,6 +60,31 @@ type Appearance struct {
 // not painted", never to failing the whole page's render, so this
 // function has no error return at all.
 func Resolve(r Resolver, pageDict syntax.Dictionary) []Appearance {
+	var out []Appearance
+	for _, dict := range ResolveAnnots(r, pageDict) {
+		if app, ok := ResolveOne(r, dict); ok {
+			out = append(out, app)
+		}
+	}
+	return out
+}
+
+// ResolveAnnots resolves pageDict's /Annots array (if any) into the
+// dictionaries it names, in page order, following each array element's
+// own indirect reference and silently dropping any element that does
+// not resolve to a syntax.Dictionary - the same "annotations are
+// optional, decorative content" tolerance Resolve's own doc comment
+// describes, extended here to a bad *array element* rather than a bad
+// appearance.
+//
+// This is split out from Resolve so that a caller needing to inspect
+// annotation dictionaries directly - the root package's Phase 12
+// AcroForm appearance-regeneration path (see annotations.go), which
+// must tell "no usable existing appearance" apart from "not a widget
+// annotation at all" for the *same* dictionary Resolve already looked
+// at - does not need to re-walk /Annots with its own copy of this
+// resolution logic.
+func ResolveAnnots(r Resolver, pageDict syntax.Dictionary) []syntax.Dictionary {
 	annotsObj, ok := pageDict["Annots"]
 	if !ok {
 		return nil
@@ -73,27 +98,23 @@ func Resolve(r Resolver, pageDict syntax.Dictionary) []Appearance {
 		return nil
 	}
 
-	var out []Appearance
+	var out []syntax.Dictionary
 	for _, entry := range arr {
 		resolvedEntry, err := resolveIfRef(r, entry)
 		if err != nil {
 			continue
 		}
-		dict, ok := resolvedEntry.(syntax.Dictionary)
-		if !ok {
-			continue
-		}
-		if app, ok := resolveOne(r, dict); ok {
-			out = append(out, app)
+		if dict, ok := resolvedEntry.(syntax.Dictionary); ok {
+			out = append(out, dict)
 		}
 	}
 	return out
 }
 
-// resolveOne resolves a single annotation dictionary into an Appearance,
+// ResolveOne resolves a single annotation dictionary into an Appearance,
 // reporting ok=false for every way that can come up empty - see
 // Resolve's doc comment for the full list.
-func resolveOne(r Resolver, dict syntax.Dictionary) (Appearance, bool) {
+func ResolveOne(r Resolver, dict syntax.Dictionary) (Appearance, bool) {
 	if flags, ok := intEntry(r, dict, "F"); ok {
 		if flags&(flagHidden|flagNoView) != 0 {
 			return Appearance{}, false
@@ -105,6 +126,26 @@ func resolveOne(r Resolver, dict syntax.Dictionary) (Appearance, bool) {
 		return Appearance{}, false
 	}
 
+	rect, ok := floatArrayEntry(r, dict, "Rect")
+	if !ok || len(rect) != 4 {
+		return Appearance{}, false
+	}
+
+	return FromStream(r, rect, apStream)
+}
+
+// FromStream builds an Appearance from apStream, an already-resolved
+// Form XObject stream, mapped onto rect ([llx lly urx ury], in the
+// page's default user space) via this package's doc comment's BBox-to-
+// Rect algorithm. ResolveOne (above) is simply this preceded by finding
+// apStream and rect from an annotation dictionary's own /AP/AS and
+// /Rect; a caller that already has both in hand - the root package's
+// Phase 12 AcroForm appearance-generation path, which builds apStream
+// itself rather than finding one already in the file - calls this
+// directly instead, so the BBox/Matrix mapping math is written and
+// tested in exactly one place regardless of where the appearance stream
+// came from.
+func FromStream(r Resolver, rect []float64, apStream syntax.Stream) (Appearance, bool) {
 	apDict, err := r.ResolveDictionary(apStream.Dict)
 	if err != nil {
 		return Appearance{}, false
@@ -118,11 +159,9 @@ func resolveOne(r Resolver, dict syntax.Dictionary) (Appearance, bool) {
 		apMatrix = graphics.Matrix{A: mv[0], B: mv[1], C: mv[2], D: mv[3], E: mv[4], F: mv[5]}
 	}
 
-	rect, ok := floatArrayEntry(r, dict, "Rect")
-	if !ok || len(rect) != 4 {
+	if len(rect) != 4 {
 		return Appearance{}, false
 	}
-
 	bboxPrime := transformedBounds(bbox, apMatrix)
 	rectNorm := normalizeRect(rect)
 	return Appearance{Stream: apStream, Matrix: rectMappingMatrix(bboxPrime, rectNorm)}, true

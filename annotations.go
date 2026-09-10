@@ -3,6 +3,7 @@ package pdfviewer
 import (
 	"fmt"
 
+	"github.com/tucats/pdf-viewer/internal/acroform"
 	"github.com/tucats/pdf-viewer/internal/annotation"
 	"github.com/tucats/pdf-viewer/internal/content"
 	"github.com/tucats/pdf-viewer/internal/graphics"
@@ -77,6 +78,53 @@ func annotationDrawOps(resolver *model.Document, pageDict syntax.Dictionary, pag
 
 	var all graphics.DisplayList
 	for _, app := range appearances {
+		resources := syntax.Dictionary{"XObject": syntax.Dictionary{"A": app.Stream}}
+		list, err := content.InterpretCached(syntheticAnnotationOps, app.Matrix.Mul(pageCTM), resources, resolver, fontCache)
+		if err != nil {
+			continue
+		}
+		all = append(all, list...)
+	}
+	return all
+}
+
+// formFieldDrawOps implements Phase 12 (docs/PLAN2.md): for every widget
+// annotation on pageDict that internal/annotation could not already
+// resolve a usable existing appearance for (see annotation.ResolveOne -
+// most commonly, no /AP at all, because whatever filled this form
+// field's /V never regenerated one), attempts to generate a
+// stand-in appearance from the field's own current value via
+// internal/acroform, painting it exactly like any other annotation
+// appearance once generated (see annotationDrawOps above, which this
+// function otherwise duplicates the /Annots walk of, deliberately kept
+// separate rather than merged into one combined loop - see
+// internal/annotation.ResolveAnnots's doc comment for why).
+//
+// acroForm is the document catalog's /AcroForm dictionary (nil for a
+// document with none - internal/model.Document.AcroForm's own ok=false
+// case), needed for a field's /DA/DR fallback (see internal/acroform.
+// ResolveWithAcroForm). A widget internal/annotation.ResolveOne already
+// found a usable appearance for is left alone here - this function only
+// ever adds painting for a widget that would otherwise show as
+// completely blank, never replaces or duplicates one that already
+// renders correctly.
+func formFieldDrawOps(resolver *model.Document, pageDict syntax.Dictionary, acroForm syntax.Dictionary, pageCTM graphics.Matrix, fontCache *content.FontCache) graphics.DisplayList {
+	var all graphics.DisplayList
+	for _, dict := range annotation.ResolveAnnots(resolver, pageDict) {
+		if _, ok := annotation.ResolveOne(resolver, dict); ok {
+			// Already has a usable existing appearance; annotationDrawOps
+			// already painted (or will paint) it.
+			continue
+		}
+		generated, rect, ok := acroform.GenerateAppearance(resolver, dict, acroForm)
+		if !ok {
+			continue
+		}
+		app, ok := annotation.FromStream(resolver, rect, generated)
+		if !ok {
+			continue
+		}
+
 		resources := syntax.Dictionary{"XObject": syntax.Dictionary{"A": app.Stream}}
 		list, err := content.InterpretCached(syntheticAnnotationOps, app.Matrix.Mul(pageCTM), resources, resolver, fontCache)
 		if err != nil {

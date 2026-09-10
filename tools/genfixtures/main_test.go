@@ -70,6 +70,7 @@ func TestGeneratedFixturesMatchCheckedInFiles(t *testing.T) {
 		"encrypted-aes256.pdf":               buildEncryptedAES256(),
 		"encrypted-password-aes128.pdf":      buildEncryptedPasswordAES128(),
 		"encrypted-password-aes256.pdf":      buildEncryptedPasswordAES256(),
+		"form-filled-no-appearance.pdf":      buildFormFilledNoAppearance(),
 	}
 
 	for name, want := range fixtures {
@@ -140,6 +141,7 @@ func TestFixtureSetIsComplete(t *testing.T) {
 		"encrypted-aes256.pdf":               true,
 		"encrypted-password-aes128.pdf":      true,
 		"encrypted-password-aes256.pdf":      true,
+		"form-filled-no-appearance.pdf":      true,
 	}
 
 	entries, err := os.ReadDir(outputDir)

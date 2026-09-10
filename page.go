@@ -247,6 +247,17 @@ func (p *pageImpl) renderAtScale(ctx context.Context, scale float64, background 
 		// whatever the page itself already drew - see annotations.go.
 		annotOps := annotationDrawOps(p.doc.model, p.page.Dict(), ctm, p.doc.fontCache)
 		list = append(list, annotOps...)
+
+		// Phase 12: for a form field widget with no usable existing
+		// appearance (see formFieldDrawOps's doc comment), attempt to
+		// generate one from its current value instead of leaving it
+		// blank. AcroForm() reports ok=false (acroForm left nil) for a
+		// document with no interactive form at all, which
+		// formFieldDrawOps's own internal/acroform.GenerateAppearance
+		// call already treats as "nothing to generate" for every widget.
+		acroForm, _ := p.doc.model.AcroForm()
+		formOps := formFieldDrawOps(p.doc.model, p.page.Dict(), acroForm, ctm, p.doc.fontCache)
+		list = append(list, formOps...)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

@@ -125,6 +125,7 @@ func main() {
 		{"encrypted-aes256.pdf", buildEncryptedAES256()},
 		{"encrypted-password-aes128.pdf", buildEncryptedPasswordAES128()},
 		{"encrypted-password-aes256.pdf", buildEncryptedPasswordAES256()},
+		{"form-filled-no-appearance.pdf", buildFormFilledNoAppearance()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {

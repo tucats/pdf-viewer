@@ -2222,3 +2222,91 @@ in order, not rewritten later except to fix mistakes.
     actually reachable from a content stream. Building and interpreting
     a real `/SMask` dictionary (`/S`, `/G`, `/BC`) into a `SoftMask` is
     17b.
+
+### Phase 17b: Build a SoftMask from an ExtGState /SMask dictionary — done (2026-09-10)
+
+- **`internal/content/softmask.go` (new file).** `applySoftMask`
+    implements `/SMask`'s value (a bare Name `/None`, clearing
+    `st.SoftMask`; any other Name, tolerated as malformed; or a
+    dictionary to build and activate), and `buildSoftMask` turns that
+    dictionary's `/S`, `/G`, and optional `/BC` into a real
+    `*graphics.SoftMask`, reusing machinery this project already had
+    rather than inventing new machinery specifically for this feature:
+  - The mask's `/G` (a transparency-group Form XObject) is treated
+        exactly like an ordinary Form XObject - its own `/Matrix`
+        combines with the CTM active where "gs" ran (not
+        `in.initialCTM`, mirroring `doForm`'s identical choice, since a
+        soft mask's group is itself just a Form XObject), and its
+        `/BBox` becomes a clip via `formBBoxClip`, reused directly from
+        form.go.
+  - The mask's content is rendered offscreen via
+        `internal/raster.RenderTransparent` - the exact same function
+        `tilingpattern.go` already uses to render one repetition of a
+        tiling pattern's cell with real per-pixel transparency
+        preserved.
+  - The offscreen buffer's pixel size and placement come from mapping
+        `/G`'s own `/BBox` through its CTM into device space (the region
+        of the page the mask can possibly affect - see
+        `graphics.SoftMask.At`'s default-backdrop handling, from 17a,
+        for why everywhere else reads as fully masked out with no
+        buffer needed to represent it) and clamping to
+        `maxSoftMaskDimension` (2048 - a documented bound, mirroring
+        `tilingpattern.go`'s `maxPatternTileDimension`, picked larger
+        than a tile's typical 1024 since a mask commonly covers a large
+        fraction of the page and a coarser resolution would visibly
+        resample its edges blocky). `graphics.SoftMask.DeviceToMask` is
+        built directly (a shift-then-scale matrix derived from the
+        `/BBox`'s own device-space corners), not via `Matrix.Invert`, so
+        no matrix inversion happens anywhere in this feature's hot path.
+  - What's new (not reused from Form XObjects or tiling patterns) is
+        only the per-pixel reduction step: `luminosityValue` (composites
+        the group's own rendered, non-premultiplied pixel color over a
+        fully opaque backdrop - black, or `/BC` via the new
+        `backdropColorFromComponents`, matching this package's existing
+        `colorFromComponents` by-component-count convention - *before*
+        taking the standard ITU-R BT.601 luma weights, so an
+        under-covered pixel correctly reads as dimmer rather than at its
+        own painted color's full brightness regardless of how little of
+        the pixel it actually covered) for `/S /Luminosity`, or simply
+        the group's own rendered alpha channel directly for `/S /Alpha`.
+- **`internal/content/extgstate.go`.** `applyExtGState`'s previous
+    "note and ignore" `/SMask` handling is replaced with a call to
+    `applySoftMask`; the file's own doc comment updated to describe
+    `/SMask` as implemented rather than out of scope.
+- **Every `DrawOp`-constructing site gained `SoftMask: st.SoftMask`** -
+    `interpret.go`'s `fillCurrentPath`/`strokeCurrentPath`, `image.go`'s
+    `paintImage`, `shading.go`'s `doShading`, and `text.go`'s
+    `showGlyph` - the same one-line addition at each site Phase 5e made
+    for `Alpha`/`BlendMode`, so a soft mask set by "gs" attenuates every
+    kind of paint operation, not just fills.
+- **Tests
+    ([softmask_test.go](../internal/content/softmask_test.go)).** A
+    `/Luminosity` mask built from a group that paints solid white across
+    its whole `/BBox` (fully unmasked, 255 throughout, at the expected
+    pixel dimensions); a `/Alpha` mask from an empty group (fully masked
+    out, 0 throughout) and a fully-opaque-black-filled one (255
+    throughout - confirming `/Alpha` reads coverage, not color, unlike
+    `/Luminosity`); `/SMask /None` clearing a previously active mask;
+    `q`/`Q` saving and restoring `SoftMask` exactly like
+    `extgstate_test.go`'s existing `ca`/`CA`/`BM` test already checks for
+    those; five distinct malformed-dictionary shapes (missing `/S`,
+    unrecognized `/S`, missing `/G`, `/G` not a stream, a group with no
+    `/BBox`) each tolerated with an earlier mask left in place, not
+    cleared; a bare Name other than `/None` tolerated the same way; the
+    `maxFormDepth` nesting guard, exercised by directly constructing an
+    `interpreter` already at that depth (this test file is part of the
+    `content` package, so it can reach `buildSoftMask` and the
+    unexported `interpreter` type directly, unlike a genuinely
+    self-referential fixture, which would need `maxFormDepth` levels of
+    real nested content to trigger the same path); `luminosityValue`'s
+    backdrop-compositing behavior directly (opaque, 50%, and fully
+    transparent source pixels); and `backdropColorFromComponents`' four
+    component-count cases. A 15-second `FuzzParseAndInterpret` run found
+    no panic or hang. Full test suite, `go vet`, and `gofmt` all pass
+    clean.
+- **What's carried forward.** `docs/capability-matrix.md`'s Soft masks
+    row is still not updated - this sub-phase makes the feature
+    reachable and unit-tested at the `internal/content` level, but there
+    is no end-to-end fixture or `Page.Render` regression test yet, and
+    the capability matrix should only claim "Done" once one exists. That
+    fixture, rendering test, and the capability matrix update are 17c.

@@ -552,7 +552,7 @@ func (in *interpreter) fillCurrentPath(st *graphics.State, rule graphics.FillRul
 	if len(in.path.Subpaths) == 0 {
 		return
 	}
-	op := graphics.DrawOp{Path: clonePath(&in.path), Rule: rule, Clips: st.Clips, Alpha: st.FillAlpha, BlendMode: st.BlendMode}
+	op := graphics.DrawOp{Path: clonePath(&in.path), Rule: rule, Clips: st.Clips, Alpha: st.FillAlpha, BlendMode: st.BlendMode, SoftMask: st.SoftMask}
 	switch {
 	case st.FillShading != nil:
 		op.Shading = st.FillShading
@@ -587,7 +587,7 @@ func (in *interpreter) strokeCurrentPath(st *graphics.State) {
 	}
 	deviceWidth := st.LineWidth * ctmScale(st.CTM)
 	outline := graphics.StrokeToFill(&in.path, deviceWidth, st.LineCap, st.LineJoin, st.MiterLimit)
-	op := graphics.DrawOp{Path: outline, Rule: graphics.NonZero, Clips: st.Clips, Alpha: st.StrokeAlpha, BlendMode: st.BlendMode}
+	op := graphics.DrawOp{Path: outline, Rule: graphics.NonZero, Clips: st.Clips, Alpha: st.StrokeAlpha, BlendMode: st.BlendMode, SoftMask: st.SoftMask}
 	switch {
 	case st.StrokeShading != nil:
 		op.Shading = st.StrokeShading

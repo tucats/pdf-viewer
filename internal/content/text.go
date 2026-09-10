@@ -211,6 +211,7 @@ func (in *interpreter) showGlyph(st *graphics.State, glyph *graphics.Path, trm g
 		Clips:     st.Clips,
 		Alpha:     st.FillAlpha,
 		BlendMode: st.BlendMode,
+		SoftMask:  st.SoftMask,
 	})
 }
 

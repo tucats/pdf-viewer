@@ -172,6 +172,7 @@ func (in *interpreter) paintImage(st *graphics.State, dict syntax.Dictionary, sa
 		// FillAlpha's doc comment.
 		Alpha:     st.FillAlpha,
 		BlendMode: st.BlendMode,
+		SoftMask:  st.SoftMask,
 	})
 	return nil
 }

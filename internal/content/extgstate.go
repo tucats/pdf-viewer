@@ -1,7 +1,6 @@
 package content
 
 import (
-	"github.com/tucats/pdf-viewer/internal/diag"
 	"github.com/tucats/pdf-viewer/internal/graphics"
 	"github.com/tucats/pdf-viewer/internal/pdferror"
 	"github.com/tucats/pdf-viewer/internal/syntax"
@@ -10,14 +9,16 @@ import (
 // This file implements "gs" (11.6.4.2): applying a named /Resources
 // /ExtGState resource's parameters to the current graphics state. Of the
 // several parameters an ExtGState dictionary may carry (line width,
-// dash pattern, font, soft mask, ...), only /ca, /CA, and /BM are
-// implemented - the constant alpha and blend mode this project's Phase
-// 5 transparency support (graphics.State.FillAlpha/StrokeAlpha/
-// BlendMode) actually uses; every other key is silently ignored,
-// matching this package's general tolerance for parameters it does not
-// yet interpret. /SMask (a soft mask defined by a whole separate
-// transparency group's luminosity or alpha) is explicitly out of scope
-// for this project - see docs/capability-matrix.md.
+// dash pattern, font, soft mask, ...), /ca, /CA, /BM, and /SMask are
+// implemented - the constant alpha, blend mode, and soft mask this
+// project's transparency support (graphics.State.FillAlpha/StrokeAlpha/
+// BlendMode/SoftMask) actually uses; every other key is silently
+// ignored, matching this package's general tolerance for parameters it
+// does not yet interpret. /SMask's own dictionary-building logic (
+// rendering the mask's transparency group and reducing it to a
+// per-pixel luminosity or alpha value) lives in softmask.go, since it is
+// substantial enough to deserve its own file - this file just resolves
+// the operand and hands the value off.
 
 // applyExtGState implements "gs": operands must be a single Name naming
 // an /ExtGState resource. An unresolvable name (no /Resources, no
@@ -63,8 +64,8 @@ func (in *interpreter) applyExtGState(st *graphics.State, operands []syntax.Obje
 		st.BlendMode = mode
 	}
 	if v, ok := dict["SMask"]; ok {
-		if smaskName, isName := v.(syntax.Name); !isName || smaskName != "None" {
-			diag.Note(in.resolver, "ExtGState %q specifies a soft mask (/SMask); soft masks are not supported and are ignored", name)
+		if err := in.applySoftMask(st, v, name); err != nil {
+			return err
 		}
 	}
 	return nil

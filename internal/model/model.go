@@ -114,6 +114,12 @@ type Document struct {
 	parser *parser.Document
 	pages  []Page
 
+	// catalog is the document catalog dictionary (the trailer's /Root
+	// entry, already resolved) - kept around, beyond what Open originally
+	// needed it for (finding /Pages), so that AcroForm below can read its
+	// /AcroForm entry without re-resolving the trailer's /Root itself.
+	catalog syntax.Dictionary
+
 	// diagnostics is nil unless the root package's WithDiagnostics option
 	// attached one via SetDiagnostics - see that method's doc comment.
 	diagnostics *diag.Recorder
@@ -234,12 +240,39 @@ func Open(p *parser.Document) (*Document, error) {
 		return nil, err
 	}
 
-	d := &Document{parser: p}
+	d := &Document{parser: p, catalog: catalog}
 	visited := make(map[int]bool)
 	if err := d.collectPages(catalog["Pages"], inheritable{}, 0, visited); err != nil {
 		return nil, err
 	}
 	return d, nil
+}
+
+// AcroForm returns the document catalog's /AcroForm entry (the
+// interactive form dictionary, ISO 32000-1 12.7.2), resolving it through
+// an indirect reference if needed, and ok=false if the catalog has no
+// /AcroForm entry at all or it does not resolve to a dictionary - both
+// cases simply meaning "this document has no interactive form", not an
+// error, matching how model.Document already treats "no /CropBox" or
+// "no /Rotate" as ordinary, expected absences rather than malformed
+// input.
+//
+// Phase 12 (AcroForm field appearance regeneration - see
+// internal/acroform) is the first thing in this module that needs the
+// catalog for anything beyond finding /Pages, which is why this method
+// (and the catalog field it reads) was added alongside it rather than
+// back when Open first resolved the catalog for Phase 1.
+func (d *Document) AcroForm() (syntax.Dictionary, bool) {
+	obj, ok := d.catalog["AcroForm"]
+	if !ok {
+		return nil, false
+	}
+	resolved, err := resolveObject(d.parser, obj)
+	if err != nil {
+		return nil, false
+	}
+	dict, ok := resolved.(syntax.Dictionary)
+	return dict, ok
 }
 
 // PageCount returns the number of pages in the document.

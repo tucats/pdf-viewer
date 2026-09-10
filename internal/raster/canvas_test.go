@@ -86,6 +86,26 @@ func TestFillWithTwoClipsIntersects(t *testing.T) {
 	}
 }
 
+// TestFillWithClipIntersectsExactlyAtSubPixelBoundary is Canvas.Fill's
+// end-to-end counterpart to
+// TestRasterizeIntersectedCoverageExactAtSubPixelBoundary
+// (scanline_test.go): a path covering a pixel column's left half,
+// clipped by a shape covering that same column's right half, must leave
+// the whole column unpainted, not one-quarter blended toward the fill
+// color - which is what Phase 15b replaced (multiplying the path's and
+// the clip's independently-rasterized coverage) would have produced.
+func TestFillWithClipIntersectsExactlyAtSubPixelBoundary(t *testing.T) {
+	c := NewCanvas(4, 4, graphics.Color{R: 1, G: 1, B: 1})
+	path := rectPath(0, 0, 2.5, 4)
+	clip := rectPath(2.5, 0, 4, 4)
+
+	c.Fill(path, graphics.NonZero, graphics.Color{}, 1, graphics.BlendNormal, []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}})
+
+	if r, g, b, _ := c.Image().At(2, 1).RGBA(); r>>8 < 253 || g>>8 < 253 || b>>8 < 253 {
+		t.Errorf("split-coverage pixel = (%d,%d,%d), want unchanged white (the two halves do not overlap)", r>>8, g>>8, b>>8)
+	}
+}
+
 func TestFillOutsideCanvasBoundsIsClamped(t *testing.T) {
 	c := NewCanvas(4, 4, graphics.Color{})
 	path := rectPath(-100, -100, 100, 100) // wildly overflows the canvas

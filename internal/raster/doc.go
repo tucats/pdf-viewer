@@ -8,11 +8,14 @@
 // DrawOp in a DisplayList onto a Canvas (canvas.go), which composites
 // filled, anti-aliased, and clipped paths using rasterizeCoverage
 // (scanline.go) - a scanline coverage-accumulation rasterizer
-// implementing both of PDF's fill rules, shared by ordinary fills,
+// implementing both of PDF's fill rules, shared by ordinary fills and
 // stroke outlines (already converted to fill geometry by
-// graphics.StrokeToFill before reaching this package), and clip
-// evaluation, so this package only needs one core rasterization
-// algorithm.
+// graphics.StrokeToFill before reaching this package). Clip evaluation
+// against more than one simultaneously active clip uses the same
+// scanline machinery through rasterizeIntersectedCoverage instead,
+// intersecting every clip's per-scanline spans exactly rather than
+// multiplying independently-rasterized coverage - see that function's
+// doc comment.
 //
 // "Deterministic" matters here specifically for testing: Phase 2's exit
 // criteria call for comparing rendered output against checked-in

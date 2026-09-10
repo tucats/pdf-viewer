@@ -74,6 +74,27 @@ func TestRenderTransparentSecondOpCompositesOverFirst(t *testing.T) {
 	}
 }
 
+// TestRenderTransparentClipIntersectsExactlyAtSubPixelBoundary is
+// compositeOp's counterpart to canvas_test.go's
+// TestFillWithClipIntersectsExactlyAtSubPixelBoundary: op.Clips must be
+// combined by exact intersection here too, not coverage-multiplication -
+// tile.go's compositeOp deliberately duplicates Canvas.paint's coverage
+// loop (see that file's own doc comment), so it needed the Phase 15b fix
+// applied separately, and this test confirms it was.
+func TestRenderTransparentClipIntersectsExactlyAtSubPixelBoundary(t *testing.T) {
+	clip := rectPath(2.5, 0, 4, 4)
+	list := graphics.DisplayList{
+		{Path: rectPath(0, 0, 2.5, 4), Color: graphics.Color{R: 1}, Alpha: 1,
+			Clips: []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}}},
+	}
+	img := RenderTransparent(list, 4, 4)
+
+	_, _, _, a := img.At(2, 1)
+	if a != 0 {
+		t.Errorf("split-coverage pixel alpha = %v, want exactly 0 (the two halves do not overlap)", a)
+	}
+}
+
 func TestRenderTransparentNilPathIsSkipped(t *testing.T) {
 	list := graphics.DisplayList{{Path: nil}} // must not panic
 	img := RenderTransparent(list, 4, 4)

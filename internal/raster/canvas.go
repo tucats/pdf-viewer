@@ -181,9 +181,10 @@ func (c *Canvas) PaintShading(sh *graphics.Shading, alpha float64, mode graphics
 }
 
 // paint is the shared core of Fill and DrawImage: it rasterizes path's
-// coverage under rule (intersected with every clip in clips, exactly as
-// Fill's own doc comment describes), then for every pixel with nonzero
-// combined coverage calls sample to ask what color and alpha to
+// coverage under rule, intersected with every clip in clips - exactly
+// (see rasterizeIntersectedCoverage), not by multiplying each clip's
+// independently anti-aliased coverage - then for every pixel with
+// nonzero combined coverage calls sample to ask what color and alpha to
 // composite there - sample receives the pixel's own (col, row) device
 // coordinates so DrawImage's image-space mapping (or, for Fill, nothing
 // at all - a constant color) can be computed per pixel without paint
@@ -204,12 +205,11 @@ func (c *Canvas) paint(path *graphics.Path, rule graphics.FillRule, clips []grap
 		return
 	}
 
-	cov := rasterizeCoverage(path, rule, minCol, minRow, maxCol, maxRow)
-	for _, clip := range clips {
-		clipCov := rasterizeCoverage(clip.Path, clip.Rule, minCol, minRow, maxCol, maxRow)
-		for i := range cov {
-			cov[i] *= clipCov[i]
-		}
+	var cov []float32
+	if len(clips) == 0 {
+		cov = rasterizeCoverage(path, rule, minCol, minRow, maxCol, maxRow)
+	} else {
+		cov = rasterizeIntersectedCoverage(path, rule, clips, minCol, minRow, maxCol, maxRow)
 	}
 
 	w := maxCol - minCol

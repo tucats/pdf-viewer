@@ -93,12 +93,11 @@ func compositeOp(buf []float64, width, height int, op graphics.DrawOp) {
 		return
 	}
 
-	cov := rasterizeCoverage(op.Path, op.Rule, minCol, minRow, maxCol, maxRow)
-	for _, clip := range op.Clips {
-		clipCov := rasterizeCoverage(clip.Path, clip.Rule, minCol, minRow, maxCol, maxRow)
-		for i := range cov {
-			cov[i] *= clipCov[i]
-		}
+	var cov []float32
+	if len(op.Clips) == 0 {
+		cov = rasterizeCoverage(op.Path, op.Rule, minCol, minRow, maxCol, maxRow)
+	} else {
+		cov = rasterizeIntersectedCoverage(op.Path, op.Rule, op.Clips, minCol, minRow, maxCol, maxRow)
 	}
 
 	w := maxCol - minCol

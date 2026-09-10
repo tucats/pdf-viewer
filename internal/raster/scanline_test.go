@@ -126,3 +126,77 @@ func TestRasterizeCoverageZeroSizeWindow(t *testing.T) {
 		t.Errorf("zero-size window: got %v, want nil", cov)
 	}
 }
+
+// TestRasterizeIntersectedCoverageExactAtSubPixelBoundary is the
+// sharpest possible test of Phase 15b's fix: path covers pixel column
+// 2's *left* half ([2,2.5)), a clip covers that same column's *right*
+// half ([2.5,3)) - two sub-pixel regions that do not overlap at all.
+// The true intersection of two disjoint regions is empty, so that
+// column's intersected coverage must come out exactly 0. The
+// approximation this phase replaced (multiplying the path's and the
+// clip's independently-rasterized coverage, 0.5*0.5) would have wrongly
+// produced 0.25 - a visibly painted pixel where nothing should be
+// there.
+func TestRasterizeIntersectedCoverageExactAtSubPixelBoundary(t *testing.T) {
+	path := rectPath(0, 0, 2.5, 4) // columns 0-1 fully covered, column 2's left half
+	clip := rectPath(2.5, 0, 4, 4) // column 2's right half, column 3 fully covered
+
+	cov := rasterizeIntersectedCoverage(path, graphics.NonZero, []graphics.ClipPath{{Path: clip, Rule: graphics.NonZero}}, 0, 0, 4, 4)
+	if got := cov[1*4+2]; got != 0 {
+		t.Errorf("split-coverage column intersected coverage = %v, want exactly 0 (the two halves do not overlap)", got)
+	}
+
+	// Confirm this case really does distinguish the two approaches -
+	// otherwise the assertion above could be trivially true for reasons
+	// unrelated to the fix it is meant to check.
+	pathCov := rasterizeCoverage(path, graphics.NonZero, 0, 0, 4, 4)
+	clipCov := rasterizeCoverage(clip, graphics.NonZero, 0, 0, 4, 4)
+	if multiplied := pathCov[1*4+2] * clipCov[1*4+2]; multiplied <= 0 {
+		t.Fatalf("test setup is broken: coverage-multiplication would also give %v here, so this case does not distinguish the two approaches", multiplied)
+	}
+}
+
+// TestRasterizeIntersectedCoverageMatchesUnclippedWhenNoClips confirms
+// the new intersection path agrees with plain rasterizeCoverage when
+// there are no clips at all - the zero-clips case should be identical to
+// "no clipping", not merely "an empty intersection loop that happens to
+// still work".
+func TestRasterizeIntersectedCoverageMatchesUnclippedWhenNoClips(t *testing.T) {
+	path := rectPath(0, 0, 2.5, 4)
+	got := rasterizeIntersectedCoverage(path, graphics.NonZero, nil, 0, 0, 4, 4)
+	want := rasterizeCoverage(path, graphics.NonZero, 0, 0, 4, 4)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("pixel %d = %v, want %v (matching the unclipped rasterizer)", i, got[i], want[i])
+		}
+	}
+}
+
+// TestRasterizeIntersectedCoverageThreeClipsAgreesWithOpaqueCase
+// confirms three simultaneously active, axis-aligned (opaque-interior)
+// clips still combine to the same result true intersection and the old
+// coverage-multiplication approximation both agree on - the case that
+// approximation was already exact for - so this phase's rewrite has not
+// regressed the common, non-anti-aliased-overlap case.
+func TestRasterizeIntersectedCoverageThreeClipsAgreesWithOpaqueCase(t *testing.T) {
+	path := rectPath(0, 0, 10, 10)
+	clipA := rectPath(1, 1, 9, 9)
+	clipB := rectPath(2, 0, 10, 10)
+	clipC := rectPath(0, 2, 10, 10)
+	clips := []graphics.ClipPath{
+		{Path: clipA, Rule: graphics.NonZero},
+		{Path: clipB, Rule: graphics.NonZero},
+		{Path: clipC, Rule: graphics.NonZero},
+	}
+
+	cov := rasterizeIntersectedCoverage(path, graphics.NonZero, clips, 0, 0, 10, 10)
+	// The true intersection of [1,9]x[1,9], [2,10]x[0,10] and [0,10]x[2,10]
+	// is [2,9]x[2,9] - deep interior (5,5) must be fully covered, while a
+	// point excluded by clipB ((1,5), x<2) must not be.
+	if got := cov[5*10+5]; got < 0.999 {
+		t.Errorf("interior of triple intersection = %v, want ~1.0", got)
+	}
+	if got := cov[5*10+1]; got != 0 {
+		t.Errorf("excluded-by-clipB point = %v, want 0", got)
+	}
+}

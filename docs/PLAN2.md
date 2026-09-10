@@ -316,7 +316,7 @@ feature documented the same way CCITT/JBIG2's own gaps are.
 
 ## Phase 15: Stroke join geometry and exact clip intersection
 
-**Status: 15a done.**
+**Status: Done (15a, 15b).**
 
 Both are **cosmetic/fidelity** gaps only - no page fails or shows wrong
 content, but two specific things are approximated: every stroke join
@@ -1896,3 +1896,86 @@ in order, not rewritten later except to fix mistakes.
 - **What's carried forward.** 15b (exact clip intersection, replacing
     coverage-multiplication) is unimplemented, as scoped - see this
     document's Phase 15b bullet.
+
+### Phase 15b: Exact clip intersection — done (2026-09-10)
+
+- **The insight that made a general polygon-boolean algorithm
+    unnecessary.** `internal/raster`'s rasterizer already works one
+    horizontal scanline at a time (`rasterizeCoverage`/`scanline.go`):
+    for a fixed y, a shape's "inside" region is a set of x-spans found by
+    sorting that y's edge crossings and walking them left to right. The
+    1D intersection of two sorted, disjoint span lists *is* exactly the
+    y-slice of the true 2D intersection of the two shapes at that y - so
+    computing each active clip's spans at the same sampled sub-scanline
+    y the fill path itself is being evaluated at, and intersecting them
+    with ordinary interval intersection before ever turning anything
+    into pixel coverage, gives a real polygon-boolean intersection with
+    no general-purpose 2D clipping algorithm (Weiler-Atherton,
+    Greiner-Hormann, etc.) needed at all.
+- **`internal/raster/scanline.go`.** Added `span` (an `[X0,X1)`
+    x-interval), `spansFromCrossings` (the winding-number bookkeeping
+    `accumulateSpans` already had, refactored to return spans instead of
+    immediately painting coverage - a deliberate small duplication so
+    `rasterizeCoverage`'s original single-path hot path keeps its exact
+    prior allocation profile), `spansAtY` (one path's spans at one
+    sampled y), `intersectSpanLists` (the sorted two-pointer interval-
+    intersection merge), and `rasterizeIntersectedCoverage` (the new
+    entry point: computes the fill path's spans and every clip's spans at
+    each sampled sub-scanline, intersects them all, then paints coverage
+    from whatever survives).
+- **`internal/raster/canvas.go` and `tile.go`.** `Canvas.paint` (backing
+    `Fill`/`DrawImage`/`FillShading`/`PaintShading`) and `tile.go`'s
+    `compositeOp` (the tiling-pattern-cell counterpart, which
+    deliberately duplicates `paint`'s coverage loop rather than sharing
+    it - see that file's own doc comment) both replaced their old
+    "rasterize the path, then rasterize and multiply in each clip in
+    turn" loop with a single call to `rasterizeCoverage` (no clips) or
+    `rasterizeIntersectedCoverage` (one or more). `internal/graphics/
+    state.go`'s `Clips` doc comment, which used to describe the
+    multiplication approximation directly, now points at
+    `rasterizeIntersectedCoverage`'s doc comment instead.
+- **Tests.** `internal/raster/scanline_test.go` gained the sharpest
+    possible case distinguishing exact intersection from the old
+    approximation: a path covering a pixel column's left half and a clip
+    covering that same column's *right* half - two sub-pixel regions
+    that do not overlap at all, so the true intersection is exactly 0,
+    while multiplying the two independently-rasterized coverage values
+    (0.5 * 0.5) would have wrongly produced 0.25
+    (`TestRasterizeIntersectedCoverageExactAtSubPixelBoundary`, which
+    also asserts the multiplied value really would have been nonzero, so
+    the test cannot silently stop exercising the fix it checks). Also
+    added: the zero-clips case matching plain `rasterizeCoverage` exactly
+    (`TestRasterizeIntersectedCoverageMatchesUnclippedWhenNoClips`), and
+    three simultaneously active opaque-interior clips still agreeing with
+    what the old approximation already got right for that case
+    (`TestRasterizeIntersectedCoverageThreeClipsAgreesWithOpaqueCase`) -
+    confirming the common case did not regress. The same sub-pixel-
+    boundary scenario was added end to end at both `Canvas.Fill`
+    (`canvas_test.go`'s
+    `TestFillWithClipIntersectsExactlyAtSubPixelBoundary`) and
+    `RenderTransparent`/`compositeOp` (`tile_test.go`'s
+    `TestRenderTransparentClipIntersectsExactlyAtSubPixelBoundary`,
+    covering the tiling-pattern path separately since it duplicates
+    rather than shares `Canvas.paint`'s logic).
+- **No existing fixture's golden image changed.** Every checked-in
+    reference PNG (`testdata/renderrefs`) still matches after this
+    change, confirming no currently-fixtured multi-clip scenario actually
+    exercises anti-aliased-edge overlap closely enough for the
+    approximation this phase replaced to have been visibly wrong there -
+    consistent with the approximation being exact for opaque-interior
+    clips, the common case. Full test suite, `go vet`, and `go build` all
+    pass clean; 20-second fuzz runs of both the root package's
+    `FuzzOpenAndRender` and `internal/content`'s `FuzzParseAndInterpret`
+    found no panic or hang attributable to this phase's change (the
+    latter run did surface one pre-existing, unrelated crash - a
+    malformed inline image `/H` value overflowing a slice allocation in
+    `internal/syntax.Lexer.ReadRawBytes` - confirmed present on the
+    pre-Phase-15 commit too, so it is a separate, already-existing bug
+    rather than a regression from this phase; it has not been fixed
+    here, since it is out of this phase's scope).
+- **What's carried forward.** Phase 15 is complete: both stroke joins
+    (15a) and clip intersection (15b) now match a true reference geometry
+    rather than approximating it. The pre-existing, unrelated inline-image
+    parsing crash noted above remains open and is not tracked by this
+    document (it belongs to `internal/content`/`internal/syntax`'s own
+    scope, not Phase 15's).

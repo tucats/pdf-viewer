@@ -145,13 +145,13 @@ type State struct {
 	// intersected last, together with the fill rule each was intersected
 	// under. The *effective* clip region is the intersection of all of
 	// them - PDF's clipping operators only ever narrow the current clip,
-	// never widen it, so accumulating a list (rather than attempting to
-	// compute one single combined polygon via a general polygon-boolean
-	// algorithm, which internal/raster's minimal scanline rasterizer does
-	// not implement) is both correct and simple: internal/raster
-	// evaluates each clip Path's coverage independently and combines them
-	// by multiplication. An empty (nil) Clips means "unclipped" (besides
-	// the page itself).
+	// never widen it, so accumulating a list (rather than eagerly
+	// computing one single combined polygon whenever "W" runs) is both
+	// correct and simple: internal/raster combines them at paint time,
+	// exactly (see rasterizeIntersectedCoverage's doc comment for how a
+	// general 2D polygon-boolean algorithm turns out not to be needed at
+	// all - a per-scanline 1D interval intersection is enough). An empty
+	// (nil) Clips means "unclipped" (besides the page itself).
 	Clips []ClipPath
 }
 

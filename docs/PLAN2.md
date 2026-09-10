@@ -347,7 +347,7 @@ approximation.
 
 ## Phase 16: Remaining page boxes and PDF 2.0 verification
 
-**Status: Not started.**
+**Status: Done (16a-16c).**
 
 Both are low real-world impact for a general-purpose viewer:
 
@@ -1979,3 +1979,115 @@ in order, not rewritten later except to fix mistakes.
     parsing crash noted above remains open and is not tracked by this
     document (it belongs to `internal/content`/`internal/syntax`'s own
     scope, not Phase 15's).
+
+### Phase 16a: BleedBox/TrimBox/ArtBox model support — done (2026-09-10)
+
+- **`internal/model`.** Added `BleedBox`/`TrimBox`/`ArtBox` fields to
+    `Page`, resolved in `buildPage`. Unlike `MediaBox`/`CropBox`/
+    `Resources`/`Rotate`, these three are **not** inheritable per the
+    specification (ISO 32000-1 Table 30's "Inheritable" column) - only a
+    leaf page's own dictionary is ever consulted (`resolveOwnBox`), never
+    an ancestor Pages node, so a value set only on an intermediate node
+    is correctly ignored. Each defaults to the page's own resolved
+    `/CropBox` (not `/MediaBox` directly - also per Table 30) when the
+    leaf dictionary has no entry of its own, then is clipped to lie
+    within `/MediaBox` via a new shared `clipToMediaBox` helper
+    (`resolveCropBox` itself is now just a two-line wrapper around it,
+    the same clipping rule the field's own doc comment already quoted
+    from the specification for all four non-Media boxes).
+- **Tests.** `internal/model/model_test.go` gained a table-driven suite
+    (`pageBoxAccessors`, run against all three boxes) mirroring every
+    existing CropBox test: defaults to CropBox when absent, an ancestor's
+    own entry is *not* inherited, a leaf page's own entry wins, clipping
+    to MediaBox, and the degenerate-no-overlap fallback - plus one
+    indirect-reference-resolution test (BleedBox only, since
+    `resolveOwnBox`'s `resolveObject` call is shared, not per-box, code).
+- **What's carried forward.** This is internal-only groundwork; nothing
+    outside `internal/model` can select these boxes yet - that is 16b.
+
+### Phase 16b: RenderOptions/ThumbnailOptions page-box selection — done (2026-09-10)
+
+- **Root package (`options.go`, `page.go`).** Added a `PageBox` enum
+    (`CropBoxPage` - the zero value, matching this package's
+    long-standing default so existing callers see no behavior change -
+    `MediaBoxPage`, `BleedBoxPage`, `TrimBoxPage`, `ArtBoxPage`) and a
+    `Box PageBox` field on both `RenderOptions` and `ThumbnailOptions`.
+    `pageDeviceGeometry` and `thumbnailScale` (previously hardcoded to
+    `page.CropBox`) now take the selected box as a parameter, resolved by
+    a new `pageBoxRect` helper; `renderAtScale` threads it through from
+    both `Render` and `Thumbnail`. `Page.Bounds` itself is deliberately
+    unchanged - still always CropBox, exactly as its own doc comment
+    already justified before this phase.
+- **Fixture and tests.** `tools/genfixtures`' `buildPageBoxes`
+    (`page-boxes.pdf`) declares all five page boxes nested 10 points
+    inside one another and paints five matching nested, distinctly
+    colored squares (largest painted first) so the color at any point
+    reveals exactly which box's own 10-point ring contains it.
+    `pdfviewer_pagebox_test.go` renders/thumbnails this fixture with each
+    `PageBox` selection in turn, asserting both the output's pixel
+    dimensions (proving the right box sized the viewport) and a
+    ring-specific sampled color a few points inside its edge (proving the
+    right box also *anchored* it, which a dimensions-only check could not
+    tell apart from a fixed-size crop). Added to
+    `TestRenderMatchesReferenceImages`'s golden-image list; no other
+    fixture's reference image changed. `docs/capability-matrix.md`'s Page
+    boxes row updated to Done.
+- **What's carried forward.** Nothing scoped to page boxes; Phase 16's
+    remaining half is PDF 2.0 verification (16c).
+
+### Phase 16c: PDF 2.0 verification — done (2026-09-10)
+
+- **Finding.** `internal/parser.validateHeader` only ever checks for the
+    literal substring `"%PDF-"` in a file's first 1024 bytes - it never
+    parses or stores a version *number* anywhere, and no other code in
+    this module branches on one either. This confirms, by construction
+    rather than by argument, exactly what `docs/PLAN.md`'s "Supported PDF
+    versions" section predicted but had not checked: a genuinely
+    `%PDF-2.0`-headered file exercises the identical code path a
+    `%PDF-1.7` file does, for every structural and content feature this
+    project implements.
+- **Fixtures (`tools/genfixtures`).** Added `newBuilderVersion` (every
+    prior fixture's `newBuilder` now just calls it with `"1.7"`) so a
+    fixture's header version is no longer hardcoded. Three new
+    `%PDF-2.0`-headered fixtures, each byte-for-byte identical to an
+    existing 1.7 fixture this project's tests already trust apart from
+    that one header line: `pdf20-classic-xref.pdf` (`buildFilledRect`'s
+    twin, exercising Phase 1's classic xref/trailer path),
+    `pdf20-xref-stream.pdf` (`buildObjectStream`'s twin, but painting a
+    real square rather than leaving the content stream empty, so a
+    rendering test - not just a parsing one - exercises the
+    object-stream-plus-cross-reference-stream path PDF 2.0 producers
+    commonly favor), and `pdf20-encrypted-aes256.pdf`
+    (`buildEncryptedAES256`'s twin via a new `version` parameter on
+    `buildEncryptedAES256FixtureVersion`) - the last one specifically
+    because Standard Security Handler revision 6 (`/V 5 /R 6`, AES-256)
+    was itself added by ISO 32000-2, making it the one genuinely
+    "PDF 2.0-era" feature this project already implements (since Phase
+    7a/7b) but had never actually exercised under an honest 2.0 header
+    rather than a 1.7 one.
+- **Tests (`pdfviewer_pdf20_test.go`, new).** Each new fixture is
+    rendered and compared - pixel-for-pixel (`compareImages`) or by
+    direct sampling for `pdf20-xref-stream.pdf`, which paints different
+    content than its twin - against what its 1.7 counterpart already
+    renders. All three added to `TestRenderMatchesReferenceImages`'s
+    golden-image list; no other fixture's reference image changed. A
+    20-second `FuzzOpenAndRender` run (which picks up the new fixtures as
+    seeds automatically) found no panic or hang. Full test suite,
+    `go vet`, and the race detector all pass clean.
+- **Scope decision: `/AF` associated files.** The one genuinely
+    2.0-specific *feature* gap PLAN2.md's Phase 16 description flagged
+    (as opposed to a structural-compatibility question, which the above
+    resolves) - zero references anywhere in this codebase, confirmed by
+    search. Left unimplemented: no known demand, and it is unrelated to
+    whether existing 1.7-targeting code handles a 2.0 file's *shared*
+    structure, which is what this sub-phase set out to verify.
+    `docs/capability-matrix.md`'s PDF versions row updated to Partial
+    (from Not started), recording exactly this: structural compatibility
+    verified, `/AF` still a documented gap, and this project's formal
+    supported-version-range statement in `docs/PLAN.md` intentionally
+    left as 1.4-1.7 (2.0 compatibility is now an observed, tested fact,
+    not a promoted target - revisit if a real PDF 2.0-only feature is
+    ever requested).
+- **What's carried forward.** Phase 16 is complete (16a-16c). The
+    pre-existing, unrelated inline-image parsing crash noted in Phase
+    15b's own entry above remains open and is still out of scope here.

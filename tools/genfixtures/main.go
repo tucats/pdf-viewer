@@ -133,6 +133,9 @@ func main() {
 		{"encrypted-password-aes128.pdf", buildEncryptedPasswordAES128()},
 		{"encrypted-password-aes256.pdf", buildEncryptedPasswordAES256()},
 		{"form-filled-no-appearance.pdf", buildFormFilledNoAppearance()},
+		{"pdf20-classic-xref.pdf", buildPDF20ClassicXref()},
+		{"pdf20-xref-stream.pdf", buildPDF20XrefStream()},
+		{"pdf20-encrypted-aes256.pdf", buildPDF20EncryptedAES256()},
 	}
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
@@ -435,6 +438,20 @@ func buildEncryptedAES256() []byte {
 	return buildEncryptedAES256Fixture("")
 }
 
+// buildPDF20EncryptedAES256 is buildEncryptedAES256's Phase 16
+// counterpart: byte-for-byte identical (same /V 5 /R 6 AES-256
+// encryption, same empty user password) except for its header, which
+// declares "%PDF-2.0" instead of "%PDF-1.7" - confirming end to end that
+// this project's newest, PDF 2.0-era Standard Security Handler revision
+// (see docs/capability-matrix.md's Encryption section and PLAN2.md's
+// Phase 16, which flagged "new encryption revisions" as a genuinely
+// 2.0-specific concern worth checking) already works correctly under a
+// file that is honestly labeled as what it is, not only under a 1.7
+// header as every other AES-256 fixture in this file happens to use.
+func buildPDF20EncryptedAES256() []byte {
+	return buildEncryptedAES256FixtureVersion("", "2.0")
+}
+
 // buildEncryptedPasswordAES256 is buildEncryptedAES256's Phase 7b
 // counterpart: byte-for-byte identical except its user password is
 // encryptedFixturePassword, not empty - see
@@ -452,6 +469,16 @@ func buildEncryptedPasswordAES256() []byte {
 // comment on why that is exact for the plain-ASCII passwords this
 // package's fixtures use).
 func buildEncryptedAES256Fixture(password string) []byte {
+	return buildEncryptedAES256FixtureVersion(password, "1.7")
+}
+
+// buildEncryptedAES256FixtureVersion is buildEncryptedAES256Fixture's
+// parameterized form, adding a version parameter so
+// buildPDF20EncryptedAES256 (Phase 16) can reuse every byte of this
+// fixture's construction except the header's declared PDF version - see
+// newBuilderVersion's doc comment for why that parameterization exists
+// at all.
+func buildEncryptedAES256FixtureVersion(password, version string) []byte {
 	const (
 		pageContentObj = 4
 		infoObj        = 5
@@ -486,7 +513,7 @@ func buildEncryptedAES256Fixture(password string) []byte {
 		panic("genfixtures: encrypting fixture title: " + err.Error())
 	}
 
-	b := newBuilder()
+	b := newBuilderVersion(version)
 	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
 	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
 	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>", nil)
@@ -573,6 +600,97 @@ func buildObjectStream() []byte {
 	b := newBuilder()
 	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
 	b.addObject(4, 0, "<< /Length 0 >>", []byte{})
+
+	packed := []struct {
+		num  int
+		dict string
+	}{
+		{2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>"},
+		{3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> /Contents 4 0 R >>"},
+	}
+	var header, body strings.Builder
+	for _, p := range packed {
+		fmt.Fprintf(&header, "%d %d ", p.num, body.Len())
+		body.WriteString(p.dict)
+		body.WriteString("\n")
+	}
+	first := header.Len()
+	compressed := deflate([]byte(header.String() + body.String()))
+
+	const objStmNum = 5
+	objStmDict := fmt.Sprintf("<< /Type /ObjStm /N %d /First %d /Filter /FlateDecode /Length %d >>", len(packed), first, len(compressed))
+	b.addObject(objStmNum, 0, objStmDict, compressed)
+
+	const xrefObjNum = 6
+	size := xrefObjNum + 1
+	xrefOffset := b.buf.Len()
+
+	var raw bytes.Buffer
+	writeXrefStreamRecord(&raw, 0, 0, 65535)                // 0: free list head
+	writeXrefStreamRecord(&raw, 1, b.offsets[1], 0)         // 1: Catalog
+	writeXrefStreamRecord(&raw, 2, objStmNum, 0)            // 2: Pages, packed at index 0
+	writeXrefStreamRecord(&raw, 2, objStmNum, 1)            // 3: Page, packed at index 1
+	writeXrefStreamRecord(&raw, 1, b.offsets[4], 0)         // 4: content stream
+	writeXrefStreamRecord(&raw, 1, b.offsets[objStmNum], 0) // 5: the object stream itself
+	writeXrefStreamRecord(&raw, 1, xrefOffset, 0)           // 6: the xref stream itself
+
+	compressedXref := deflate(raw.Bytes())
+	xrefDict := fmt.Sprintf("<< /Type /XRef /Size %d /W [1 4 2] /Root 1 0 R /Filter /FlateDecode /Length %d >>", size, len(compressedXref))
+	b.addObject(xrefObjNum, 0, xrefDict, compressedXref)
+
+	fmt.Fprintf(&b.buf, "startxref\n%d\n%%%%EOF\n", xrefOffset)
+	return b.buf.Bytes()
+}
+
+// --- Phase 16: PDF 2.0 verification -----------------------------------
+//
+// docs/PLAN2.md's Phase 16 is not "add 2.0 support" so much as "prove
+// the 1.7-targeting code above already handles a 2.0 file correctly" -
+// this project's own docs/PLAN.md already predicted that would be true,
+// since PDF 2.0 (ISO 32000-2) is a clarified superset of 1.7 for the
+// structural/content features this project implements, and nothing in
+// this codebase's parsing or rendering path ever branches on the file
+// header's declared version number at all - only its "%PDF-" prefix
+// (see internal/parser.validateHeader's own doc comment). The two
+// fixtures below are, byte for byte, what buildFilledRect and
+// buildObjectStream already proved render correctly, with only the
+// header's version number changed via newBuilderVersion - a genuinely
+// "%PDF-2.0"-labeled file exercising this project's two structural
+// cross-reference mechanisms (classic table, and stream-plus-object-
+// stream, the form PDF 2.0 producers favor).
+
+// buildPDF20ClassicXref returns a "%PDF-2.0"-headered page, otherwise
+// identical in every structural respect to buildFilledRect's plain
+// classic-cross-reference-table page - confirming this project's most
+// basic parsing path (internal/parser's classic xref/trailer handling,
+// Phase 1) does not care what version number follows "%PDF-".
+func buildPDF20ClassicXref() []byte {
+	b := newBuilderVersion("2.0")
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << >> /Contents 4 0 R >>", nil)
+
+	content := []byte("1 0 0 rg\n10 10 80 80 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	return b.finish(1)
+}
+
+// buildPDF20XrefStream returns a "%PDF-2.0"-headered page whose Pages
+// and Page dictionaries are packed into a PDF 1.5+ object stream and
+// described via a cross-reference stream - structurally identical to
+// buildObjectStream, except it paints an actual 160x160 blue square
+// (rather than leaving the content stream empty) so a rendering test,
+// not just a parsing one, can confirm this path too. PDF 2.0 producers
+// commonly favor cross-reference streams and object streams over the
+// classic forms, so this is the more realistic of this file's two
+// PDF 2.0 structural fixtures.
+func buildPDF20XrefStream() []byte {
+	b := newBuilderVersion("2.0")
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+
+	content := []byte("0 0 1 rg\n20 20 160 160 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
 
 	packed := []struct {
 		num  int
@@ -1726,8 +1844,21 @@ type builder struct {
 }
 
 func newBuilder() *builder {
+	return newBuilderVersion("1.7")
+}
+
+// newBuilderVersion is newBuilder's parameterized form: every fixture in
+// this package before Phase 16 declared "%PDF-1.7", the version this
+// project has always targeted, but Phase 16's PDF 2.0 verification
+// fixtures (buildPDF20ClassicXref and friends, below) need a real
+// "%PDF-2.0" header to prove anything - internal/parser.validateHeader
+// only ever checks for the "%PDF-" prefix itself (see that function's
+// doc comment), so a fixture built with newBuilder already happens to
+// open regardless of which version follows it, but that alone doesn't
+// demonstrate a *genuinely 2.0-labeled* file renders correctly too.
+func newBuilderVersion(version string) *builder {
 	b := &builder{offsets: make(map[int]int)}
-	b.buf.WriteString("%PDF-1.7\n")
+	fmt.Fprintf(&b.buf, "%%PDF-%s\n", version)
 	// A conventional four-byte binary comment marking the file as
 	// containing binary data, as recommended by the PDF specification so
 	// that naive text-mode file transfers don't mangle it. It has no

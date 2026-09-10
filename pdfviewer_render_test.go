@@ -233,6 +233,7 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"text-simple-truetype.pdf",
 		"text-scaled.pdf",
 		"text-type0-identity.pdf",
+		"text-type0-embedded-cmap.pdf",
 		"text-notdef-fallback.pdf",
 		"text-rotated-page.pdf",
 		"separation-fill.pdf",

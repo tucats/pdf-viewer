@@ -16,29 +16,33 @@ import (
 // cidCFFGlyphLookup below) - together with an /Encoding
 // naming how a shown string's raw bytes become character codes, and
 // each descendant font's own /CIDToGIDMap naming how a character code
-// (here, always equal to a CID - see below) becomes a glyph index.
+// (a CID, once /Encoding has resolved a raw code to one - see below)
+// becomes a glyph index.
 //
-// # Scope: only Identity-H/V encodings
+// # Scope: Identity-H/V and embedded CMap encodings; predefined CJK names partially
 //
-// PDF allows /Encoding to name any of several dozen predefined CJK
-// encodings (for vertical or horizontal Japanese, Chinese, Korean text
-// with locale-specific code-to-CID mappings) or an embedded CMap stream
-// defining an arbitrary one, each of which can use a different number of
-// bytes per character code depending on the code's value (a genuinely
-// variable-width encoding, unlike a simple font's fixed one byte). This
-// package implements only the two the specification defines directly
-// rather than through an external CMap resource: "Identity-H" and
-// "Identity-V", under which a code is always exactly two bytes and
-// numerically equal to its own CID (hence "Identity") - overwhelmingly
-// the most common choice for a PDF produced by embedding a subsetted
-// Latin, or indeed any non-CJK-legacy-workflow, font, since it needs no
-// separate CMap resource at all. Any other /Encoding value still
-// produces a usable Font (assuming, as an approximation, that it is
-// still 2-byte-per-code - true for the large majority of the predefined
-// CJK encodings this package does not otherwise implement), but with no
-// way to know real CIDs from raw codes: it falls back to this package's
-// generic default width and notdefGlyph for every code - see
-// docs/capability-matrix.md.
+// PDF allows /Encoding to be one of three things: the literal name
+// "Identity-H" or "Identity-V" (a code is always exactly two bytes and
+// numerically equal to its own CID - overwhelmingly the most common
+// choice for a PDF produced by embedding a subsetted Latin, or indeed
+// any non-CJK-legacy-workflow, font, since it needs no separate CMap
+// resource at all), an embedded CMap stream (a PostScript-like
+// "begincidrange"/"begincidchar" structure - see cidcmap.go - defining
+// an arbitrary, possibly variable-width, code-to-CID mapping), or the
+// name of one of PDF's several dozen *predefined* CJK encodings (e.g.
+// "UniGB-UCS2-H") whose mapping data is not present in the PDF file at
+// all - a conforming reader is expected to already have Adobe's own
+// CMap resource files for these on hand. loadType0Encoding (below)
+// handles the first two directly; for the third, this package ships no
+// bundled copy of that licensed Adobe data (see docs/FONTS.md's "Scope
+// decision" discussion of the same policy for font files), so a
+// predefined name only resolves to a real CMap if the embedding
+// application supplies that data itself via pdfviewer.WithPredefinedCMaps
+// (root package) - see predefined_cmap.go. Without that option (the
+// default), a predefined name still produces a usable Font, exactly as
+// every case this package cannot fully resolve does: 2-byte codes
+// assumed, this package's generic default width and notdefGlyph for
+// every code - see docs/capability-matrix.md.
 func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	f := &Font{TwoByteCodes: true, defaultWidth: 1000}
 
@@ -56,6 +60,7 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 		f.defaultWidth = dw
 	}
 	f.widths = parseCIDWidths(descendant["W"], resolver)
+	loadType0Encoding(f, dict, resolver)
 
 	descriptor, _ := dictValue(resolver, descendant, "FontDescriptor")
 	if sfnt, ok := loadEmbeddedTrueType(descriptor, resolver); ok {
@@ -91,6 +96,61 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	// doc.go's "Text extraction is a separate, later capability").
 	diag.Note(resolver, "Type0 font %v has no usable embedded TrueType or CFF outline data (no /FontFile2 or /FontFile3, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"])
 	return f, nil
+}
+
+// loadType0Encoding resolves dict's /Encoding entry (PDF specification
+// 9.7.5) into f's own code-decoding state:
+//
+//   - The Name "Identity-H" or "Identity-V" needs no further work: f
+//     already defaults to TwoByteCodes with cmap nil, which is exactly
+//     Identity-H/V's "a code is always 2 bytes, equal to its own CID"
+//     rule (see this file's package doc comment).
+//   - A Stream is an embedded CMap: its filter-decoded bytes are parsed
+//     by cidcmap.go's parseCMap into a real *CMap, attached to f so that
+//     Font.DecodeCodes and Font.cidFor (font.go) use it instead of the
+//     Identity-H/V fast path - a code can now map to an arbitrary CID,
+//     and (for a codespace declaring more than one byte length) be
+//     decoded at more than one width.
+//   - Any other Name (a predefined CJK encoding this package has no
+//     bundled data for) is handed to predefinedCMapFor, which resolves
+//     it only if the caller opted into pdfviewer.WithPredefinedCMaps
+//     (predefined_cmap.go) - otherwise f is left exactly as it defaulted
+//     (2-byte codes assumed, no CID translation), matching this
+//     package's existing "still usable, just imprecise" fallback for
+//     every encoding it cannot fully resolve.
+//
+// A missing or unresolvable /Encoding entry (dict["Encoding"] absent, an
+// indirect reference to a nonexistent object, or a value of some other
+// PDF object type entirely) is silently treated the same as the
+// Identity-H/V case - the specification requires /Encoding, but a font
+// dictionary missing it is far more likely a producer bug than a
+// deliberate choice, and this package's default (2-byte codes, code ==
+// CID) is the least-wrong guess available; every earlier version of
+// this package effectively made that same assumption unconditionally.
+func loadType0Encoding(f *Font, dict syntax.Dictionary, resolver Resolver) {
+	enc, err := resolveIfRef(resolver, dict["Encoding"])
+	if err != nil {
+		return
+	}
+
+	switch e := enc.(type) {
+	case syntax.Name:
+		if e == "Identity-H" || e == "Identity-V" {
+			return
+		}
+		if cm, ok := predefinedCMapFor(resolver, string(e)); ok {
+			f.cmap = cm
+			return
+		}
+		diag.Note(resolver, "Type0 font %v uses predefined CJK encoding %q, which this package has no bundled CMap data for; its glyphs will render as placeholder boxes unless pdfviewer.WithPredefinedCMaps supplies that data", dict["BaseFont"], e)
+
+	case syntax.Stream:
+		data, err := resolver.DecodeStream(e)
+		if err != nil {
+			return
+		}
+		f.cmap = parseCMap(data, predefinedCMapResolverFor(resolver))
+	}
 }
 
 // firstDescendantFont resolves dict's /DescendantFonts entry - per the

@@ -239,6 +239,65 @@ func TestLoad_Type0IdentityH(t *testing.T) {
 	}
 }
 
+// TestLoad_Type0EmbeddedCMap is TestLoad_Type0IdentityH's Phase 9
+// counterpart: the same descendant font and embedded TrueType program,
+// but reached through an embedded CMap *stream* /Encoding (mapping the
+// arbitrary 2-byte code 0x1234 to CID 1) instead of the literal name
+// "Identity-H" - confirming loadType0Encoding (cid.go) actually parses
+// and attaches a real CMap, and that Font.DecodeCodes/Width/Glyph
+// (font.go) correctly translate a raw code through it rather than
+// assuming code == CID.
+func TestLoad_Type0EmbeddedCMap(t *testing.T) {
+	glyphs := [][]byte{{}, unitSquareGlyph()}
+	cmapTable := buildCmapFormat0Table(nil)
+	sfntData := buildTestSfnt(t, glyphs, cmapTable)
+
+	cmapStream := []byte("1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n" +
+		"1 begincidrange\n<1234> <1234> 1\nendcidrange\nendcmap\n")
+
+	resolver := fakeResolver{objects: map[int]syntax.Object{
+		10: syntax.Stream{Raw: sfntData},
+		20: syntax.Dictionary{
+			"Subtype":        syntax.Name("CIDFontType2"),
+			"DW":             syntax.Integer(1000),
+			"W":              syntax.Array{syntax.Integer(1), syntax.Array{syntax.Integer(600)}},
+			"FontDescriptor": syntax.Dictionary{"FontFile2": syntax.Reference{Number: 10}},
+			"CIDToGIDMap":    syntax.Name("Identity"),
+		},
+		30: syntax.Stream{Raw: cmapStream},
+	}}
+	dict := syntax.Dictionary{
+		"Subtype":         syntax.Name("Type0"),
+		"Encoding":        syntax.Reference{Number: 30},
+		"DescendantFonts": syntax.Array{syntax.Reference{Number: 20}},
+	}
+
+	f, err := Load(dict, resolver)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	codes := f.DecodeCodes([]byte{0x12, 0x34})
+	if len(codes) != 1 || codes[0] != (DecodedCode{Code: 0x1234, Bytes: 2}) {
+		t.Fatalf("DecodeCodes(<1234>) = %+v, want one code {0x1234 2}", codes)
+	}
+
+	rawCode := codes[0].Code
+	if w := f.Width(rawCode); w != 600 {
+		t.Errorf("Width(raw code 0x1234, -> CID 1) = %v, want 600", w)
+	}
+	glyph := f.Glyph(rawCode)
+	if glyph == nil || len(glyph.Subpaths) != 1 {
+		t.Fatalf("Glyph(raw code 0x1234, -> CID 1 -> GID 1) did not resolve the embedded square outline")
+	}
+
+	// A code the CMap declares nothing about at all should fall back to
+	// CID 0 (.notdef) rather than being (wrongly) treated as its own CID.
+	if w := f.Width(0x9999); w != 1000 {
+		t.Errorf("Width(unmapped code) = %v, want the /DW default 1000 (via CID 0)", w)
+	}
+}
+
 func TestLoad_MalformedDictStillReturnsUsableFont(t *testing.T) {
 	// A font dictionary this package cannot recognize at all (missing
 	// /Subtype, no descendant fonts, ...) must still degrade to a usable

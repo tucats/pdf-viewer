@@ -128,6 +128,50 @@ func buildTextType0Identity() []byte {
 	return b.finish(1)
 }
 
+// buildTextType0EmbeddedCMap returns a single 100x100-point page
+// structurally identical to buildTextType0Identity above - same
+// embedded TrueType program, same rendered square, same size and
+// position - except its /Encoding is an embedded CMap *stream* (object
+// 6) instead of the literal name "Identity-H", exercising Phase 9's
+// CMap parsing end to end: the shown string is the 2-byte hex string
+// "<1234>", an arbitrary code this fixture's own CMap maps to CID 1 via
+// a single "begincidrange" entry (which /CIDToGIDMap /Identity then
+// maps directly to glyph index 1, the square - same as
+// buildTextType0Identity's CID 1). Rendering this fixture should
+// therefore produce pixel-identical output to buildTextType0Identity's,
+// despite going through cid.go's embedded-CMap path (loadType0Encoding,
+// cidcmap.go's parseCMap) rather than its Identity-H fast path.
+func buildTextType0EmbeddedCMap() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("1 0 0 rg\nBT\n/F1 100 Tf\n0 0 Td\n<1234> Tj\nET\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	b.addObject(5, 0, "<< /Type /Font /Subtype /Type0 /BaseFont /GenfixturesSquare-CMap "+
+		"/Encoding 6 0 R /DescendantFonts [7 0 R] >>", nil)
+
+	cmap := []byte("/CIDSystemInfo << /Registry (Genfixtures) /Ordering (Custom) /Supplement 0 >> def\n" +
+		"/CMapName /Genfixtures-Custom def\n" +
+		"/CMapType 1 def\n" +
+		"1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n" +
+		"1 begincidrange\n<1234> <1234> 1\nendcidrange\n" +
+		"endcmap\n")
+	b.addObject(6, 0, fmt.Sprintf("<< /Length %d >>", len(cmap)), cmap)
+
+	b.addObject(7, 0, "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /GenfixturesSquare "+
+		"/DW 1000 /W [1 [1000]] /CIDToGIDMap /Identity /FontDescriptor 8 0 R >>", nil)
+	b.addObject(8, 0, "<< /Type /FontDescriptor /FontName /GenfixturesSquare /Flags 32 /FontFile2 9 0 R >>", nil)
+
+	program := buildTestFontProgram()
+	b.addObject(9, 0, fmt.Sprintf("<< /Length %d >>", len(program)), program)
+
+	return b.finish(1)
+}
+
 // buildTextNotdefFallback returns a single 100x100-point page showing
 // 'A' at font size 100, text origin (0,0), in a simple font declaring
 // /BaseFont /Helvetica with *no* /FontFile* entry at all - exercising

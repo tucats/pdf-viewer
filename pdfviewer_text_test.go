@@ -68,6 +68,25 @@ func TestRenderType0IdentityTextMatchesSimpleFont(t *testing.T) {
 	assertBackground(t, img, 95, 95)
 }
 
+// TestRenderType0EmbeddedCMapTextMatchesIdentity is Phase 9's end-to-end
+// confirmation that an embedded CMap /Encoding stream actually drives
+// real rendering, not just cid.go's own unit tests: buildTextType0EmbeddedCMap
+// shows the arbitrary 2-byte code 0x1234, which this fixture's own CMap
+// (parsed by internal/fonts/cidcmap.go's parseCMap, via cid.go's
+// loadType0Encoding) maps to CID 1 - the same CID
+// TestRenderType0IdentityTextMatchesSimpleFont's Identity-H fixture
+// reaches directly - so the two fixtures should render pixel-for-pixel
+// identically despite the embedded-CMap fixture never using "code ==
+// CID" at all.
+func TestRenderType0EmbeddedCMapTextMatchesIdentity(t *testing.T) {
+	img := renderPage(t, "text-type0-embedded-cmap.pdf")
+	assertInk(t, img, 50, 50, 255, 0, 0)
+	assertInk(t, img, 20, 20, 255, 0, 0)
+	assertInk(t, img, 80, 80, 255, 0, 0)
+	assertBackground(t, img, 5, 5)
+	assertBackground(t, img, 95, 95)
+}
+
 // TestRenderScaledText confirms buildTextScaled's two differently-sized
 // glyphs (size 40 at text origin (0,0), then size 80 after "60 0 Td")
 // land at their two independently hand-derived device rectangles - see

@@ -289,7 +289,7 @@ func (in *interpreter) showGlyph(st *graphics.State, glyph *graphics.Path, trm g
 
 // showText implements the core of "Tj" (and, through it, "'", "\"", and
 // each string element of a "TJ" array): decode s into character codes
-// per the current font's code width (see fonts.Font.TwoByteCodes), and
+// per the current font's own encoding (see fonts.Font.DecodeCodes), and
 // for each code, paint its glyph (if any - see showGlyph) at the text
 // matrix's current position and then advance the text matrix by that
 // glyph's width, per the specification's formula (9.4.3):
@@ -298,11 +298,13 @@ func (in *interpreter) showGlyph(st *graphics.State, glyph *graphics.Path, trm g
 //
 // (the "Tj/1000" term is TJ's own per-element numeric adjustment,
 // handled separately by showAdjustment below, not by this function) -
-// word spacing (Tw) applies only to the single-byte code 32, and never
-// to any byte within a multi-byte (Type0) code, exactly as the
-// specification requires. Only horizontal writing (the vast majority of
-// real-world PDF text) is implemented; a vertical-mode Type0 font
-// ("Identity-V" - see internal/fonts/cid.go) still shows text and
+// word spacing (Tw) applies only to a single-byte code with value 32,
+// and never to any byte within a multi-byte (Type0) code even if part
+// of it happens to equal 32, exactly as the specification requires (see
+// fonts.DecodedCode's doc comment for why DecodeCodes reports each
+// code's byte width alongside its value). Only horizontal writing (the
+// vast majority of real-world PDF text) is implemented; a vertical-mode
+// Type0 font ("Identity-V" - see internal/fonts/cid.go) still shows text and
 // advances correctly along the same horizontal formula rather than
 // vertically, a documented simplification rather than a silently wrong
 // (as opposed to merely differently laid out) result.
@@ -318,13 +320,13 @@ func (in *interpreter) showText(st *graphics.State, s []byte) {
 		diag.Note(in.resolver, "text shown with no font selected (no successful \"Tf\" yet); skipped")
 		return
 	}
-	for _, code := range decodeCodes(font, s) {
+	for _, dc := range font.DecodeCodes(s) {
 		trm := textRenderingMatrix(st, in.text.tm)
-		in.showGlyph(st, font.Glyph(code), trm)
+		in.showGlyph(st, font.Glyph(dc.Code), trm)
 
-		w0 := font.Width(code) / 1000
+		w0 := font.Width(dc.Code) / 1000
 		tw := 0.0
-		if !font.TwoByteCodes && code == 32 {
+		if dc.Bytes == 1 && dc.Code == 32 {
 			tw = st.WordSpace
 		}
 		tx := (w0*st.FontSize + st.CharSpace + tw) * (st.Hscale / 100)
@@ -342,28 +344,6 @@ func (in *interpreter) showText(st *graphics.State, s []byte) {
 func (in *interpreter) showAdjustment(st *graphics.State, amount float64) {
 	tx := -(amount / 1000) * st.FontSize * (st.Hscale / 100)
 	in.text.tm = graphics.Translate(tx, 0).Mul(in.text.tm)
-}
-
-// decodeCodes splits s into character codes according to font's code
-// width: two bytes (big-endian) per code for a Type0/Identity-H(V) font
-// (see fonts.Font.TwoByteCodes), one byte per code otherwise. A trailing
-// odd byte on a two-byte-code font (malformed content) is simply
-// dropped rather than treated as an error, consistent with this
-// project's general tolerance for minor real-world content stream
-// corruption (see, for example, internal/syntax.Lexer's doc comment).
-func decodeCodes(font *fonts.Font, s []byte) []int {
-	if !font.TwoByteCodes {
-		codes := make([]int, len(s))
-		for i, b := range s {
-			codes[i] = int(b)
-		}
-		return codes
-	}
-	codes := make([]int, 0, len(s)/2)
-	for i := 0; i+1 < len(s); i += 2 {
-		codes = append(codes, int(s[i])<<8|int(s[i+1]))
-	}
-	return codes
 }
 
 // singleArrayOperand requires operands to contain exactly one

@@ -153,3 +153,72 @@ func FuzzParseCFFFont(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseCMap feeds arbitrary byte slices into parseCMap (cidcmap.go) -
+// an embedded Type0 font's /Encoding stream, or (once a caller has
+// configured pdfviewer.WithPredefinedCMaps) a predefined CJK encoding
+// resource - and exercises every method a resulting *CMap exposes,
+// matching this file's established "never panics, always terminates"
+// property for a from-scratch parser over untrusted bytes. A usecmap
+// resolver that itself calls back into parseCMap (predefined_cmap.go's
+// real use of this parser) is exercised here too, via a small fixed
+// two-entry table, specifically to catch a cycle between resolved names -
+// the one way this parser's own recursion could otherwise run away
+// despite parseCMap's single-call parsing being loop-free by
+// construction.
+func FuzzParseCMap(f *testing.F) {
+	f.Add([]byte(`
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+2 begincidrange
+<0000> <00FF> 0
+<0100> <01FF> 256
+endcidrange
+1 begincidchar
+<0041> 65
+endcidchar
+endcmap
+`))
+	f.Add([]byte(`
+/Base usecmap
+1 begincidchar
+<0041> 65
+endcidchar
+endcmap
+`))
+	f.Add([]byte(""))
+	f.Add([]byte("begincodespacerange"))
+
+	// A CMapSource whose two names each usecmap the other, routed through
+	// the real newPredefinedCMapResolver (predefined_cmap.go) so the
+	// fuzzer actually exercises its depth guard instead of only ever
+	// seeing resolveUseCMap return ok=false. Without that guard, this
+	// pair would make parseCMap recurse forever the first time either
+	// name is resolved.
+	resolve := newPredefinedCMapResolver(cyclicCMapSource{}, maxUseCMapDepth)
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		cm := parseCMap(data, resolve)
+		for _, code := range []uint32{0, 0x41, 0xFFFF, 0x10000} {
+			cm.CIDForCode(code)
+		}
+		cm.decode(data)
+	})
+}
+
+// cyclicCMapSource is FuzzParseCMap's CMapSource: "A" and "B" each
+// usecmap the other, forming the cycle newPredefinedCMapResolver's depth
+// guard exists to survive.
+type cyclicCMapSource struct{}
+
+func (cyclicCMapSource) CMapData(name string) ([]byte, bool) {
+	switch name {
+	case "A":
+		return []byte("/B usecmap\n1 begincidchar\n<0001> 1\nendcidchar\nendcmap\n"), true
+	case "B":
+		return []byte("/A usecmap\n1 begincidchar\n<0002> 2\nendcidchar\nendcmap\n"), true
+	default:
+		return nil, false
+	}
+}

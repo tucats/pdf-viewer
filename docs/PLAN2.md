@@ -139,7 +139,7 @@ correctly end to end.
 
 ## Phase 9: Non-Identity Type 0/CID encodings (CJK support)
 
-**Status: Not started.**
+**Status: 9a and 9b done.**
 
 Today, any Type 0/CID font not using `Identity-H`/`Identity-V` - that
 is, any predefined CJK encoding (`UniGB-UCS2-H`, `UniCNS-UCS2-H`,
@@ -950,3 +950,110 @@ in order, not rewritten later except to fix mistakes.
     natural next sub-phase if a real file ever needs it - the same
     "wait for a real file" judgment 8c made about symbol mode, which
     turned out to be needed within a day.
+
+### Phase 9a: CMap parsing core — done (2026-09-09)
+
+- **`internal/fonts/cidcmap.go` (new).** A from-scratch parser for PDF's
+    CMap grammar (ISO 32000-1 9.7.5, a small PostScript-like subset)
+    built on `internal/syntax`'s existing token `Lexer` - the same lexer
+    `internal/content`'s own content-stream `Parse` drives directly,
+    reused here for an unrelated grammar built from the same tokens
+    (hex strings, names, integers, bare keywords). Covers
+    `begincodespacerange`/`begincidrange`/`begincidchar` and `usecmap`
+    chaining (a `parent` `*CMap`, checked only after this CMap's own
+    tables miss - matching the specification's "supplements, does not
+    replace" wording), plus `CMap.decode`, splitting a shown string into
+    codes per the codespace's own (possibly mixed) byte lengths rather
+    than a single fixed width. Every parse failure - truncated input, a
+    missing operand, an oversized or malformed hex string, an unresolved
+    `usecmap` name - is tolerated (that entry, or the whole CMap, is
+    simply absent from the result) rather than surfaced as an error, the
+    same policy this package already applies to every other malformed
+    PDF field it reads.
+- **Not yet wired into any `Font`** - this sub-phase is the parser and
+    its own unit tests (`cidcmap_test.go`) only, deliberately kept
+    independently testable (a `[]byte` in, a `*CMap` with plain methods
+    out, no PDF document structure involved) before 9b makes `cid.go`
+    depend on it.
+
+### Phase 9b: wire embedded CMap `/Encoding` streams into Type0 fonts — done (2026-09-09)
+
+- **`cid.go`'s `loadType0Encoding` (new).** Resolves a Type0 font's
+    `/Encoding` entry for real, replacing the previous unconditional
+    "assume Identity-H/V" behavior: the names `Identity-H`/`Identity-V`
+    still take the existing fast path (no CMap needed, code == CID by
+    definition), and a `Stream` value - an embedded CMap - is now
+    filter-decoded and parsed via 9a's `parseCMap`, attached to the
+    `Font` as its `cmap` field. A predefined CJK encoding *name* (e.g.
+    `UniGB-UCS2-H`) is handed to `predefinedCMapFor`
+    (`predefined_cmap.go`, new - see below), which returns `ok=false`
+    for every caller until a further sub-phase exposes a way to actually
+    configure one, so this case's behavior is unchanged from before this
+    phase: 2-byte codes assumed, `notdefGlyph` for every code.
+- **`font.go`: `Font.DecodeCodes` and `Font.cidFor` (new).** Splitting a
+    shown string into codes (previously `internal/content/text.go`'s own
+    `decodeCodes`, driven by the public `TwoByteCodes` bool) moved onto
+    `Font` itself as `DecodeCodes`, returning a `[]DecodedCode` pairing
+    each code with how many raw bytes it consumed - needed because a
+    CMap's codespace can mix byte widths, and because PDF's word-spacing
+    rule cares specifically about a *single-byte* code 32, not just any
+    code whose value happens to be 32. `cidFor` is the identity function
+    for every font except one with a real `cmap` attached, for which it
+    resolves a raw code to its actual CID (falling back to CID 0/.notdef
+    for a code the CMap says nothing about) before `Width`/`Glyph` index
+    their CID-keyed data - so Identity-H/V and simple fonts are
+    completely unaffected by this refactor.
+- **`internal/content/text.go`** updated to call `font.DecodeCodes`
+    instead of its own removed `decodeCodes`, and to gate word spacing on
+    `DecodedCode.Bytes == 1` instead of `!font.TwoByteCodes`.
+- **`predefined_cmap.go` (new, `internal/fonts`).** Defines the
+    extension point a later sub-phase will expose publicly:
+    `CMapSource` (one method, `CMapData(name) ([]byte, bool)`) and
+    `CMapSourceProvider`, mirroring `substitute.go`'s
+    `FontSource`/`SubstitutionProvider` pattern exactly (a `Resolver`
+    that also structurally implements `CMapSourceProvider` - in
+    practice, `*internal/model.Document` once wired - is asked for a
+    configured source via `PredefinedCMapSource() any`, type-asserted
+    back to `CMapSource` on this package's side). `newPredefinedCMapResolver`
+    bounds how many chained `usecmap` resolutions it will follow
+    (`maxUseCMapDepth`, 8) before giving up, since a cycle here spans
+    multiple independent `parseCMap` calls that `parseCMap` itself has
+    no way to detect - the reason this guard could not simply live
+    inside `cidcmap.go`'s own (single-call, therefore cycle-free by
+    construction) parsing loop.
+- **Fixtures.** `tools/genfixtures` gained `buildTextType0EmbeddedCMap`
+    (`text-type0-embedded-cmap.pdf`): structurally identical to the
+    existing `text-type0-identity.pdf` (same embedded TrueType program,
+    same rendered square, same size/position) except its `/Encoding` is
+    an embedded CMap stream mapping the arbitrary code `0x1234` to CID 1
+    instead of the literal name `Identity-H` - the two fixtures are
+    asserted to render pixel-for-pixel identically
+    (`TestRenderType0EmbeddedCMapTextMatchesIdentity`,
+    `pdfviewer_text_test.go`) despite going through entirely different
+    `cid.go` code paths, plus a checked-in golden PNG
+    (`testdata/renderrefs/text-type0-embedded-cmap.png`).
+- **Tests.** `cidcmap_test.go` (9a) covers codespace/cidrange/cidchar
+    parsing, mixed-byte-length codespaces, `usecmap` chaining and its
+    "supplements, doesn't replace" precedence, an unresolved `usecmap`,
+    and a battery of malformed/truncated inputs. `font_test.go` gained
+    `TestLoad_Type0EmbeddedCMap` (a full `Load` through an embedded CMap
+    stream, confirming `DecodeCodes`/`Width`/`Glyph` all correctly
+    translate a raw code through it, including the CID-0 fallback for an
+    unmapped code). `predefined_cmap_test.go` covers the
+    `CMapSourceProvider` wiring (mirroring `substitute_test.go`'s own
+    coverage of `SubstitutionProvider`) and a deliberately cyclic
+    `CMapSource` (`fuzz_test.go`'s new `cyclicCMapSource`) proving the
+    `usecmap` depth guard actually terminates rather than recursing
+    forever. `fuzz_test.go` gained `FuzzParseCMap`, exercised for both
+    an ordinary CMap grammar and (via that same cyclic source, routed
+    through the real depth-bounded resolver) the `usecmap` cycle case;
+    an 8M-execution run found no panic or hang. Full test suite, `go
+    vet`, and the race detector all pass clean; regenerating every
+    `tools/genfixtures` fixture reproduced every existing file
+    byte-for-byte except the one new fixture added.
+- **What's carried forward.** Predefined CJK encoding names remain
+    unresolvable until a further sub-phase exposes `CMapSource`
+    publicly (a `pdfviewer.WithPredefinedCMaps` option, following
+    `WithFontSubstitution`'s precedent) with a real, disk-backed
+    `CMapSource` implementation and end-to-end fixtures/tests - see
+    Phase 9's own remaining scope.

@@ -308,23 +308,22 @@ func beValue(b []byte) uint32 {
 //
 // resolveUseCMap, if non-nil, is called with the name a "usecmap"
 // operator names (e.g. "/UniGB-UCS2-H usecmap" calls it with
-// "UniGB-UCS2-H") to resolve that referenced CMap - used by Phase 9c's
-// predefined-CMap support (predefined_cmap.go) so an embedded CMap that
+// "UniGB-UCS2-H") to resolve that referenced CMap - used by
+// predefined_cmap.go's predefined-CMap support so an embedded CMap that
 // itself builds on a predefined one can inherit its codespace and CID
-// mappings; pass nil when no such resolution is available (which simply
+// mappings. Pass nil when no such resolution is available, which simply
 // means a "usecmap" operator has no effect, exactly as if the CMap
-// omitted it) or when parsing a CMap resolveUseCMap itself resolved to
-// (depth guards against a resolver that somehow chains CMaps into a
-// cycle - see maxUseCMapDepth).
+// omitted it - cid.go's loadType0Encoding does this for an embedded
+// CMap stream whenever pdfviewer.WithPredefinedCMaps was never
+// configured. A resolveUseCMap that itself might recurse (predefined
+// CMap A using predefined CMap B using predefined CMap A again) is
+// responsible for its own cycle guard - see
+// predefinedCMapResolverFor's newPredefinedCMapResolver, which bounds
+// how many chained calls it will make via maxUseCMapDepth before simply
+// reporting "not found" - since parseCMap itself has no way to detect a
+// cycle spanning more than one call to it.
 func parseCMap(data []byte, resolveUseCMap func(name string) (*CMap, bool)) *CMap {
-	return parseCMapAtDepth(data, resolveUseCMap, 0)
-}
-
-func parseCMapAtDepth(data []byte, resolveUseCMap func(name string) (*CMap, bool), depth int) *CMap {
 	cm := &CMap{chars: make(map[uint32]int)}
-	if depth > maxUseCMapDepth {
-		return cm
-	}
 
 	lex := syntax.NewLexer(bytes.NewReader(data))
 	var lastName string

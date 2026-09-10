@@ -229,17 +229,21 @@ func TestTextRenderingMatrix_RotatedCTM(t *testing.T) {
 	}
 }
 
-// TestDecodeCodes_TwoByteVsOneByte confirms decodeCodes splits a shown
-// string's bytes according to the font's own code width: one byte per
-// code for an ordinary simple font, two (big-endian) for a Type0/
-// Identity-H composite font - see fonts.Font.TwoByteCodes's doc comment.
+// TestDecodeCodes_TwoByteVsOneByte confirms Font.DecodeCodes splits a
+// shown string's bytes according to the font's own code width: one byte
+// per code for an ordinary simple font, two (big-endian) for a Type0/
+// Identity-H composite font - see fonts.Font.DecodeCodes's doc comment.
 func TestDecodeCodes_TwoByteVsOneByte(t *testing.T) {
 	simpleFont, err := fonts.Load(nonEmbeddedSimpleFontDict, &fakeResolver{})
 	if err != nil {
 		t.Fatalf("Load (simple): %v", err)
 	}
-	if codes := decodeCodes(simpleFont, []byte{0x41, 0x42}); len(codes) != 2 || codes[0] != 0x41 || codes[1] != 0x42 {
-		t.Errorf("decodeCodes (simple) = %v, want [65 66]", codes)
+	codes := simpleFont.DecodeCodes([]byte{0x41, 0x42})
+	if len(codes) != 2 || codes[0].Code != 0x41 || codes[1].Code != 0x42 {
+		t.Errorf("DecodeCodes (simple) = %v, want [65 66]", codes)
+	}
+	if codes[0].Bytes != 1 || codes[1].Bytes != 1 {
+		t.Errorf("DecodeCodes (simple) byte widths = %v, want [1 1]", codes)
 	}
 
 	type0Dict := syntax.Dictionary{
@@ -254,7 +258,11 @@ func TestDecodeCodes_TwoByteVsOneByte(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load (Type0): %v", err)
 	}
-	if codes := decodeCodes(type0Font, []byte{0x00, 0x41, 0x01, 0x02}); len(codes) != 2 || codes[0] != 0x0041 || codes[1] != 0x0102 {
-		t.Errorf("decodeCodes (Type0) = %v, want [65 258]", codes)
+	codes = type0Font.DecodeCodes([]byte{0x00, 0x41, 0x01, 0x02})
+	if len(codes) != 2 || codes[0].Code != 0x0041 || codes[1].Code != 0x0102 {
+		t.Errorf("DecodeCodes (Type0) = %v, want [65 258]", codes)
+	}
+	if codes[0].Bytes != 2 || codes[1].Bytes != 2 {
+		t.Errorf("DecodeCodes (Type0) byte widths = %v, want [2 2]", codes)
 	}
 }

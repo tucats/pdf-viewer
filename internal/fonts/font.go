@@ -174,13 +174,90 @@ type Font struct {
 	// (see docs/capability-matrix.md), not a positioning error, since
 	// Width is unaffected either way.
 	spaceCodes map[int]bool
+
+	// cmap is non-nil only for a Type0/CID font whose /Encoding is an
+	// embedded CMap stream (Phase 9, cid.go's loadType0Encoding) rather
+	// than "Identity-H"/"Identity-V" - it is what makes DecodeCodes split
+	// a shown string per the CMap's own (possibly variable-width)
+	// codespace ranges instead of TwoByteCodes' fixed 2-byte assumption,
+	// and what makes cidFor translate a raw code into its real CID
+	// instead of trusting code == CID. nil for every other font
+	// (including Identity-H/V, which needs neither translation).
+	cmap *CMap
+}
+
+// DecodeCodes splits s - a "Tj"-shown string's raw bytes - into
+// character codes according to this font's own encoding, pairing each
+// with the number of raw bytes it was expressed in (see DecodedCode's
+// doc comment for why internal/content's word-spacing rule needs that
+// second value):
+//
+//   - A simple font (TwoByteCodes false): one byte per code, exactly the
+//     splitting internal/content/text.go always did directly before this
+//     method existed.
+//   - A Type0/CID font using Identity-H/V (TwoByteCodes true, cmap nil):
+//     two bytes (big-endian) per code - see cid.go's package doc comment
+//     for why Identity-H/V needs no real CMap lookup at all. A trailing
+//     odd byte is dropped, matching this project's general tolerance for
+//     minor content-stream corruption.
+//   - A Type0/CID font using an embedded CMap /Encoding stream (Phase 9,
+//     cmap non-nil): split per the CMap's own declared codespace ranges,
+//     which may mix byte lengths - see CMap.decode.
+//
+// The returned Code is the font's raw character code, not yet resolved
+// to a CID - Width and Glyph do that translation themselves (via
+// cidFor) before indexing their own CID-keyed data, so callers (just
+// internal/content's showText) never need to know whether this font
+// even uses CIDs at all.
+func (f *Font) DecodeCodes(s []byte) []DecodedCode {
+	if f.cmap != nil {
+		return f.cmap.decode(s)
+	}
+	if f.TwoByteCodes {
+		codes := make([]DecodedCode, 0, len(s)/2)
+		for i := 0; i+1 < len(s); i += 2 {
+			codes = append(codes, DecodedCode{Code: int(s[i])<<8 | int(s[i+1]), Bytes: 2})
+		}
+		return codes
+	}
+	codes := make([]DecodedCode, len(s))
+	for i, b := range s {
+		codes[i] = DecodedCode{Code: int(b), Bytes: 1}
+	}
+	return codes
+}
+
+// cidFor translates code (as DecodeCodes produced it) into the CID
+// Width and Glyph actually index their data by. It is the identity
+// function for every font except one using an embedded CMap /Encoding
+// (cmap non-nil - see loadType0Encoding in cid.go): Identity-H/V is, by
+// definition, already "code == CID" (cid.go's package doc comment), and
+// a simple font's codes were never CIDs in the first place, so both
+// cases pass code through unchanged. For a real CMap, a code with no
+// declared mapping becomes CID 0 (.notdef) - the same outcome every
+// other unresolvable code in this package reaches (see notdefGlyph's
+// doc comment), rather than, say, silently reusing the raw code as if
+// it happened to also be a valid CID.
+func (f *Font) cidFor(code int) int {
+	if f.cmap == nil {
+		return code
+	}
+	if cid, ok := f.cmap.CIDForCode(uint32(code)); ok {
+		return cid
+	}
+	return 0
 }
 
 // Width returns code's advance width in glyph space (1000 units per
 // em - see the widths field's doc comment), the unit PDF's own /Widths
 // and /W arrays already use, so a caller multiplies by FontSize/1000 to
-// get a text-space advance (see internal/content's text.go).
+// get a text-space advance (see internal/content's text.go). code is
+// the font's raw character code exactly as DecodeCodes produced it, not
+// a pre-resolved CID - Width resolves that translation itself (see
+// cidFor) so every caller can treat every Font the same way regardless
+// of whether it happens to use a CMap.
 func (f *Font) Width(code int) float64 {
+	code = f.cidFor(code)
 	if w, ok := f.widths[code]; ok {
 		return w
 	}
@@ -232,8 +309,11 @@ func (f *Font) substituteWidth(code int) (float64, bool) {
 // blank glyph such as space, or a code this package positively knows is
 // whitespace even without a real outline - see spaceCodes). Any other
 // unresolvable code falls back to notdefGlyph's placeholder box - see
-// this type's doc comment for the full policy.
+// this type's doc comment for the full policy. code is the font's raw
+// character code exactly as DecodeCodes produced it - see Width's doc
+// comment on cidFor, which Glyph applies the same way.
 func (f *Font) Glyph(code int) *graphics.Path {
+	code = f.cidFor(code)
 	if f.glyphSource != nil && f.lookupGID != nil {
 		if gid, ok := f.lookupGID(code); ok {
 			if outline, ok := f.glyphSource.GlyphOutline(gid); ok {

@@ -215,14 +215,14 @@ func TestParseCMap_MalformedInputTolerated(t *testing.T) {
 		nil,
 		[]byte(""),
 		[]byte("this is not a cmap at all"),
-		[]byte("1 begincodespacerange <00 endcodespacerange"),      // truncated hex string
-		[]byte("1 begincidrange <0000> <00FF>\nendcidrange"),       // missing cid value
+		[]byte("1 begincodespacerange <00 endcodespacerange"), // truncated hex string
+		[]byte("1 begincidrange <0000> <00FF>\nendcidrange"),  // missing cid value
 		[]byte("1 begincidrange <0000> <00FF> notanumber\nendcidrange"),
-		[]byte("1 begincidchar <0041>\nendcidchar"), // missing cid value
+		[]byte("1 begincidchar <0041>\nendcidchar"),                     // missing cid value
 		[]byte("1 begincodespacerange\n<0000> <FF>\nendcodespacerange"), // mismatched lengths
 		[]byte("1 begincidrange\n<0000> <FFFFFFFFFFFF> 0\nendcidrange"), // oversized hex
-		[]byte("begincodespacerange"),                                  // never closed
-		[]byte("begincidrange <0000> <FFFF> 0"),                        // never closed
+		[]byte("begincodespacerange"),                                   // never closed
+		[]byte("begincidrange <0000> <FFFF> 0"),                         // never closed
 	}
 	for i, data := range cases {
 		func() {

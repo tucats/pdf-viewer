@@ -272,6 +272,97 @@ func buildTextNotdefFallback() []byte {
 // device-space bounding box unchanged at x:[12,68] y:[12,68], letting
 // the test assert exact pixels despite the rotation, not just "some ink
 // landed somewhere."
+// buildTextToUnicodeSimple returns a single 100x100-point page showing
+// three characters ("ABC") in a simple TrueType font at font size 10,
+// text origin (0,0) - Phase 10's simple-font text-extraction fixture.
+// Only code 65 ('A') actually reaches a real glyph through the embedded
+// test font's cmap (buildTestFontProgram only maps 'A' - see this file's
+// own package doc comment); codes 66/67 ('B','C') render as
+// internal/fonts' notdefGlyph placeholder. That does not matter here,
+// since this fixture exists to exercise Page.Text, not Render: text
+// extraction never looks at a glyph's outline at all (see
+// internal/content's ExtractText doc comment), only at /Widths and
+// /ToUnicode - both of which this fixture defines for all three codes.
+//
+// Its /ToUnicode CMap deliberately exercises both of the beginbfrange
+// shapes tounicode.go's Phase 10 parser supports, plus a plain bfchar,
+// so a single fixture's worth of end-to-end coverage touches every
+// grammar shape internal/fonts/tounicode_test.go otherwise only tests
+// in isolation:
+//
+//   - beginbfchar: code 65 ('A') -> "A" directly.
+//   - beginbfrange (array form): codes 66-67 ('B','C') -> an explicit
+//     two-element destination array, rather than an arithmetic
+//     increment.
+//
+// Each glyph is 1000 units wide (1 em) per its own /Widths entry, so at
+// font size 10 each advances the pen by exactly 10 page-space units:
+// 'A' at x=0, 'B' at x=10, 'C' at x=20, all with baseline y=0 (this
+// fixture's "0 0 Td").
+func buildTextToUnicodeSimple() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("BT\n/F1 10 Tf\n0 0 Td\n(ABC) Tj\nET\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	b.addObject(5, 0, "<< /Type /Font /Subtype /TrueType /BaseFont /GenfixturesSquare "+
+		"/FirstChar 65 /LastChar 67 /Widths [1000 1000 1000] /Encoding /WinAnsiEncoding "+
+		"/FontDescriptor 6 0 R /ToUnicode 9 0 R >>", nil)
+	b.addObject(6, 0, "<< /Type /FontDescriptor /FontName /GenfixturesSquare /Flags 32 /FontFile2 7 0 R >>", nil)
+
+	program := buildTestFontProgram()
+	b.addObject(7, 0, fmt.Sprintf("<< /Length %d >>", len(program)), program)
+
+	toUnicode := []byte("1 beginbfchar\n<41> <0041>\nendbfchar\n" +
+		"1 beginbfrange\n<42> <43> [<0042> <0043>]\nendbfrange\n")
+	b.addObject(9, 0, fmt.Sprintf("<< /Length %d >>", len(toUnicode)), toUnicode)
+
+	return b.finish(1)
+}
+
+// buildTextToUnicodeType0 is buildTextToUnicodeSimple's Type0/CID
+// counterpart - Phase 10's other required exit-criteria fixture
+// (docs/PLAN2.md's Phase 10: "a fixture with known text content (both a
+// simple-font and a Type0/CID fixture)"). Structurally identical to
+// buildTextType0Identity (same embedded TrueType program, same
+// descendant font, same Identity-H encoding, same "0 0 Td" at font size
+// 100 showing CID 1), plus a /ToUnicode CMap on the Type0 font
+// dictionary itself mapping code 1 - the same raw code Identity-H also
+// happens to use as the CID, though /ToUnicode is keyed by the *code*,
+// never the CID (see internal/fonts/tounicode.go's own doc comment) - to
+// U+5B57 ("字", a real CJK character), a deliberately non-ASCII,
+// non-coincidental destination: nothing about this fixture's rendering
+// path could produce this specific rune by accident, so a test asserting
+// it proves the /ToUnicode CMap was actually parsed and consulted.
+func buildTextToUnicodeType0() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("1 0 0 rg\nBT\n/F1 100 Tf\n0 0 Td\n<0001> Tj\nET\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	b.addObject(5, 0, "<< /Type /Font /Subtype /Type0 /BaseFont /GenfixturesSquare-Identity "+
+		"/Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 9 0 R >>", nil)
+	b.addObject(6, 0, "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /GenfixturesSquare "+
+		"/DW 1000 /W [1 [1000]] /CIDToGIDMap /Identity /FontDescriptor 7 0 R >>", nil)
+	b.addObject(7, 0, "<< /Type /FontDescriptor /FontName /GenfixturesSquare /Flags 32 /FontFile2 8 0 R >>", nil)
+
+	program := buildTestFontProgram()
+	b.addObject(8, 0, fmt.Sprintf("<< /Length %d >>", len(program)), program)
+
+	toUnicode := []byte("1 beginbfchar\n<0001> <5B57>\nendbfchar\n")
+	b.addObject(9, 0, fmt.Sprintf("<< /Length %d >>", len(toUnicode)), toUnicode)
+
+	return b.finish(1)
+}
+
 func buildTextRotatedPage() []byte {
 	b := newBuilder()
 	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)

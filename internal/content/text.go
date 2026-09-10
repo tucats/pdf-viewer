@@ -107,92 +107,19 @@ func (in *interpreter) setFont(st *graphics.State, operands []syntax.Object) err
 }
 
 // lookupFont resolves name in /Resources /Font, building (and caching)
-// a *fonts.Font for it via internal/fonts.Load. It returns ok=false for
-// every way this can come up empty without the content actually being
-// malformed: no /Resources, no /Font dictionary, no entry under name,
-// or an entry that does not resolve to a dictionary - mirroring
-// interpret.go's lookupXObject.
-//
-// Two caches are consulted, for two different lifetimes (see their own
-// doc comments): in.text.fontCache, keyed by name, is local to this one
-// Interpret call and always checked first, since it is the cheapest
-// possible hit (no resource lookup at all) for the overwhelmingly
-// common case of the same font selected repeatedly within one content
-// stream. in.fontCache, keyed by the font dictionary's own indirect
-// object number, is checked next (only possible when the /Font entry is
-// itself a reference, which real producers essentially always make it,
-// since sharing one font dictionary across many pages is exactly what
-// an indirect reference is for) and is what actually survives past this
-// one Interpret call - see FontCache's doc comment.
+// a *fonts.Font for it via internal/fonts.Load - see resolveFont, which
+// this simply delegates to with in's own resources/resolver/caches. It
+// exists as its own method (rather than every caller spelling out those
+// four fields itself) only for interpreter's own callers' convenience;
+// resolveFont is what both this and text_extract.go's extractor.lookupFont
+// actually share - see that function's doc comment for why the two need
+// exactly the same font-resolution logic despite doing entirely
+// different things with the result.
 func (in *interpreter) lookupFont(name syntax.Name) (*fonts.Font, bool) {
-	if f, ok := in.text.fontCache[name]; ok {
-		return f, true
-	}
-	if in.resources == nil || in.resolver == nil {
-		return nil, false
-	}
-	fontsEntry, ok := in.resources["Font"]
-	if !ok {
-		return nil, false
-	}
-	resolved, err := resolveIfRef(in.resolver, fontsEntry)
-	if err != nil {
-		return nil, false
-	}
-	fontsDict, ok := resolved.(syntax.Dictionary)
-	if !ok {
-		return nil, false
-	}
-	entry, ok := fontsDict[name]
-	if !ok {
-		diag.Note(in.resolver, "font %q is not in /Resources /Font; text using it will not be shown", name)
-		return nil, false
-	}
-
-	// If entry is itself an indirect reference, its object number is a
-	// stable identity for this font dictionary across the whole
-	// document - unlike name, which is only meaningful within this one
-	// content stream's own /Resources /Font dictionary. Check the
-	// cross-call cache before paying to resolve and load anything.
-	ref, hasRef := entry.(syntax.Reference)
-	if hasRef {
-		if f, ok := in.fontCache.get(ref.Number); ok {
-			in.cacheFontLocally(name, f)
-			return f, true
-		}
-	}
-
-	resolvedEntry, err := resolveIfRef(in.resolver, entry)
-	if err != nil {
-		return nil, false
-	}
-	dict, ok := resolvedEntry.(syntax.Dictionary)
-	if !ok {
-		return nil, false
-	}
-
-	f, err := fonts.Load(dict, in.resolver)
-	if err != nil || f == nil {
-		diag.Note(in.resolver, "font %q could not be loaded (%v); text using it will not be shown", name, err)
-		return nil, false
-	}
-	in.cacheFontLocally(name, f)
-	if hasRef {
-		in.fontCache.put(ref.Number, f)
-	}
-	return f, true
-}
-
-// cacheFontLocally stores f in this one Interpret call's by-name font
-// cache (see textInterpreterState.fontCache's doc comment) so a later
-// "Tf" for the same name within this same content stream is a plain map
-// lookup regardless of whether f itself came from the cross-call
-// in.fontCache or a fresh internal/fonts.Load.
-func (in *interpreter) cacheFontLocally(name syntax.Name, f *fonts.Font) {
 	if in.text.fontCache == nil {
 		in.text.fontCache = make(map[syntax.Name]*fonts.Font)
 	}
-	in.text.fontCache[name] = f
+	return resolveFont(in.resources, in.resolver, in.fontCache, in.text.fontCache, name)
 }
 
 // moveTextLine implements "Td" and (via a leading update first) "TD":

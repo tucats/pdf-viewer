@@ -222,3 +222,39 @@ func (cyclicCMapSource) CMapData(name string) ([]byte, bool) {
 		return nil, false
 	}
 }
+
+// FuzzParseToUnicodeCMap is Phase 10's counterpart to FuzzParseCMap
+// above, for tounicode.go's parseToUnicodeCMap - the same "never panics,
+// always terminates" property, exercised over both of beginbfrange's
+// shapes and TextForCode's lookup afterward. Unlike parseCMap,
+// parseToUnicodeCMap takes no usecmap resolver at all (see that
+// function's own doc comment for why /ToUnicode's usecmap operator is
+// deliberately left unimplemented), so there is no cycle-guard case to
+// exercise here the way FuzzParseCMap's cyclicCMapSource does.
+func FuzzParseToUnicodeCMap(f *testing.F) {
+	f.Add([]byte(`
+1 beginbfchar
+<41> <0041>
+endbfchar
+1 beginbfrange
+<42> <43> <0042>
+endbfrange
+endcmap
+`))
+	f.Add([]byte(`
+1 beginbfrange
+<10> <12> [<0041> <00660066> <0043>]
+endbfrange
+endcmap
+`))
+	f.Add([]byte(""))
+	f.Add([]byte("beginbfchar"))
+	f.Add([]byte("1 beginbfrange <FF> <00> <41>"))
+
+	f.Fuzz(func(t *testing.T, data []byte) {
+		u := parseToUnicodeCMap(data)
+		for _, code := range []uint32{0, 0x41, 0xFFFF, 0x10000} {
+			u.TextForCode(code)
+		}
+	})
+}

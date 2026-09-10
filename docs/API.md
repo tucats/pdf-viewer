@@ -27,6 +27,7 @@ walkthrough with worked examples.
 - [Inspecting a document](#inspecting-a-document)
 - [Rendering a page](#rendering-a-page)
 - [Thumbnails](#thumbnails)
+- [Extracting text](#extracting-text)
 - [Error handling](#error-handling)
 - [Cancellation](#cancellation)
 - [Concurrency](#concurrency)
@@ -267,11 +268,14 @@ TrueType, MMType1), not to Type 0/CID fonts. Matching a font's
 character code to a candidate's own glyph requires resolving that code
 to a Unicode rune, which is only possible from a simple font's
 `/Encoding`; a Type 0 font's CIDs have no known Unicode meaning without
-a `/ToUnicode` CMap, which this package does not currently parse. A
-non-embedded Type 0 font falls back to the placeholder box regardless of
-this option. See [capability-matrix.md](capability-matrix.md)'s "Font
-substitution" row for the exact current status, and `cmd/pdfpreview
--substitute-fonts` for this option wired up in a runnable example.
+a `/ToUnicode` CMap. This package does now parse `/ToUnicode` (see
+[Extracting text](#extracting-text)), but wiring that into a
+substitution attempt for Type 0 fonts remains a separate, not yet
+implemented follow-on. A non-embedded Type 0 font falls back to the
+placeholder box regardless of this option. See
+[capability-matrix.md](capability-matrix.md)'s "Font substitution" row
+for the exact current status, and `cmd/pdfpreview -substitute-fonts` for
+this option wired up in a runnable example.
 
 ## Inspecting a document
 
@@ -281,7 +285,7 @@ func (d *Document) Page(index int) (Page, error)
 
 type Page interface {
 	Bounds() Rect
-	// Render and Thumbnail: see below
+	// Render, Thumbnail, and Text: see below
 }
 
 type Rect struct {
@@ -393,6 +397,60 @@ thumb, err := page.Thumbnail(ctx, pdfviewer.ThumbnailOptions{MaxDimension: 128})
 See `cmd/pdfthumbnails` for a complete program that writes a thumbnail
 for every page of a document, rendering pages concurrently (see
 [Concurrency](#concurrency)).
+
+## Extracting text
+
+```go
+func (p Page) Text(ctx context.Context) ([]TextGlyph, error)
+
+type TextGlyph struct {
+	Text     string  // decoded Unicode text; may be empty, or more than one character
+	X, Y     float64 // baseline origin, in the same page-point space as Bounds
+	Width    float64 // advance width, same units as X/Y
+	FontSize float64 // font size active when this glyph was shown
+}
+```
+
+`Text` recovers a page's Unicode text content - the glyphs a text-showing
+operator painted, decoded via each glyph's own font (its `/ToUnicode`
+CMap where the font declares one, or a simple font's resolved
+`/Encoding` otherwise) - as a deliberately separate capability from
+`Render`/`Thumbnail`: it does not rasterize anything, and a page mixing
+perfectly extractable text with some entirely unrelated feature `Render`
+doesn't support (an unrecognized image filter, say) still extracts
+cleanly, since none of that affects what text exists or where it sits.
+
+```go
+glyphs, err := page.Text(ctx)
+if err != nil {
+	return err
+}
+var line string
+for _, g := range glyphs {
+	line += g.Text
+}
+fmt.Println(line)
+```
+
+Each `TextGlyph` is one character *code* from the content stream, not
+necessarily one Unicode character: `Text` is usually a single character,
+but can be more than one (a ligature glyph, such as one glyph standing
+for "ffi", whose `/ToUnicode` entry spells out all three characters at
+once) or empty. An empty `Text` means this package genuinely does not
+know what the glyph means - most commonly a Type 0/CID font with no
+`/ToUnicode` CMap at all - not an error; the glyph is still present with
+a correct position and width, since extraction never fails on account of
+missing Unicode data.
+
+`X`/`Y`/`Width` are in the same PDF-point, page-default-user-space
+coordinate system `Bounds` reports - not device pixels, and unaffected
+by any `RenderOptions.Scale` a separate `Render` call might use, since
+text extraction has no inherent target resolution.
+
+`Text` does not currently recurse into a Form XObject's own content
+stream, so text painted only inside a form is not extracted - see
+[capability-matrix.md](capability-matrix.md)'s "Text extraction" row for
+this and every other current limitation.
 
 ## Error handling
 

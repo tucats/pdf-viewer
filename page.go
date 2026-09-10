@@ -61,6 +61,34 @@ type Page interface {
 	// /Rotate-swapped) dimensions fits within
 	// ThumbnailOptions.MaxDimension, preserving aspect ratio.
 	Thumbnail(ctx context.Context, opts ThumbnailOptions) (image.Image, error)
+
+	// Text extracts this page's text content: every glyph shown by a
+	// text-showing operator ("Tj"/"TJ"/"'"/"\"" - see
+	// internal/content's text.go), decoded to Unicode via each glyph's
+	// own font (its /ToUnicode CMap where one exists, or a simple
+	// font's resolved /Encoding otherwise - see TextGlyph.Text's own doc
+	// comment), together with its baseline position and advance width in
+	// the same page-point coordinate system Bounds reports.
+	//
+	// Text is Phase 10's own capability (docs/PLAN2.md), deliberately
+	// kept separate from Render/Thumbnail per the README's original
+	// Phase 4 plan ("keep text extraction as a separate capability from
+	// text painting"): it does not rasterize anything, interprets only
+	// the operators that can affect what text exists or where it sits
+	// (internal/content's ExtractText - see that file's own doc comment
+	// for exactly which), and - unlike Render - never fails on account
+	// of a feature Render itself does not support (an unrecognized
+	// image filter, an unsupported shading type, a pattern color space,
+	// and so on), since none of that affects a page's text at all. It
+	// does still return an error for content that is genuinely
+	// malformed among the operators it does interpret, and for the same
+	// page-content-reading failures Render itself can report (a
+	// corrupted content stream, for instance).
+	//
+	// Text does not currently recurse into a Form XObject's own content
+	// stream ("Do" naming a /Form) - see ExtractText's own doc comment
+	// for why this is a documented scope limitation, not an oversight.
+	Text(ctx context.Context) ([]TextGlyph, error)
 }
 
 // pageImpl is the concrete implementation of Page returned by
@@ -128,6 +156,44 @@ func (p *pageImpl) Thumbnail(ctx context.Context, opts ThumbnailOptions) (image.
 		return nil, err
 	}
 	return p.renderAtScale(ctx, scale, opts.Background, opts.HideAnnotations)
+}
+
+func (p *pageImpl) Text(ctx context.Context) ([]TextGlyph, error) {
+	if p.doc.closed {
+		return nil, ErrClosed
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	data, err := p.doc.model.PageContentBytes(p.page)
+	if err != nil {
+		return nil, err
+	}
+	ops, err := content.Parse(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	// Unlike renderAtScale's own initialCTM (pageDeviceGeometry's
+	// device-pixel mapping, which depends on a chosen RenderOptions.Scale
+	// - see this method's own doc comment on Page interface, above),
+	// ExtractText is called with the identity matrix: extraction has no
+	// inherent target resolution, so every TextGlyph's position comes
+	// back in the page's own default user space, matching Bounds.
+	glyphs, err := content.ExtractText(ops, graphics.Identity(), p.page.RawResources, p.doc.model, p.doc.fontCache)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]TextGlyph, len(glyphs))
+	for i, g := range glyphs {
+		out[i] = TextGlyph{Text: g.Text, X: g.X, Y: g.Y, Width: g.Width, FontSize: g.FontSize}
+	}
+	return out, nil
 }
 
 // renderAtScale is the shared implementation behind both Render and

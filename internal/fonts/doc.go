@@ -46,14 +46,18 @@
 // to prevent. Every fallback in this package (see Font's doc comment) is
 // an explicit, in-package, documented decision instead.
 //
-// # Text extraction is a separate, later capability
+// # Text extraction (Phase 10) is a separate capability from painting
 //
 // Per the repository README's Phase 4 plan, "text extraction" (getting
 // the Unicode *text* a page contains back out, as opposed to painting
-// its glyphs) is deliberately kept separate from this package and from
-// internal/content's text-painting code, so it can be added later
-// without changing how page rendering itself works. This package parses
-// no /ToUnicode CMap and exposes no rune-level API; it only ever answers
-// "what outline and advance width does character code X have", which is
-// everything painting needs.
+// its glyphs) is deliberately kept separate from painting, so it could
+// be added later without changing how page rendering itself works - see
+// docs/PLAN2.md's Phase 10. It has been added: tounicode.go parses a
+// font's /ToUnicode CMap, and Font.TextForCode (font.go) is this
+// package's one rune/text-level entry point, answering "what Unicode
+// text does character code X mean" - a question Glyph and Width (this
+// package's original, painting-oriented API) never ask and never
+// answer. internal/content's ExtractText (not the text-painting
+// showText) is TextForCode's only caller, keeping the separation this
+// section describes intact at the internal/content layer too.
 package fonts

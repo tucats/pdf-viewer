@@ -61,6 +61,7 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	}
 	f.widths = parseCIDWidths(descendant["W"], resolver)
 	loadType0Encoding(f, dict, resolver)
+	loadToUnicode(f, dict, resolver)
 
 	descriptor, _ := dictValue(resolver, descendant, "FontDescriptor")
 	if sfnt, ok := loadEmbeddedTrueType(descriptor, resolver); ok {
@@ -81,9 +82,13 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	// rune via the PDF font's own /Encoding and looks that rune up in
 	// the substitute's own cmap/charset) so it can ask a completely
 	// different, substitute font program "what glyph do you have for
-	// this character" - but per this file's own package doc comment,
-	// this package parses no /ToUnicode CMap, so for a Type0 font a code
-	// (here, a CID) has no known Unicode meaning at all. A CID is only
+	// this character". Phase 10 (tounicode.go) does now parse a font's
+	// /ToUnicode CMap - so, given one, this package *can* now answer
+	// "what Unicode text does this code mean" for a Type0 font too (see
+	// Font.TextForCode) - but wiring that answer into a substitution
+	// attempt here is a separate, not-yet-implemented follow-on
+	// (docs/PLAN2.md's backlog: "Type 0/CID font substitution"), not
+	// automatically unlocked by Phase 10 alone: a CID is otherwise only
 	// ever meaningful as an index into the *specific* font program that
 	// originally defined it (its own glyph ordering, or - per this
 	// package's Identity-H/V scope - directly as a glyph index into it);
@@ -91,9 +96,9 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	// font's own, unrelated glyph ordering would not "approximately"
 	// work the way a bold/italic mismatch does for a simple font's
 	// substitute - it would pick essentially arbitrary, wrong glyphs.
-	// notdefGlyph is the honest outcome here until this package parses
-	// /ToUnicode (a separate, not-yet-scheduled capability - see
-	// doc.go's "Text extraction is a separate, later capability").
+	// notdefGlyph remains the honest outcome here until that follow-on
+	// phase actually wires TextForCode's answer into a substitution
+	// attempt.
 	diag.Note(resolver, "Type0 font %v has no usable embedded TrueType or CFF outline data (no /FontFile2 or /FontFile3, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"])
 	return f, nil
 }

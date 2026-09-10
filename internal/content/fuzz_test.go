@@ -14,7 +14,12 @@ import (
 // exactly where those bytes are tokenized into operators and replayed
 // against a graphics state machine - Parse and Interpret must never
 // panic and must always return, regardless of how malformed or
-// adversarial the input is.
+// adversarial the input is. Since Phase 10, the same parsed ops are also
+// replayed through ExtractText (text_extract.go) - a second, independent
+// interpreter over the same Operator slice, sharing this fuzz target's
+// seed corpus rather than needing its own, since every property this
+// target cares about (never panic, always return) applies identically
+// to both.
 //
 // The seed corpus includes a representative sample of every operator
 // category this package recognizes, plus a few pathological shapes
@@ -98,5 +103,6 @@ func FuzzParseAndInterpret(f *testing.F) {
 		// entry for "Do" to find - "Do" is covered by the unit tests in
 		// image_test.go instead.
 		_, _ = Interpret(ops, graphics.Identity(), nil, &fakeResolver{})
+		_, _ = ExtractText(ops, graphics.Identity(), nil, &fakeResolver{}, nil)
 	})
 }

@@ -106,6 +106,8 @@ func main() {
 		{"text-type0-predefined-encoding.pdf", buildTextType0PredefinedEncoding()},
 		{"text-notdef-fallback.pdf", buildTextNotdefFallback()},
 		{"text-rotated-page.pdf", buildTextRotatedPage()},
+		{"text-tounicode-simple.pdf", buildTextToUnicodeSimple()},
+		{"text-tounicode-type0.pdf", buildTextToUnicodeType0()},
 		{"separation-fill.pdf", buildSeparationFill()},
 		{"lab-fill.pdf", buildLabFill()},
 		{"axial-shading.pdf", buildAxialShading()},

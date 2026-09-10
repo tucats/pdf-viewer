@@ -172,7 +172,7 @@ code.
 
 ## Phase 10: Text extraction (`/ToUnicode` CMap parsing)
 
-**Status: Not started.**
+**Status: Done.**
 
 Not a rendering-correctness gap (pages already render without this),
 but the single most commonly expected capability of "a PDF viewer" that
@@ -950,6 +950,116 @@ in order, not rewritten later except to fix mistakes.
     natural next sub-phase if a real file ever needs it - the same
     "wait for a real file" judgment 8c made about symbol mode, which
     turned out to be needed within a day.
+
+### Phase 10: Text extraction (`/ToUnicode` CMap parsing) — done (2026-09-09)
+
+- **`internal/fonts/tounicode.go` (new).** Parses a font's `/ToUnicode`
+    CMap stream (ISO 32000-1 9.10.3): `beginbfchar` (a single code to a
+    UTF-16BE destination string, decoded via `unicode/utf16` - possibly
+    more than one Unicode character, the common way a ligature glyph such
+    as "ffi" is given a `/ToUnicode` entry) and both `beginbfrange`
+    shapes - `<lo> <hi> <dst>` ("increment a single destination value" by
+    reinterpreting `dst` as a big-endian integer and adding each code's
+    offset, the common real-world shape for a contiguous run of ordinary
+    characters) and `<lo> <hi> [<d0> <d1> ...]` ("explicit destination per
+    code", no arithmetic at all). Reuses `cidcmap.go`'s lexer-based
+    parsing loop shape and its `beValue`/bound constants, but is otherwise
+    a self-contained parser: unlike Phase 9's CID CMaps, a `/ToUnicode`
+    CMap's own `usecmap` operator is deliberately left unimplemented (rare
+    in practice for `/ToUnicode` specifically - see that file's own doc
+    comment for the reasoning), so no `resolveUseCMap`-style callback
+    machinery was needed here. `ToUnicodeMap.TextForCode` is keyed by the
+    font's *raw character code*, never a CID - a Type0 font's `/Encoding`
+    CMap (code -> CID) and `/ToUnicode` CMap (code -> text) are two
+    independent mappings that both start from the same raw code, a
+    distinction that file's package doc comment calls out explicitly
+    since it is easy to get backwards.
+- **`internal/fonts/font.go`: `Font.TextForCode` (new).** This package's
+    one text-extraction-facing entry point, deliberately separate from
+    `Glyph`/`Width` (painting/measuring) per this package's own doc
+    comment's "text extraction is a separate capability" section (updated
+    to describe what actually shipped). Tries the font's `toUnicode` field
+    first (set by `loadToUnicode`, called from both `simple.go`'s
+    `loadSimpleFont` and `cid.go`'s `loadType0Font` - `/ToUnicode` is a
+    feature of any font dictionary, not just Type0's), then - for a
+    simple font only - falls back to a new `simpleEncoding` field (the
+    same `runeTable` `BuildSimpleEncoding` already computed for
+    `spaceCodes`, now also kept on `Font` itself), covering the common
+    case of a simple font using a standard encoding with no separate
+    `/ToUnicode` stream at all. A Type0 font with neither answers
+    ok=false, honestly, rather than guessing.
+- **`internal/content/text_extract.go` (new): `ExtractText`.** A
+    genuinely separate, much smaller interpreter from `interpret.go`'s
+    text-*painting* one - not a mode flag threaded through it - per
+    `docs/PLAN.md`'s original Phase 4 plan to keep extraction separate
+    from painting. It understands only `q`/`Q`/`cm` (for the CTM,
+    reusing `graphics.Stack`/`graphics.State` directly for free push/pop
+    of the seven text-state fields already living there) and the
+    text-object/state/positioning/showing operators; every other operator
+    (paths, painting, images, shadings, `gs`, `Do`, marked content) is
+    silently skipped. This is a deliberate, useful difference from
+    `Interpret`: a content stream mixing perfectly extractable text with
+    some entirely unrelated unsupported feature (an unsupported image
+    color space, say) still extracts its text cleanly, where `Interpret`
+    itself would fail outright - `TestExtractText_UnsupportedContentDoesNotError`
+    pins exactly this contrast using the same fixture
+    `TestInterpretDoWithUnsupportedImageFeaturePropagatesError` uses to
+    prove `Interpret` *does* fail on it. Font resolution (`resolveFont`,
+    factored out of `text.go`'s `lookupFont` so both files call the same
+    code) and the text-positioning formula (`textRenderingMatrix`,
+    `text.go`'s existing package-level function, called directly on
+    glyph-space (0,0) to get each glyph's baseline origin) are the two
+    things this file deliberately does *not* duplicate, since painting
+    and extraction must agree on both exactly.
+- **Public API: `Page.Text`.** New root-package file `text.go` defines
+    `TextGlyph` (`Text`, `X`/`Y`, `Width`, `FontSize`); `page.go`'s new
+    `Page.Text` method calls `content.ExtractText` with
+    `graphics.Identity()` as its initial CTM (unlike `Render`'s
+    device-pixel CTM - extraction has no inherent target resolution), so
+    every glyph's position comes back in the same page-default-user-space
+    PDF points `Page.Bounds` reports.
+- **Fixtures.** `tools/genfixtures/text.go` gained
+    `buildTextToUnicodeSimple` (`text-tounicode-simple.pdf`: "ABC" in a
+    simple TrueType font, `/ToUnicode` exercising both a plain `beginbfchar`
+    entry and a `beginbfrange` array-form entry) and
+    `buildTextToUnicodeType0` (`text-tounicode-type0.pdf`: structurally
+    `text-type0-identity.pdf` plus a `/ToUnicode` CMap mapping code 1 to
+    U+5B57 "字" - deliberately non-ASCII and non-coincidental, so a
+    passing test can only mean the CMap was actually parsed and
+    consulted). Both were added to `TestRenderMatchesReferenceImages`
+    with checked-in golden PNGs, even though `/ToUnicode` has zero effect
+    on rendering, matching this project's established per-fixture
+    regression-coverage convention.
+- **Tests.** `internal/fonts/tounicode_test.go` covers `parseToUnicodeCMap`
+    in isolation (bfchar, both bfrange shapes, ligature and surrogate-pair
+    destinations, bfchar-over-bfrange precedence, malformed-input
+    tolerance, nil-receiver safety); `font_test.go` gained
+    `TestLoad_SimpleFontToUnicode`/`TestLoad_SimpleFontToUnicodeFallsBackToEncoding`/
+    `TestLoad_Type0ToUnicode` confirming `Font.TextForCode` end to end
+    through `Load`. `internal/content/text_extract_test.go` covers
+    `ExtractText`'s operator handling in isolation (positions, widths,
+    `cm`/`q`/`Q` CTM tracking, `TJ` numeric adjustments not emitting a
+    glyph, no-font-selected tolerance, the unsupported-content contrast
+    with `Interpret` above, and malformed-`Tf`-still-errors). Root-package
+    `pdfviewer_text_test.go` gained `TestPageTextSimpleFont`/
+    `TestPageTextType0Font` (Phase 10's own stated exit criteria) and
+    `TestPageTextType0PredefinedEncodingFallsBackToNoText` (a Type0 font
+    with no `/ToUnicode` at all still yields a correctly positioned glyph
+    with empty text, not an error or a wrong guess). Full test suite,
+    `go vet`, and the race detector all pass clean; regenerating every
+    `tools/genfixtures` fixture reproduced every existing file
+    byte-for-byte except the two new fixtures added.
+- **What's carried forward.** `ExtractText` does not recurse into a Form
+    XObject's own content stream - text painted only inside a form is not
+    extracted (a documented scope limitation, not an oversight; see
+    `text_extract.go`'s own doc comment). A `/ToUnicode` CMap's `usecmap`
+    operator is not resolved (see `tounicode.go`'s doc comment). Type0/CID
+    font substitution (this document's Backlog section) is the natural,
+    still-unscheduled follow-on Phase 10 unblocks: `Font.TextForCode` can
+    now answer "what Unicode rune does this Type0 code mean" for a font
+    with a `/ToUnicode` CMap, but `cid.go`'s `loadType0Font` does not yet
+    use that answer to attempt substitution the way `simple.go` does for
+    simple fonts.
 
 ### Phase 9a: CMap parsing core — done (2026-09-09)
 

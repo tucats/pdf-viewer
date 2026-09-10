@@ -50,10 +50,12 @@ func loadSimpleFont(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	}
 
 	f := &Font{
-		widths:       widths,
-		defaultWidth: defaultWidth,
-		spaceCodes:   spaceCodes,
+		widths:         widths,
+		defaultWidth:   defaultWidth,
+		spaceCodes:     spaceCodes,
+		simpleEncoding: encoding,
 	}
+	loadToUnicode(f, dict, resolver)
 
 	// Try an embedded TrueType program first (/FontFile2, by far the
 	// most common case for a simple font this package can extract real

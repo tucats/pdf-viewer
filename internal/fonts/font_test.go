@@ -298,6 +298,112 @@ func TestLoad_Type0EmbeddedCMap(t *testing.T) {
 	}
 }
 
+// TestLoad_SimpleFontToUnicode confirms Phase 10's loadToUnicode/
+// TextForCode wiring for a simple font: a /ToUnicode CMap stream
+// mapping code 'A' (0x41) to the string "A" is parsed and consulted by
+// TextForCode, taking priority over the font's own /Encoding-derived
+// fallback (see TestLoad_SimpleFontToUnicodeFallsBackToEncoding below
+// for the no-/ToUnicode case).
+func TestLoad_SimpleFontToUnicode(t *testing.T) {
+	toUnicode := []byte("1 beginbfchar\n<41> <0041>\nendbfchar\nendcmap\n")
+
+	resolver := fakeResolver{objects: map[int]syntax.Object{
+		10: syntax.Stream{Raw: toUnicode},
+	}}
+	dict := syntax.Dictionary{
+		"Subtype":   syntax.Name("Type1"),
+		"FirstChar": syntax.Integer(65),
+		"LastChar":  syntax.Integer(65),
+		"Widths":    syntax.Array{syntax.Integer(700)},
+		"Encoding":  syntax.Name("WinAnsiEncoding"),
+		"ToUnicode": syntax.Reference{Number: 10},
+	}
+
+	f, err := Load(dict, resolver)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s, ok := f.TextForCode(0x41); !ok || s != "A" {
+		t.Errorf("TextForCode(0x41) = (%q,%v), want (\"A\",true)", s, ok)
+	}
+	// 0x81 falls in WinAnsiEncoding's C1-substitution range but is one of
+	// the handful of codes CP1252 itself leaves undefined there (see
+	// encoding.go's winAnsiEncoding) - genuinely unmapped by either this
+	// font's /ToUnicode CMap or its /Encoding.
+	if _, ok := f.TextForCode(0x81); ok {
+		t.Errorf("TextForCode(0x81) reported found, want not found (no /ToUnicode entry and no /Encoding mapping either)")
+	}
+}
+
+// TestLoad_SimpleFontToUnicodeFallsBackToEncoding confirms that a simple
+// font with *no* /ToUnicode entry at all still answers TextForCode using
+// its own resolved /Encoding (BuildSimpleEncoding, encoding.go) - the
+// overwhelmingly common real-world case (most simple fonts using a
+// standard encoding never bother with a separate /ToUnicode stream at
+// all, since the encoding itself already says what each code means).
+func TestLoad_SimpleFontToUnicodeFallsBackToEncoding(t *testing.T) {
+	dict := syntax.Dictionary{
+		"Subtype":   syntax.Name("Type1"),
+		"FirstChar": syntax.Integer(65),
+		"LastChar":  syntax.Integer(65),
+		"Widths":    syntax.Array{syntax.Integer(700)},
+		"Encoding":  syntax.Name("WinAnsiEncoding"),
+	}
+	f, err := Load(dict, fakeResolver{})
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s, ok := f.TextForCode(0x41); !ok || s != "A" {
+		t.Errorf("TextForCode(0x41) = (%q,%v), want (\"A\",true) via the /Encoding fallback", s, ok)
+	}
+}
+
+// TestLoad_Type0ToUnicode is TestLoad_SimpleFontToUnicode's Type0/CID
+// counterpart: a /ToUnicode CMap keyed by the font's raw character code
+// (here, under Identity-H, numerically the same as the CID) rather than
+// any Unicode fallback a Type0 font has no equivalent of - see
+// tounicode.go's package doc comment for why TextForCode must use the
+// raw code, not the CID, even though for Identity-H specifically the two
+// happen to be the same number.
+func TestLoad_Type0ToUnicode(t *testing.T) {
+	glyphs := [][]byte{{}, unitSquareGlyph()}
+	sfntData := buildTestSfnt(t, glyphs, buildCmapFormat0Table(nil))
+
+	// U+5B57 ("character/letter", a real CJK example) is a deliberately
+	// non-ASCII, non-coincidental destination - if this test passed
+	// because of some fallback path instead of real /ToUnicode parsing,
+	// it would not produce this specific rune.
+	toUnicode := []byte("1 beginbfchar\n<0001> <5B57>\nendbfchar\nendcmap\n")
+
+	resolver := fakeResolver{objects: map[int]syntax.Object{
+		10: syntax.Stream{Raw: sfntData},
+		20: syntax.Dictionary{
+			"Subtype":        syntax.Name("CIDFontType2"),
+			"DW":             syntax.Integer(1000),
+			"FontDescriptor": syntax.Dictionary{"FontFile2": syntax.Reference{Number: 10}},
+			"CIDToGIDMap":    syntax.Name("Identity"),
+		},
+		30: syntax.Stream{Raw: toUnicode},
+	}}
+	dict := syntax.Dictionary{
+		"Subtype":         syntax.Name("Type0"),
+		"Encoding":        syntax.Name("Identity-H"),
+		"DescendantFonts": syntax.Array{syntax.Reference{Number: 20}},
+		"ToUnicode":       syntax.Reference{Number: 30},
+	}
+
+	f, err := Load(dict, resolver)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if s, ok := f.TextForCode(1); !ok || s != "字" {
+		t.Errorf("TextForCode(1) = (%q,%v), want (%q,true)", s, ok, "字")
+	}
+	if _, ok := f.TextForCode(2); ok {
+		t.Errorf("TextForCode(2) reported found, want not found (no /ToUnicode entry, and Type0 fonts have no /Encoding-based fallback)")
+	}
+}
+
 func TestLoad_MalformedDictStillReturnsUsableFont(t *testing.T) {
 	// A font dictionary this package cannot recognize at all (missing
 	// /Subtype, no descendant fonts, ...) must still degrade to a usable

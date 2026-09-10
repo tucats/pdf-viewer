@@ -237,6 +237,8 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"text-type0-predefined-encoding.pdf",
 		"text-notdef-fallback.pdf",
 		"text-rotated-page.pdf",
+		"text-tounicode-simple.pdf",
+		"text-tounicode-type0.pdf",
 		"separation-fill.pdf",
 		"lab-fill.pdf",
 		"axial-shading.pdf",

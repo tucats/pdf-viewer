@@ -184,6 +184,63 @@ type Font struct {
 	// instead of trusting code == CID. nil for every other font
 	// (including Identity-H/V, which needs neither translation).
 	cmap *CMap
+
+	// toUnicode is this font's parsed /ToUnicode CMap (Phase 10,
+	// tounicode.go's loadToUnicode), or nil if the font dictionary had no
+	// usable /ToUnicode entry at all - see TextForCode, the only method
+	// that ever reads this field. Unlike cmap above (which only a Type0
+	// font ever has), /ToUnicode is a PDF specification feature of *every*
+	// font type (9.10.2) - loadToUnicode is called for both simple and
+	// Type0 fonts (simple.go's loadSimpleFont and cid.go's loadType0Font).
+	toUnicode *ToUnicodeMap
+
+	// simpleEncoding is TextForCode's fallback when a simple font has no
+	// /ToUnicode entry at all: the same code-to-rune table
+	// BuildSimpleEncoding (encoding.go) already computes for
+	// spaceCodes/glyph lookup above, kept here too so text extraction has
+	// *some* answer for the extremely common case of a simple font using
+	// one of PDF's three predefined encodings (or a /Differences array)
+	// with no separate /ToUnicode stream at all - most real-world simple
+	// fonts fall in exactly this category. Left at its zero value (every
+	// entry rune 0, i.e. "no mapping" - see runeTable's own doc comment)
+	// for a Type0 font, which never has a meaningful single-byte code to
+	// look up here anyway.
+	simpleEncoding runeTable
+}
+
+// TextForCode returns the Unicode text code represents, for Phase 10's
+// text-extraction API (the root package's Page.Text, via
+// internal/content's ExtractText) - a question entirely separate from
+// Glyph (which paints code) and unrelated to Width (which measures it):
+// a code can have a real, paintable glyph outline and still have no
+// known Unicode meaning (a Type0/CID font with no /ToUnicode CMap - see
+// cid.go's package doc comment), and conversely a font's /ToUnicode data
+// is defined with no reference to whether a glyph outline could be found
+// for that code at all.
+//
+// code is the font's raw character code exactly as DecodeCodes produced
+// it - the same domain a /ToUnicode CMap's own bfchar/bfrange entries
+// are keyed by (PDF specification 9.10.3), which is *not* the same thing
+// as a CID: unlike Width and Glyph, TextForCode must never call cidFor
+// first (see tounicode.go's package doc comment for exactly why a
+// Type0 font's /Encoding CMap and /ToUnicode CMap are two independent
+// mappings that both happen to start from the same raw code).
+//
+// ok is false when neither this font's /ToUnicode CMap nor (for a simple
+// font) its own resolved /Encoding has any defined text for code - text
+// extraction reports an empty TextGlyph.Text for such a glyph rather
+// than guessing, the same "honest gap, not a wrong answer" policy
+// notdefGlyph documents for painting.
+func (f *Font) TextForCode(code int) (string, bool) {
+	if s, ok := f.toUnicode.TextForCode(uint32(code)); ok {
+		return s, true
+	}
+	if code >= 0 && code < len(f.simpleEncoding) {
+		if r := f.simpleEncoding[code]; r != 0 {
+			return string(r), true
+		}
+	}
+	return "", false
 }
 
 // DecodeCodes splits s - a "Tj"-shown string's raw bytes - into

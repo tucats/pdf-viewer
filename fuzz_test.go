@@ -70,6 +70,12 @@ func FuzzOpenAndRender(f *testing.F) {
 				continue
 			}
 			_, _ = page.Render(context.Background(), pdfviewer.RenderOptions{})
+			// Phase 10: Page.Text is a separate public-API entry point over
+			// the same page content bytes (see page.go's Text and
+			// internal/content's ExtractText) - exercised here too so this
+			// fuzz target's "never panic, always return" property covers it
+			// as well, not just Render.
+			_, _ = page.Text(context.Background())
 		}
 	})
 }

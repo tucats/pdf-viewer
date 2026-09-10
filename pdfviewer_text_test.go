@@ -1,8 +1,11 @@
 package pdfviewer_test
 
 import (
+	"context"
 	"image"
 	"testing"
+
+	pdfviewer "github.com/tucats/pdf-viewer"
 )
 
 // This file exercises Phase 4's text and font support end to end
@@ -162,4 +165,124 @@ func TestRenderTextOnRotatedPage(t *testing.T) {
 	assertInk(t, img, 40, 40, 255, 0, 0) // inside the square, [12,68]x[12,68]
 	assertBackground(t, img, 90, 90)     // outside it
 	assertBackground(t, img, 150, 20)    // well outside, opposite corner region
+}
+
+// --- Phase 10: Page.Text --------------------------------------------
+//
+// The tests below exercise Page.Text (text.go, page.go), the public API
+// backed by internal/content's ExtractText - see docs/PLAN2.md's Phase
+// 10 entry and internal/content/text_extract_test.go for the lower-level
+// coverage of ExtractText's own operator handling. These tests care
+// about the two things Phase 10's exit criteria call for: correct
+// Unicode text and a defensible per-glyph position, through the full
+// public API against real fixtures (not just internal/content's
+// synthetic ones).
+
+// textFixture opens fixture, extracts its first page's text via
+// Page.Text, and returns the result - shared setup for every test below,
+// the Page.Text counterpart to renderPage (pdfviewer_image_test.go).
+func textFixture(t *testing.T, fixture string) []pdfviewer.TextGlyph {
+	t.Helper()
+	doc, err := pdfviewer.OpenFile(fixturePath(fixture))
+	if err != nil {
+		t.Fatalf("OpenFile(%s): %v", fixture, err)
+	}
+	t.Cleanup(func() { doc.Close() })
+	page, err := doc.Page(0)
+	if err != nil {
+		t.Fatalf("Page(0): %v", err)
+	}
+	glyphs, err := page.Text(context.Background())
+	if err != nil {
+		t.Fatalf("Text(%s): %v", fixture, err)
+	}
+	return glyphs
+}
+
+// TestPageTextSimpleFont is Phase 10's simple-font exit-criteria
+// fixture: buildTextToUnicodeSimple (tools/genfixtures/text.go) shows
+// "ABC" at font size 10, text origin (0,0), with a /ToUnicode CMap
+// exercising both a plain beginbfchar entry ('A') and a beginbfrange
+// array-form entry ('B','C'). Every code is 1000 units wide (1 em) per
+// its own /Widths entry, so at font size 10 each glyph should advance
+// the pen by exactly 10 page-space points - see that generator
+// function's doc comment for the full derivation.
+func TestPageTextSimpleFont(t *testing.T) {
+	glyphs := textFixture(t, "text-tounicode-simple.pdf")
+	if len(glyphs) != 3 {
+		t.Fatalf("len(glyphs) = %d, want 3", len(glyphs))
+	}
+
+	want := []struct {
+		text string
+		x    float64
+	}{
+		{"A", 0},
+		{"B", 10},
+		{"C", 20},
+	}
+	for i, w := range want {
+		g := glyphs[i]
+		if g.Text != w.text {
+			t.Errorf("glyphs[%d].Text = %q, want %q", i, g.Text, w.text)
+		}
+		if g.X != w.x || g.Y != 0 {
+			t.Errorf("glyphs[%d] position = (%v,%v), want (%v,0)", i, g.X, g.Y, w.x)
+		}
+		if g.Width != 10 {
+			t.Errorf("glyphs[%d].Width = %v, want 10", i, g.Width)
+		}
+		if g.FontSize != 10 {
+			t.Errorf("glyphs[%d].FontSize = %v, want 10", i, g.FontSize)
+		}
+	}
+}
+
+// TestPageTextType0Font is Phase 10's Type0/CID exit-criteria fixture:
+// buildTextToUnicodeType0 shows CID 1 (via Identity-H) at font size 100,
+// text origin (0,0), with a /ToUnicode CMap mapping code 1 to U+5B57
+// ("字") - a deliberately non-ASCII, non-coincidental character (see
+// that generator function's doc comment for why this specific choice
+// rules out every fallback path producing the same answer by accident).
+// The descendant font's /DW (default width) 1000 applies (no /W entry
+// for CID 1 in this particular fixture), so at font size 100 the glyph's
+// advance is exactly 100 page-space points.
+func TestPageTextType0Font(t *testing.T) {
+	glyphs := textFixture(t, "text-tounicode-type0.pdf")
+	if len(glyphs) != 1 {
+		t.Fatalf("len(glyphs) = %d, want 1", len(glyphs))
+	}
+	g := glyphs[0]
+	if g.Text != "字" {
+		t.Errorf("glyphs[0].Text = %q, want %q", g.Text, "字")
+	}
+	if g.X != 0 || g.Y != 0 {
+		t.Errorf("glyphs[0] position = (%v,%v), want (0,0)", g.X, g.Y)
+	}
+	if g.Width != 100 {
+		t.Errorf("glyphs[0].Width = %v, want 100", g.Width)
+	}
+	if g.FontSize != 100 {
+		t.Errorf("glyphs[0].FontSize = %v, want 100", g.FontSize)
+	}
+}
+
+// TestPageTextType0PredefinedEncodingFallsBackToNoText confirms a Type0
+// font with no /ToUnicode CMap at all (text-type0-predefined-encoding.pdf,
+// which Render already falls back to notdefGlyph for - see
+// TestRenderType0PredefinedEncodingFallsBackToNotdefByDefault above)
+// still produces a correctly positioned TextGlyph from Page.Text, just
+// with an empty Text field - the "honest gap, not a wrong answer" policy
+// TextGlyph.Text's own doc comment describes, exercised end to end.
+func TestPageTextType0PredefinedEncodingFallsBackToNoText(t *testing.T) {
+	glyphs := textFixture(t, "text-type0-predefined-encoding.pdf")
+	if len(glyphs) != 1 {
+		t.Fatalf("len(glyphs) = %d, want 1", len(glyphs))
+	}
+	if glyphs[0].Text != "" {
+		t.Errorf("glyphs[0].Text = %q, want \"\" (no /ToUnicode CMap and no /Encoding fallback for a Type0 font)", glyphs[0].Text)
+	}
+	if glyphs[0].X != 0 || glyphs[0].Y != 0 {
+		t.Errorf("glyphs[0] position = (%v,%v), want (0,0)", glyphs[0].X, glyphs[0].Y)
+	}
 }

@@ -30,16 +30,23 @@
 // # Development plan (see docs/PLAN2.md Phase 14 for the authoritative,
 // living version of this list)
 //
-//   - 14a (this sub-phase): package skeleton, JP2 container ("box")
-//     parsing, and codestream main-header marker segment parsing (SIZ,
-//     COD, COC, QCD, QCC) plus a structural walk locating every
-//     tile-part's byte range. No entropy decoding, no pixel output yet -
-//     see Header and ParseHeader below.
-//   - 14b: the MQ arithmetic coder (a second, independent implementation
-//     from internal/filter's JBIG2 one - see below) and tier-2 packet
-//     header parsing (tag trees, inclusion and zero-bit-plane
-//     information, layer/precinct/resolution/component packet
-//     iteration for every progression order).
+//   - 14a (done): package skeleton, JP2 container ("box") parsing, and
+//     codestream main-header marker segment parsing (SIZ, COD, COC,
+//     QCD, QCC) plus a structural walk locating every tile-part's byte
+//     range. No entropy decoding, no pixel output yet.
+//   - 14b (this sub-phase): the MQ arithmetic coder (mq.go - a second,
+//     independent implementation from internal/filter's JBIG2 one - see
+//     below), plus tier-2 packet header parsing (geometry.go's
+//     resolution/subband/precinct/code-block structure, progression.go's
+//     five packet-iteration orders, tagtree.go's inclusion and
+//     zero-bit-plane tag trees, bitreader.go's bit-stuffed packet header
+//     reader, and packet.go's top-level decodeTilePackets). Also resolves
+//     14a's one deferred item: per-tile COD/COC/QCD/QCC overrides are now
+//     parsed and threaded through (TilePart's new fields, Header's
+//     effectiveCoding/effectiveQuant/effectiveTileDefaultCoding in
+//     siz.go) rather than discarded. Still no pixel output - this
+//     sub-phase locates every code-block's compressed-data byte ranges
+//     and pass counts; nothing yet runs the MQ coder over them.
 //   - 14c: tier-1 coding: the EBCOT bit-plane coding passes (significance
 //     propagation, magnitude refinement, cleanup) that turn a
 //     code-block's compressed bytes into quantized wavelet coefficients.

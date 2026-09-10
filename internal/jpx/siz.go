@@ -112,6 +112,93 @@ func (h *Header) quantStyleFor(c int) QuantizationStyle {
 	return h.DefaultQuant
 }
 
+// effectiveTileDefaultCoding returns the coding style tile tileIndex
+// uses as its own default: the last tile-part-scoped COD override any
+// of that tile's tile-parts declared (ISO/IEC 15444-1 A.4.2 permits any
+// tile-part to carry one, not only the first), or the codestream-wide
+// default if none did. This is the source of progression order, layer
+// count, and the multiple component transform flag for the whole tile -
+// per CodingStyle's own doc comment, those three fields are only ever
+// meaningful on a COD-derived style, never a COC override, so callers
+// needing them (progression.go) should use this rather than
+// effectiveCoding for any specific component.
+func (h *Header) effectiveTileDefaultCoding(tileIndex int) CodingStyle {
+	result := h.DefaultCoding
+	for i := range h.TileParts {
+		if tp := &h.TileParts[i]; tp.TileIndex == tileIndex && tp.TileCoding != nil {
+			result = *tp.TileCoding
+		}
+	}
+	return result
+}
+
+// effectiveCoding returns the coding style tile tileIndex, component c
+// should use for that component's own wavelet/code-block/precinct
+// parameters: that tile's own COC override for c if any of its
+// tile-parts declared one, else that tile's own COD override if any of
+// its tile-parts declared one (applied uniformly, the same "tile
+// default" semantics the main header's own COD/COC pair has - a tile
+// that repeats COD but not COC for c is documented by this package as
+// intending its new COD to be c's effective style too, not as falling
+// back further to the main header's own per-component COC, since the
+// standard does not clearly specify layering across the two header
+// scopes and no real-world sample motivates a different reading), else
+// the codestream-wide effective style (codingStyleFor, which already
+// applies the main header's own COC-over-COD priority).
+func (h *Header) effectiveCoding(tileIndex, c int) CodingStyle {
+	var tileDefault *CodingStyle
+	var tileComponent *CodingStyle
+	for i := range h.TileParts {
+		tp := &h.TileParts[i]
+		if tp.TileIndex != tileIndex {
+			continue
+		}
+		if tp.TileCoding != nil {
+			tileDefault = tp.TileCoding
+		}
+		if cs, ok := tp.TileComponentCoding[c]; ok {
+			tileComponent = &cs
+		}
+	}
+	switch {
+	case tileComponent != nil:
+		return *tileComponent
+	case tileDefault != nil:
+		return *tileDefault
+	default:
+		return h.codingStyleFor(c)
+	}
+}
+
+// effectiveQuant is effectiveCoding's counterpart for quantization
+// style, with the same tile-COC-then-tile-COD-then-codestream-default
+// layering (and the same documented scope decision on how the two
+// header scopes combine).
+func (h *Header) effectiveQuant(tileIndex, c int) QuantizationStyle {
+	var tileDefault *QuantizationStyle
+	var tileComponent *QuantizationStyle
+	for i := range h.TileParts {
+		tp := &h.TileParts[i]
+		if tp.TileIndex != tileIndex {
+			continue
+		}
+		if tp.TileQuant != nil {
+			tileDefault = tp.TileQuant
+		}
+		if qs, ok := tp.TileComponentQuant[c]; ok {
+			tileComponent = &qs
+		}
+	}
+	switch {
+	case tileComponent != nil:
+		return *tileComponent
+	case tileDefault != nil:
+		return *tileDefault
+	default:
+		return h.quantStyleFor(c)
+	}
+}
+
 // maxReasonableDimension bounds Xsiz/Ysiz/tile sizes against a hostile
 // or corrupt file claiming an absurd image size, the same "bounded work"
 // policy this project applies throughout (see internal/image's

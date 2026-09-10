@@ -293,7 +293,7 @@ types), not re-scoped.
 
 ## Phase 14: JPXDecode (JPEG 2000)
 
-**Status: 14a done.**
+**Status: 14a, 14b done.**
 
 Same class of gap as JBIG2 (Phase 8) - a page using this filter fails
 outright - but JPEG 2000 in practice appears mostly in narrower
@@ -2503,3 +2503,108 @@ in order, not rewritten later except to fix mistakes.
     JPXDecode stream still fails with `ErrUnsupported`, unchanged from
     before this sub-phase, since no decoding capability exists to wire in
     until 14f. See this section's sub-phase list above for 14b onward.
+
+### Phase 14b: MQ coder and tier-2 packet header parsing — done (2026-09-10)
+
+- **`mq.go`.** A second, independent MQ-coder implementation (decoder and
+    a test/fixture-only encoder), deliberately not shared with
+    `internal/filter/jbig2mq.go` even though it is the identical T.88/
+    T.800 algorithm - see `doc.go`'s "why this package exists" section on
+    why `internal/jpx` imports nothing from the rest of the module. Its
+    `qeTable` is the same standard 47-state table (see `jbig2mq.go`'s own
+    provenance note on that table being reproduced identically across
+    virtually every independent implementation); `mq_test.go` round-trips
+    a pseudo-random, context-biased 20,000-decision sequence plus an
+    all-MPS and an empty-input edge case. One real bug was caught and
+    fixed before landing: an initial from-memory reconstruction of the
+    encoder's `byteOut`/`CODELPS` had the carry-check ordering wrong
+    (comparing `a` against `qe` *before* subtracting rather than after)
+    and a garbled `byteOut` control flow; rewriting it to match
+    `jbig2mq.go`'s already-verified logic line-for-line (same algorithm,
+    only names/comments differ) fixed it, and the round-trip test would
+    have caught it either way.
+- **`geometry.go`.** Component/tile/resolution/subband/precinct/
+    code-block geometry (ISO/IEC 15444-1 §B.2-§B.7): component and
+    tile-component pixel bounds, precinct partitioning, and code-block
+    grids grouped by precinct - ported from Mozilla's pdf.js (`jpx.js`'s
+    `calculateComponentDimensions`/`calculateTileGrids`/
+    `getBlocksDimensions`/`buildPrecincts`/`buildCodeblocks`, Apache
+    License 2.0; see `tagtree.go`'s doc comment for why cross-checking
+    against a proven implementation is this sub-phase's verification
+    strategy alongside its own round-trip tests) into integer-only Go,
+    fixing one incidental pdf.js bug along the way (a `cbxMin`/`cbyMin`
+    typo in its precinct bounding-box update, dead code in practice since
+    `buildCodeblocks` visits code-blocks in non-decreasing row order, but
+    written correctly here on principle).
+- **`progression.go`.** All five progression-order packet iterators
+    (§B.12.1.1-.5: LRCP, RLCP, RPCL, PCRL, CPRL - every one, since a
+    decoder cannot choose which order an encoder used), each a direct
+    port of pdf.js's own resumable-closure iterators restructured as Go
+    structs holding loop-position fields. One deliberate correction from
+    pdf.js here too: its `getPrecinctIndexIfExist` divides one axis of a
+    candidate position by the *other* axis's precinct-size field - benign
+    only because real encoders overwhelmingly use square precincts, but
+    wrong in general; this file divides each axis by its own field.
+    `TestPacketIteratorsProduceSamePacketSet` checks all five orders
+    visit exactly the same set of packets (identified by which
+    code-block objects they carry) on a multi-resolution, multi-component
+    scenario - order differs, membership must not.
+- **`tagtree.go`.** The inclusion and zero-bit-plane tag trees (§B.10.2)
+    packet headers use to avoid spending a bit per code-block per layer,
+    restructured from pdf.js's `TagTree`/`InclusionTree` (JavaScript
+    `undefined`/sentinel-value state) into explicit Go fields (`visited`/
+    `settled` bool slices) - see the file's own doc comment for the full
+    account of why the inclusion tree specifically needs a permanent
+    "settled" flag the simpler zero-bit-plane tree does not (inclusion,
+    once confirmed, can never become false again for a later layer).
+- **`bitreader.go`.** The bit-stuffed reader packet headers are coded
+    with (§B.10.1) - not the MQ coder, which only ever codes actual
+    code-block sample data (14c). Ported from pdf.js's
+    `parseTilePackets` closures into a `packetBitReader` type.
+- **`packet.go`.** `decodeTilePackets`, this sub-phase's top-level entry
+    point: walks every packet across a tile's tile-parts (in `TPsot`
+    order, since a tile's packet sequence and per-precinct tag-tree/
+    `Lblock` state both continue across tile-part boundaries per §B.9),
+    locating every code-block's compressed-data byte ranges and pass
+    counts. Not yet reachable from `internal/filter` - 14f wires that up
+    once tier-1 (14c) exists to actually decode what this locates.
+- **Per-tile overrides, no longer deferred.** `TilePart` gained
+    `TileCoding`/`TileComponentCoding`/`TileQuant`/`TileComponentQuant`
+    fields, and `parseTilePartHeader` now parses (rather than discards)
+    a tile-part's own COD/COC/QCD/QCC segments into them.
+    `Header.effectiveCoding`/`effectiveQuant`/`effectiveTileDefaultCoding`
+    (`siz.go`) combine these with the codestream-wide defaults - the
+    layering this package documents as its own scope decision where the
+    standard does not clearly specify one (a tile's own COD, if present,
+    is treated as replacing that tile's *entire* default, not merely
+    filling gaps the main header's per-component COC entries left; no
+    real-world sample motivates a different reading).
+    `TestTilePartCODCOCQCDQCCOverrides` (`tileoverride_test.go`) covers
+    the no-override, tile-level-override, and component-level-override-
+    within-an-overridden-tile cases directly.
+- **Tests and verification.** This package still has no real-world JPX
+    sample (see `doc.go`'s Provenance section), so - the same "opposite
+    ends of the standard" approach Phase 8's JBIG2 work and 14a's own
+    marker fixtures used - `packet_test.go` builds a from-scratch,
+    test-only packet header *encoder* (`bitWriter`, tag-tree encode-side
+    helpers driving the same `tagTreeInclusion`/`tagTreeZeroBitPlanes`
+    state machines the decoder uses, `encodeCodingPasses`/`encodeLength`
+    as exact inverses of `packet.go`'s own decode). `packet_roundtrip_
+    test.go`'s `TestDecodeTilePacketsRoundTrip` builds a complete
+    codestream (real `SIZ`/`COD`/`QCD` plus a real encoded tile-part) for
+    every progression order, with a 4x4 code-block grid exercising mixed
+    layer-0/deferred-to-layer-1 inclusion, varying pass counts, and
+    `Lblock` growth forced by deliberately long contributions on some
+    code-blocks, and checks every code-block's recovered layer/pass
+    count/data bytes exactly. A deliberate fault injection (widening an
+    `Lblock` increment) was used to confirm the round-trip test actually
+    fails when the implementation is wrong, not just when it's byte-
+    identical to itself. Full test suite, `go vet`, and `gofmt` all pass
+    clean; `FuzzParseHeader` ran an additional 15-second/11M-execution
+    pass with the new tile-part-override parsing in scope with no crash.
+- **What's carried forward.** Tier-1 (bit-plane entropy decoding, turning
+    what `decodeTilePackets` locates into quantized wavelet coefficients)
+    does not exist yet - `mq.go`'s decoder is unused by anything except
+    its own tests until 14c calls it. `internal/filter` and
+    `docs/capability-matrix.md` are unchanged; a JPXDecode stream still
+    fails with `ErrUnsupported`.

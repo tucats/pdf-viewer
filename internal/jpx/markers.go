@@ -77,6 +77,33 @@ type TilePart struct {
 	// (computed by scanning forward for the next marker), but a caller
 	// that cares about the distinction can check this flag.
 	LengthUnknown bool
+
+	// TileCoding and TileComponentCoding, TileQuant and
+	// TileComponentQuant mirror Header's own DefaultCoding/
+	// ComponentCoding and DefaultQuant/ComponentQuant, but scoped to
+	// this one tile-part's own COD/COC/QCD/QCC marker segments (ISO/IEC
+	// 15444-1 A.4.2 permits a non-first tile-part to repeat any of these
+	// to override the main header's values for that tile alone). nil/
+	// unset fields mean this tile-part carried no such override; see
+	// Header.effectiveCoding and Header.effectiveQuant, which combine
+	// every tile-part sharing a TileIndex with the codestream-wide
+	// defaults to get one tile's actual effective coding/quantization
+	// parameters - the two functions 14b's packet parsing (packet.go)
+	// uses instead of ever reading DefaultCoding/DefaultQuant directly.
+	TileCoding          *CodingStyle
+	TileComponentCoding map[int]CodingStyle
+	TileQuant           *QuantizationStyle
+	TileComponentQuant  map[int]QuantizationStyle
+}
+
+// Data returns this tile-part's compressed data as a byte range within
+// codestream, which must be the same byte slice (the bare codestream
+// ParseHeader was ultimately given, after unwrapping any JP2 container -
+// see ParseHeader's own doc comment) that produced the Header this
+// TilePart came from; DataStart/DataLength are meaningless against any
+// other slice.
+func (tp *TilePart) Data(codestream []byte) []byte {
+	return codestream[tp.DataStart : tp.DataStart+tp.DataLength]
 }
 
 // ParseHeader parses data (either a bare JPEG 2000 codestream, or a JP2
@@ -254,7 +281,7 @@ func parseOneTilePart(data []byte, pos int, componentCount int) (TilePart, int, 
 	}
 	psot := int(binary.BigEndian.Uint32(content[2:6]))
 
-	pos, err = parseTilePartHeader(data, pos, componentCount)
+	pos, err = parseTilePartHeader(data, pos, componentCount, &tp)
 	if err != nil {
 		return TilePart{}, 0, err
 	}
@@ -271,22 +298,14 @@ func parseOneTilePart(data []byte, pos int, componentCount int) (TilePart, int, 
 
 // parseTilePartHeader consumes every marker segment between an SOT and
 // its matching SOD, returning the position immediately after SOD (where
-// this tile-part's compressed data begins).
-//
-// Per ISO/IEC 15444-1 A.4.2, a non-first tile-part may repeat COD/COC/
-// QCD/QCC/RGN to override the main header's defaults for that tile
-// alone. This sub-phase (14a) recognizes and skips them without
-// applying the override, because doing so correctly requires per-tile
-// coding/quantization state - which nothing before tier-2 packet
-// parsing (14b) exists to consume - rather than the single
-// codestream-wide Header this sub-phase produces. A codestream that
-// actually uses tile-specific overrides will decode incorrectly once
-// tile decoding exists unless a later sub-phase (14b, when it starts
-// threading per-tile state through) is written to re-parse each tile's
-// own header segments rather than relying solely on this one; that file
-// should read this note before assuming Header alone is enough context
-// per tile.
-func parseTilePartHeader(data []byte, pos int, componentCount int) (int, error) {
+// this tile-part's compressed data begins). Any COD/COC/QCD/QCC marker
+// segments found are parsed and recorded on tp (see TilePart's own doc
+// comment on those fields) - ISO/IEC 15444-1 A.4.2 permits a non-first
+// tile-part to repeat any of these to override the main header's values
+// for that tile alone, and 14b's packet parsing (packet.go) needs the
+// tile's true effective coding/quantization style, not just the
+// codestream-wide default 14a alone produced.
+func parseTilePartHeader(data []byte, pos int, componentCount int, tp *TilePart) (int, error) {
 	for {
 		marker, err := peekMarker(data, pos)
 		if err != nil {
@@ -297,18 +316,52 @@ func parseTilePartHeader(data []byte, pos int, componentCount int) (int, error) 
 			return pos, err
 		}
 
-		marker, _, pos, err = readMarkerSegment(data, pos)
+		var content []byte
+		marker, content, pos, err = readMarkerSegment(data, pos)
 		if err != nil {
 			return 0, err
 		}
 		switch marker {
-		case markerCOD, markerCOC, markerQCD, markerQCC, markerCOM, markerPLT, markerPPT:
-			// Recognized, deliberately not applied - see this function's
-			// doc comment.
+		case markerCOD:
+			var cs CodingStyle
+			cs, err = parseCOD(content)
+			tp.TileCoding = &cs
+		case markerCOC:
+			var idx int
+			var cs CodingStyle
+			idx, cs, err = parseCOC(content, componentCount)
+			if err == nil {
+				if tp.TileComponentCoding == nil {
+					tp.TileComponentCoding = make(map[int]CodingStyle)
+				}
+				tp.TileComponentCoding[idx] = cs
+			}
+		case markerQCD:
+			var qs QuantizationStyle
+			qs, err = parseQCD(content)
+			tp.TileQuant = &qs
+		case markerQCC:
+			var idx int
+			var qs QuantizationStyle
+			idx, qs, err = parseQCC(content, componentCount)
+			if err == nil {
+				if tp.TileComponentQuant == nil {
+					tp.TileComponentQuant = make(map[int]QuantizationStyle)
+				}
+				tp.TileComponentQuant[idx] = qs
+			}
+		case markerCOM, markerPLT, markerPPT:
+			// Recognized, deliberately skipped - see doc.go's Scope
+			// section (PLT/PPT: this decoder reads packet headers
+			// inline rather than needing them pre-measured or
+			// separated out; COM: a free-text comment).
 		case markerRGN:
 			return 0, unsupportedf("JPEG 2000 feature marker 0x%04X (%s) is not implemented", marker, markerName(marker))
 		default:
 			return 0, malformedf("unexpected marker 0x%04X in tile-part header", marker)
+		}
+		if err != nil {
+			return 0, err
 		}
 	}
 }

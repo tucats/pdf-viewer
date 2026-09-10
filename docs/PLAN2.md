@@ -261,7 +261,8 @@ checkbox).
 
 ## Phase 13: Mesh and function-based shadings (Types 1, 4-7)
 
-**Status: 13a-13d done; 13e (Type 7, tensor-product patch mesh) in progress.**
+**Status: Done (13a-13e).** All seven PDF shading types are implemented,
+for both the `sh` operator and shading patterns.
 
 Axial and radial shadings (Types 2-3, the large majority of real-world
 gradients) are done. Function-based (Type 1) and mesh shadings (Types
@@ -286,7 +287,9 @@ whatever shape used the shading.
 **Exit criteria:** a Type 1 shading fixture renders correctly; mesh
 shading support (13b) is either delivered or explicitly re-scoped with
 its own documented rationale if the implementation cost turns out to
-outweigh realistic benefit.
+outweigh realistic benefit. **Met:** see the Progress Log's 13a-13e
+entries - mesh shading support was delivered in full (all four mesh
+types), not re-scoped.
 
 ## Phase 14: JPXDecode (JPEG 2000)
 
@@ -1746,3 +1749,76 @@ in order, not rewritten later except to fix mistakes.
     already exist; Type 7 only needs its own decode function reading 4
     extra points directly per patch instead of calling
     `fillCoonsInternalPoints`.
+
+### Phase 13e: Type 7 (tensor-product patch mesh) — done (2026-09-10)
+
+- **As predicted, the smallest sub-phase.** `decodeType7Mesh`
+    (`internal/content/meshshading.go`) reuses `applyPatchBoundary` and
+    `patchToTriangles` completely unchanged - the only new code is
+    reading a Type 7 patch's own 4 internal control points directly off
+    the stream (always immediately after the boundary points, in a fixed
+    relative order - `pts[5]`, `pts[9]`, `pts[10]`, `pts[6]` - whether the
+    patch is independent, flag 0 with 16 total points, or edge-sharing,
+    flags 1-3 with 12) instead of calling `fillCoonsInternalPoints` the
+    way `decodeType6Mesh` does. `buildMeshShading`'s type switch gained a
+    `case 7`, at which point every one of PDF's seven shading types is
+    implemented - the `default` branch it and `buildAxialOrRadialShading`
+    both still carry is now genuinely unreachable from `buildShading`'s
+    own dispatch, kept only as an ordinary defensive fallback.
+- **The one risk worth testing directly.** Because Type 6 and 7 share so
+    much code, the easiest possible bug is silently ignoring Type 7's own
+    internal points (e.g. by accidentally calling
+    `fillCoonsInternalPoints` here too, or by only reading and discarding
+    the extra 4 points). `TestDecodeType7MeshUsesInternalPointsFromStream`
+    guards against exactly this: it decodes the identical boundary/colors
+    twice with two very different sets of internal points and asserts an
+    interior sample (deliberately away from any edge, since a Bezier
+    surface's edges depend only on their own boundary row/column, never
+    the internal points - a first attempt at this test picked an
+    edge-adjacent sample and passed for the wrong reason) actually moves
+    between the two decodes.
+- **`internal/content/shading.go`/`shading_test.go`.** `TestDoShadingUnsupportedTypeIsError`
+    changed one final time, from Type 7 (now supported) to `/ShadingType 8`
+    - not a value PDF itself defines at all - since every one of the
+    specification's own seven shading types is now implemented and no
+    "recognized but not yet supported" type remains to test against.
+- **Shading patterns got all seven types for free.** `resolvePatternPaint`
+    (a shading selected as a fill/stroke paint source via `cs`/`scn`, not
+    just `sh`'s whole-clip painting) has called the same `buildShading`
+    entry point since 13a's refactor - so mesh shading patterns needed no
+    new code at all, only a confirmation test
+    (`TestScnMeshShadingPatternPaintsFilledShape`, a Type 5 lattice mesh
+    used as a pattern's `/Shading` and filled into a rectangle) that
+    nothing about the pattern-specific resolution path (found through
+    `/Resources /Pattern` rather than `/Resources /Shading`, and always a
+    stream rather than sometimes a dictionary) trips up specifically on a
+    mesh shading. `docs/capability-matrix.md`'s Shading and Shading
+    patterns rows both moved to "Done".
+- **Tests.** `internal/content/meshshading_test.go` gained a full
+    single-patch round trip (16 points including the 4 internal ones, 4
+    colors), the internal-points-actually-used regression test above, and
+    invalid-flag/no-prior-patch error cases - mirroring Type 6's own test
+    shape throughout. `tools/genfixtures`'s `buildTensorProductPatchMeshShading`
+    builds `mesh-shading-type7.pdf`: the same boundary and corner colors
+    as 13d's `mesh-shading-type6.pdf`, but with internal control points
+    deliberately pulled toward the red corner instead of sitting at the
+    flat case's bilinear thirds - producing a genuinely curved surface a
+    fixture that silently treated Type 7 as flat could not render
+    correctly. `pdfviewer_shading_test.go`'s
+    `TestRenderTensorProductPatchMeshShading` checks all four corners
+    exactly (a Bezier surface's corners are exact regardless of internal
+    control points - the same property `TestPatchToTrianglesCornersMatchControlPoints`
+    already established), leaving the curved interior to the checked-in
+    golden reference image (visually confirmed as a distinctly curved
+    gradient, unlike the flat Type 5/6 fixtures' straight-line blends).
+    Full test suite, `go build`, `go vet`, and the race detector all pass
+    clean; 15-20-second fuzz runs of both the root package's
+    `FuzzOpenAndRender` and `internal/content`'s `FuzzParseAndInterpret`
+    found no panic or hang.
+- **What's carried forward.** Phase 13 is complete: all seven PDF shading
+    types (function-based, axial, radial, and all four mesh types) are
+    implemented for both `sh` and shading patterns. The pre-existing,
+    shading-type-independent simplifications noted throughout this
+    phase's sub-entries remain: `/Background` and `/BBox` are never
+    honored on any shading dictionary, and mesh patches use a fixed
+    (rather than area-adaptive) subdivision density.

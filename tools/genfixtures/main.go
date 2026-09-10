@@ -118,6 +118,7 @@ func main() {
 		{"mesh-shading-type4.pdf", buildFreeFormTriangleMeshShading()},
 		{"mesh-shading-type5.pdf", buildLatticeFormTriangleMeshShading()},
 		{"mesh-shading-type6.pdf", buildCoonsPatchMeshShading()},
+		{"mesh-shading-type7.pdf", buildTensorProductPatchMeshShading()},
 		{"form-xobject.pdf", buildFormXObject()},
 		{"annotation-appearance.pdf", buildAnnotationAppearance()},
 		{"annotation-hidden.pdf", buildAnnotationHidden()},
@@ -1390,6 +1391,63 @@ func buildCoonsPatchMeshShading() []byte {
 	}
 
 	shDict := fmt.Sprintf("<< /ShadingType 6 /ColorSpace /DeviceRGB "+
+		"/BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 "+
+		"/Decode [0 100 0 100 0 1 0 1 0 1] /Length %d >>", len(w.data))
+	b.addObject(5, 0, shDict, w.data)
+
+	return b.finish(1)
+}
+
+// buildTensorProductPatchMeshShading returns a single 100x100-point page
+// whose content stream paints a named tensor-product patch mesh
+// (/ShadingType 7) directly via "sh": the same boundary and corner
+// colors as buildCoonsPatchMeshShading's flat Coons patch (red/green/
+// blue/yellow at PDF-space (0,0)/(100,0)/(0,100)/(100,100)), but with its
+// 4 internal control points read directly from the stream (Type 7's own
+// defining difference from Type 6 - see
+// internal/content/meshshading.go's decodeType7Mesh) and deliberately
+// pulled toward the red corner (roughly (10,10) rather than the flat
+// case's bilinear (33,33)/(67,33)/(67,67)/(33,67)), producing a visibly
+// curved surface pinched toward that corner rather than a flat gradient -
+// a fixture that only a genuinely curved Type 7 patch (not one that
+// silently fell back to treating it as flat) can render correctly.
+//
+// This fixture only asserts each corner's own color (still exact for any
+// Bezier surface regardless of internal-point placement - see
+// TestPatchToTrianglesCornersMatchControlPoints), leaving the curved
+// interior to the checked-in golden reference image.
+func buildTensorProductPatchMeshShading() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Shading << /Sh0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n0 0 100 100 re\nW\nn\n/Sh0 sh\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	w := &meshBitWriter{}
+	w.write(0, 8) // edge flag: 0, an independent patch
+	boundary := [][2]byte{
+		{0, 0}, {0, 85}, {0, 170}, {0, 255}, {85, 255}, {170, 255},
+		{255, 255}, {255, 170}, {255, 85}, {255, 0}, {170, 0}, {85, 0},
+	}
+	// The 4 internal points, in pts[5]/pts[9]/pts[10]/pts[6] order, all
+	// pulled toward the red corner (0,0) instead of sitting at the flat
+	// case's own bilinear thirds.
+	internal := [][2]byte{{26, 26}, {26, 26}, {26, 26}, {26, 26}}
+	for _, p := range append(append([][2]byte{}, boundary...), internal...) {
+		w.write(uint32(p[0]), 8)
+		w.write(uint32(p[1]), 8)
+	}
+	colors := [][3]byte{{255, 0, 0}, {0, 0, 255}, {255, 255, 0}, {0, 255, 0}} // red, blue, yellow, green
+	for _, c := range colors {
+		w.write(uint32(c[0]), 8)
+		w.write(uint32(c[1]), 8)
+		w.write(uint32(c[2]), 8)
+	}
+
+	shDict := fmt.Sprintf("<< /ShadingType 7 /ColorSpace /DeviceRGB "+
 		"/BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 "+
 		"/Decode [0 100 0 100 0 1 0 1 0 1] /Length %d >>", len(w.data))
 	b.addObject(5, 0, shDict, w.data)

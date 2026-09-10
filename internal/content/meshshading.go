@@ -376,8 +376,20 @@ func (in *interpreter) buildMeshShading(dict syntax.Dictionary, stream syntax.St
 		if err != nil {
 			return nil, err
 		}
+	case 7:
+		bitsPerFlag, err := requiredIntEntry(in.resolver, dict, "BitsPerFlag")
+		if err != nil {
+			return nil, err
+		}
+		if !validMeshBitWidth(bitsPerFlag, true) {
+			return nil, pdferror.Malformedf("mesh shading /BitsPerFlag %d is not one of 2, 4, 8", bitsPerFlag)
+		}
+		triangles, err = decodeType7Mesh(br, params, bitsPerFlag)
+		if err != nil {
+			return nil, err
+		}
 	default:
-		return nil, pdferror.Unsupportedf("mesh shading type %d (tensor-product patch mesh shadings are not yet supported)", shadingType)
+		return nil, pdferror.Unsupportedf("mesh shading type %d is not a recognized shading type", shadingType)
 	}
 
 	return &graphics.Shading{
@@ -706,6 +718,49 @@ func decodeType6Mesh(br *bitReader, p meshParams, bitsPerFlag int) ([]graphics.M
 			return nil, err
 		}
 		fillCoonsInternalPoints(&patch)
+
+		triangles = append(triangles, patchToTriangles(patch)...)
+		patchCopy := patch
+		prev = &patchCopy
+	}
+	return triangles, nil
+}
+
+// decodeType7Mesh implements 8.7.4.5.8 (tensor-product patch mesh): the
+// same boundary/edge-flag structure as Type 6 (reusing
+// applyPatchBoundary unchanged), except a Type 7 patch also carries its
+// own 4 internal control points directly in the stream rather than
+// having them derived from the boundary - immediately after the boundary
+// points, in a fixed relative order (pts[5], pts[9], pts[10], pts[6]),
+// regardless of whether this is a fresh (flag 0, 16 total points) or
+// edge-sharing (flags 1-3, 12 total points, the last 4 still being the
+// internal ones) patch. Patch records are packed with no byte alignment,
+// exactly like Type 6.
+func decodeType7Mesh(br *bitReader, p meshParams, bitsPerFlag int) ([]graphics.MeshTriangle, error) {
+	var triangles []graphics.MeshTriangle
+	var prev *meshPatch
+	for br.hasData() {
+		flag := br.read(bitsPerFlag)
+		if flag > 3 {
+			return nil, pdferror.Malformedf("Type 7 mesh shading: invalid edge flag %d", flag)
+		}
+		if flag != 0 && prev == nil {
+			return nil, pdferror.Malformedf("Type 7 mesh shading: edge flag %d before any patch exists", flag)
+		}
+
+		nBoundary, nCols := 12, 4
+		if flag != 0 {
+			nBoundary, nCols = 8, 2
+		}
+		newPts := readPoints(br, p, nBoundary+4) // boundary points, then 4 internal points
+		newCols := readColors(br, p, nCols)
+
+		var patch meshPatch
+		if err := applyPatchBoundary(&patch, prev, flag, newPts[:nBoundary], newCols); err != nil {
+			return nil, err
+		}
+		internal := newPts[nBoundary:]
+		patch.pts[5], patch.pts[9], patch.pts[10], patch.pts[6] = internal[0], internal[1], internal[2], internal[3]
 
 		triangles = append(triangles, patchToTriangles(patch)...)
 		patchCopy := patch

@@ -144,28 +144,21 @@ func TestDoShadingMissingResourceIsSkipped(t *testing.T) {
 	}
 }
 
+// TestDoShadingUnsupportedTypeIsError confirms an out-of-range
+// /ShadingType (all seven of PDF's own defined types - 1 through 7 - are
+// now implemented, as of Phase 13e) is rejected as unsupported rather
+// than silently doing nothing or panicking.
 func TestDoShadingUnsupportedTypeIsError(t *testing.T) {
 	dict := axialShadingDict()
-	dict["ShadingType"] = syntax.Integer(7) // tensor-product patch mesh: not yet implemented
-	dict["BitsPerCoordinate"] = syntax.Integer(16)
-	dict["BitsPerComponent"] = syntax.Integer(8)
-	// axialShadingDict's /Function takes 1 input, so a vertex carries a
-	// single parametric color value - /Decode needs 4 (Coords) + 2 (that
-	// one component) entries.
-	dict["Decode"] = syntax.Array{
-		syntax.Real(0), syntax.Real(1), syntax.Real(0), syntax.Real(1), syntax.Real(0), syntax.Real(1),
-	}
-	// A mesh shading must be a stream (its data carries packed vertex
-	// bytes) - buildShading checks this before it ever gets to "is type 7
-	// supported", so the resource itself has to be a stream too.
-	resources := syntax.Dictionary{"Shading": syntax.Dictionary{"Sh0": syntax.Stream{Dict: dict}}}
+	dict["ShadingType"] = syntax.Integer(8) // not a defined PDF shading type at all
+	resources := syntax.Dictionary{"Shading": syntax.Dictionary{"Sh0": dict}}
 	ops, err := Parse([]byte("/Sh0 sh"))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
 	_, err = Interpret(ops, graphics.Identity(), resources, &fakeResolver{})
 	if !errors.Is(err, pdferror.ErrUnsupported) {
-		t.Fatalf("Interpret with /ShadingType 7: got %v, want an error wrapping ErrUnsupported", err)
+		t.Fatalf("Interpret with /ShadingType 8: got %v, want an error wrapping ErrUnsupported", err)
 	}
 }
 
@@ -194,6 +187,56 @@ func TestScnShadingPatternPaintsFilledShape(t *testing.T) {
 	}
 	if list[0].Path == nil {
 		t.Fatalf("Path = nil, want the actual filled rectangle's geometry (unlike \"sh\")")
+	}
+}
+
+// TestScnMeshShadingPatternPaintsFilledShape confirms a mesh shading
+// (unlike axial/radial/function-based, this always has to be a stream -
+// see resolvePatternPaint/buildShading's shape-detection logic) also
+// works as a shading pattern's /Shading, not just via "sh" - both
+// entry points share the exact same buildShading, so this is really a
+// confirmation that nothing about the pattern-specific path (a stream
+// resource rather than a dictionary one, found through
+// /Resources /Pattern rather than /Resources /Shading) trips up on a
+// mesh shading specifically.
+func TestScnMeshShadingPatternPaintsFilledShape(t *testing.T) {
+	w := &meshBitWriter{}
+	writeVertex := func(x, y, r, g, b byte) {
+		w.write(uint32(x), 8)
+		w.write(uint32(y), 8)
+		w.write(uint32(r), 8)
+		w.write(uint32(g), 8)
+		w.write(uint32(b), 8)
+	}
+	writeVertex(0, 0, 255, 0, 0)
+	writeVertex(10, 0, 0, 255, 0)
+	writeVertex(0, 10, 0, 0, 255)
+	writeVertex(10, 10, 255, 255, 0)
+	meshStream := syntax.Stream{Dict: syntax.Dictionary{
+		"ShadingType": syntax.Integer(5), "ColorSpace": syntax.Name("DeviceRGB"),
+		"BitsPerCoordinate": syntax.Integer(8), "BitsPerComponent": syntax.Integer(8),
+		"VerticesPerRow": syntax.Integer(2),
+		"Decode":         syntax.Array{syntax.Real(0), syntax.Real(10), syntax.Real(0), syntax.Real(10), syntax.Real(0), syntax.Real(1), syntax.Real(0), syntax.Real(1), syntax.Real(0), syntax.Real(1)},
+	}, Raw: w.data}
+
+	resources := syntax.Dictionary{
+		"Pattern": syntax.Dictionary{
+			"P0": syntax.Dictionary{"PatternType": syntax.Integer(2), "Shading": meshStream},
+		},
+	}
+	ops, err := Parse([]byte("/Pattern cs /P0 scn 0 0 10 10 re f"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	list, err := Interpret(ops, graphics.Identity(), resources, &fakeResolver{})
+	if err != nil {
+		t.Fatalf("Interpret: %v", err)
+	}
+	if len(list) != 1 || list[0].Shading == nil || list[0].Path == nil {
+		t.Fatalf("Interpret: want exactly one filled DrawOp with a resolved mesh Shading, got %+v", list)
+	}
+	if col, ok := list[0].Shading.At(0, 0); !ok || col.R < 0.99 {
+		t.Fatalf("Shading.At(0,0) = (%+v,%v), want (red,true)", col, ok)
 	}
 }
 

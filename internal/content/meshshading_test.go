@@ -574,3 +574,124 @@ func TestDecodeType6MeshFlag1WithoutPriorPatchIsMalformed(t *testing.T) {
 		t.Fatalf("decodeType6Mesh with edge flag 1 and no prior patch: want an error, got nil")
 	}
 }
+
+// writeType7Patch packs one Type 7 patch record (flag, boundary point
+// pairs, internal point pairs, colors - all 8 bits wide) with no trailing
+// byte alignment, matching decodeType7Mesh's own continuous packing.
+func writeType7Patch(w *meshBitWriter, flag byte, boundary, internal []point2D, cols [][3]byte) {
+	w.write(uint32(flag), 8)
+	for _, p := range append(append([]point2D{}, boundary...), internal...) {
+		w.write(uint32(p.X), 8)
+		w.write(uint32(p.Y), 8)
+	}
+	for _, c := range cols {
+		w.write(uint32(c[0]), 8)
+		w.write(uint32(c[1]), 8)
+		w.write(uint32(c[2]), 8)
+	}
+}
+
+// flatRectangleBoundary8Bit is the same flat, straight-edged 0..255
+// square boundary TestDecodeType6MeshSinglePatch uses, factored out so
+// the Type 7 tests below can build a comparable patch.
+func flatRectangleBoundary8Bit() []point2D {
+	return []point2D{
+		{0, 0}, {0, 85}, {0, 170}, {0, 255}, {85, 255}, {170, 255},
+		{255, 255}, {255, 170}, {255, 85}, {255, 0}, {170, 0}, {85, 0},
+	}
+}
+
+func type7Params(t *testing.T) meshParams {
+	return meshParams{
+		bitsPerCoordinate: 8, bitsPerComponent: 8,
+		decode: []float64{0, 255, 0, 255, 0, 1, 0, 1, 0, 1}, numComps: 3, cs: deviceRGB(t),
+	}
+}
+
+func TestDecodeType7MeshSinglePatch(t *testing.T) {
+	w := &meshBitWriter{}
+	// Internal points at the same bilinear "thirds" positions
+	// fillCoonsInternalPoints would derive for this flat boundary (see
+	// TestFillCoonsInternalPointsFlatRectangle, scaled to 0-255), read in
+	// pts[5], pts[9], pts[10], pts[6] order.
+	internal := []point2D{{85, 85}, {85, 170}, {170, 170}, {170, 85}}
+	cols := [][3]byte{{255, 0, 0}, {0, 0, 255}, {255, 255, 0}, {0, 255, 0}} // red, blue, yellow, green
+	writeType7Patch(w, 0, flatRectangleBoundary8Bit(), internal, cols)
+	br := &bitReader{data: w.data}
+
+	triangles, err := decodeType7Mesh(br, type7Params(t), 8)
+	if err != nil {
+		t.Fatalf("decodeType7Mesh: %v", err)
+	}
+	wantTriangleCount := 2 * meshPatchSubdivisions * meshPatchSubdivisions
+	if len(triangles) != wantTriangleCount {
+		t.Fatalf("len(triangles) = %d, want %d", len(triangles), wantTriangleCount)
+	}
+	first := triangles[0]
+	if diff := first.X0 - 0; diff > 0.01 || diff < -0.01 {
+		t.Fatalf("first vertex X = %v, want ~0", first.X0)
+	}
+	if first.C0.R < 0.99 {
+		t.Fatalf("first vertex color = %+v, want ~red", first.C0)
+	}
+}
+
+// TestDecodeType7MeshUsesInternalPointsFromStream confirms Type 7's
+// internal control points actually come from the stream's own extra 4
+// points, rather than being silently ignored or (incorrectly) derived
+// via Type 6's Coons formula: decoding the same boundary/colors twice
+// with two very different sets of internal points must produce two
+// measurably different surfaces, since the internal control points
+// directly affect the interior geometry a Bezier surface interpolates.
+func TestDecodeType7MeshUsesInternalPointsFromStream(t *testing.T) {
+	cols := [][3]byte{{255, 0, 0}, {0, 0, 255}, {255, 255, 0}, {0, 255, 0}}
+	boundary := flatRectangleBoundary8Bit()
+
+	decodeWith := func(internal []point2D) []graphics.MeshTriangle {
+		w := &meshBitWriter{}
+		writeType7Patch(w, 0, boundary, internal, cols)
+		triangles, err := decodeType7Mesh(&bitReader{data: w.data}, type7Params(t), 8)
+		if err != nil {
+			t.Fatalf("decodeType7Mesh: %v", err)
+		}
+		return triangles
+	}
+
+	bilinear := decodeWith([]point2D{{85, 85}, {85, 170}, {170, 170}, {170, 85}})
+	collapsed := decodeWith([]point2D{{0, 0}, {0, 0}, {0, 0}, {0, 0}})
+
+	if len(bilinear) != len(collapsed) {
+		t.Fatalf("triangle counts differ: %d vs %d, want equal (same subdivision grid either way)", len(bilinear), len(collapsed))
+	}
+	// A cell strictly in the interior of the (row, col) subdivision grid
+	// - not on any boundary row/column - since a Bezier surface's own
+	// *edges* are determined entirely by the boundary control points in
+	// that row/column and never touched by the internal ones at all;
+	// picking a boundary-adjacent cell here would test nothing (see
+	// latticeToTriangles for how (row, col) maps to a flat triangle
+	// index: 2 triangles per cell, n cells per row).
+	n := meshPatchSubdivisions
+	interior := (n/2)*2*n + (n/2)*2
+	a, b := bilinear[interior], collapsed[interior]
+	if a.X0 == b.X0 && a.Y0 == b.Y0 {
+		t.Fatalf("interior vertex identical (%v,%v) between two very different internal-point sets - internal points do not appear to affect the decoded surface", a.X0, a.Y0)
+	}
+}
+
+func TestDecodeType7MeshInvalidFlagIsMalformed(t *testing.T) {
+	w := &meshBitWriter{}
+	w.write(9, 8) // invalid flag
+	br := &bitReader{data: w.data}
+	if _, err := decodeType7Mesh(br, type7Params(t), 8); err == nil {
+		t.Fatalf("decodeType7Mesh with edge flag 9: want an error, got nil")
+	}
+}
+
+func TestDecodeType7MeshFlag1WithoutPriorPatchIsMalformed(t *testing.T) {
+	w := &meshBitWriter{}
+	w.write(1, 8) // flag 1 with no earlier patch to share from
+	br := &bitReader{data: w.data}
+	if _, err := decodeType7Mesh(br, type7Params(t), 8); err == nil {
+		t.Fatalf("decodeType7Mesh with edge flag 1 and no prior patch: want an error, got nil")
+	}
+}

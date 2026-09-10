@@ -373,7 +373,7 @@ each specific failure is triaged into its own follow-up item.
 
 ## Phase 17: ExtGState-level soft masks
 
-**Status: In progress (17a done).**
+**Status: Done (17a-17c).**
 
 Promoted out of the Backlog section below on concrete request. This is a
 **visible defect** gap, narrower in practice than per-image `/SMask`
@@ -2310,3 +2310,49 @@ in order, not rewritten later except to fix mistakes.
     is no end-to-end fixture or `Page.Render` regression test yet, and
     the capability matrix should only claim "Done" once one exists. That
     fixture, rendering test, and the capability matrix update are 17c.
+
+### Phase 17c: Fixture corpus, end-to-end rendering tests, and capability matrix update — done (2026-09-10)
+
+- **Fixtures (`tools/genfixtures`).** `buildSoftMaskLuminosity`
+    (`softmask-luminosity.pdf`): a 100x100-point page selecting an
+    ExtGState with a `/Luminosity` `/SMask` (mask group painting white
+    over its own left half, black over its right half, with no `/Matrix`
+    or `cm` of its own so it lines up 1:1 with the main page) before
+    filling the whole page black - worked out by hand: the left half
+    should render solid black (fully unmasked), the right half the
+    untouched white background (fully masked out), exactly the effect a
+    geometric clip would produce but arrived at through a rendered
+    luminosity value instead. `buildSoftMaskAlpha`
+    (`softmask-alpha.pdf`) reaches the identical left/right split through
+    `/S /Alpha` instead: its mask group paints an opaque square across
+    only its own left half (leaving the right half genuinely unpainted,
+    rather than painted black) and the main content fills red instead of
+    black - deliberately exercising the group's own rendered *coverage*
+    rather than its *brightness*, so the two fixtures cannot both pass by
+    accident if `/S /Luminosity` and `/S /Alpha` were secretly reading
+    the same computation. Both added to
+    [testdata/fixtures/FIXTURES.md](../testdata/fixtures/FIXTURES.md),
+    `main_test.go`'s fixture-completeness table, and regenerated via
+    `go run ./tools/genfixtures` - confirmed byte-for-byte identical for
+    every pre-existing fixture, only the two new files appearing as
+    untracked.
+- **Tests
+    ([pdfviewer_softmask_test.go](../pdfviewer_softmask_test.go), new).**
+    Direct pixel-sampling assertions for both fixtures (left half ~black/
+    ~red as expected, right half ~white), plus both added to
+    [pdfviewer_render_test.go](../pdfviewer_render_test.go)'s
+    `TestRenderMatchesReferenceImages` golden-image list (`-update`
+    added only the two new reference PNGs; no existing fixture's
+    rendered output changed - confirmed via `git status`). A 20-second
+    `FuzzOpenAndRender` run (picks up the new fixtures as seeds
+    automatically) found no panic or hang. Full test suite, `go vet`,
+    and `gofmt` all pass clean.
+- **Capability matrix updated.**
+    [docs/capability-matrix.md](../docs/capability-matrix.md)'s Soft
+    masks row is now "Done" (target phases "Phase 5, 17a-17c"),
+    describing the `/S`/`/G`/`/BC` handling and the two documented scope
+    cuts (`/TR`, and the mask group's own isolated/knockout compositing -
+    both already called out in Phase 17's own plan section above).
+- **Phase 17 closeout.** All three sub-phases (17a plumbing, 17b
+    building a real mask from `/SMask`, 17c fixtures/tests/docs) are
+    done; ExtGState-level soft masks are no longer a Backlog item.

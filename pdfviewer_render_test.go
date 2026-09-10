@@ -284,6 +284,8 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"alpha-fill.pdf",
 		"blend-multiply.pdf",
 		"tiling-pattern-fill.pdf",
+		"softmask-luminosity.pdf",
+		"softmask-alpha.pdf",
 	}
 
 	if *update {

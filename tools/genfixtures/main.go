@@ -127,6 +127,8 @@ func main() {
 		{"alpha-fill.pdf", buildAlphaFill()},
 		{"blend-multiply.pdf", buildBlendMultiply()},
 		{"tiling-pattern-fill.pdf", buildTilingPatternFill()},
+		{"softmask-luminosity.pdf", buildSoftMaskLuminosity()},
+		{"softmask-alpha.pdf", buildSoftMaskAlpha()},
 		{"encrypted-rc4-40bit.pdf", buildEncryptedRC4_40bit()},
 		{"encrypted-aes128.pdf", buildEncryptedAES128()},
 		{"encrypted-aes256.pdf", buildEncryptedAES256()},
@@ -1809,6 +1811,69 @@ func buildTilingPatternFill() []byte {
 	patternDict := fmt.Sprintf("<< /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 "+
 		"/BBox [0 0 20 20] /XStep 20 /YStep 20 /Resources << >> /Length %d >>", len(patternContent))
 	b.addObject(5, 0, patternDict, patternContent)
+
+	return b.finish(1)
+}
+
+// buildSoftMaskLuminosity returns a single 100x100-point page whose
+// content selects an ExtGState (/GS0) with a /Luminosity soft mask
+// (/SMask) before filling the entire page black. The mask's own group
+// (object 5) paints its left half white and its right half black, with
+// no "cm" of its own, so it lines up 1:1 with the main page's own
+// coordinates: white (luminosity 1, fully unmasked) over the left half,
+// black (luminosity 0, fully masked out) over the right half. The
+// expected result, worked out by hand: the left half of the page ends
+// up solid black (the fill was fully unmasked there), and the right
+// half stays the untouched white page background (the fill was fully
+// masked out there) - exactly like an ordinary clip would produce, but
+// arrived at through a completely different mechanism (a rendered
+// luminosity value, not a geometric path), which is exactly what this
+// fixture exists to prove actually works end to end.
+func buildSoftMaskLuminosity() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /ExtGState << /GS0 << /SMask << /S /Luminosity /G 5 0 R >> >> >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("/GS0 gs\n0 0 0 rg\n0 0 100 100 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	maskContent := []byte("1 1 1 rg\n0 0 50 100 re\nf\n0 0 0 rg\n50 0 50 100 re\nf\n")
+	maskDict := fmt.Sprintf("<< /Type /XObject /Subtype /Form "+
+		"/Group << /Type /Group /S /Transparency /CS /DeviceGray >> "+
+		"/BBox [0 0 100 100] /Resources << >> /Length %d >>", len(maskContent))
+	b.addObject(5, 0, maskDict, maskContent)
+
+	return b.finish(1)
+}
+
+// buildSoftMaskAlpha is buildSoftMaskLuminosity's /S /Alpha counterpart:
+// the mask group (object 5) paints an opaque black square across only
+// its own left half, leaving the right half entirely unpainted - an
+// /Alpha mask reads the group's own rendered *coverage*, not its color,
+// so this reaches the same left-unmasked/right-masked-out result as the
+// luminosity fixture above through a different signal (alpha instead of
+// brightness), specifically to prove the two /S values are not
+// accidentally reading the same underlying computation. The main
+// content fills the page red (rather than black, as a visual cue this
+// is the /Alpha fixture, not a repeat of the /Luminosity one) under
+// /GS0's mask.
+func buildSoftMaskAlpha() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /ExtGState << /GS0 << /SMask << /S /Alpha /G 5 0 R >> >> >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("/GS0 gs\n1 0 0 rg\n0 0 100 100 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	maskContent := []byte("0 0 0 rg\n0 0 50 100 re\nf\n")
+	maskDict := fmt.Sprintf("<< /Type /XObject /Subtype /Form "+
+		"/Group << /Type /Group /S /Transparency /CS /DeviceGray >> "+
+		"/BBox [0 0 100 100] /Resources << >> /Length %d >>", len(maskContent))
+	b.addObject(5, 0, maskDict, maskContent)
 
 	return b.finish(1)
 }

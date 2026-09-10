@@ -179,18 +179,14 @@ func (in *interpreter) buildShading(resolvedObj syntax.Object, shadingToDevice g
 	case 1:
 		return in.buildFunctionBasedShading(dict, shadingToDevice)
 	case 4, 5, 6, 7:
-		// Mesh shadings are a further, larger sub-phase (they need their
-		// own packed-stream binary format decoded, not just dictionary
-		// entries) - not yet implemented; see docs/PLAN2.md's Phase 13.
-		// isStream/stream are already extracted above (a mesh shading
-		// object must be the stream form) so the sub-phase that
-		// implements them only needs to add a call here, not touch this
-		// function's own shape-detection logic again.
+		// A mesh shading object must be the stream form (its own bytes
+		// carry the packed vertex/patch data meshshading.go decodes) -
+		// checked here, once, regardless of which mesh type it turns out
+		// to be.
 		if !isStream {
 			return nil, pdferror.Malformedf("mesh shading (type %d) must be a stream, found a plain dictionary", int(typeNum))
 		}
-		_ = stream
-		return nil, pdferror.Unsupportedf("mesh shading type %d (free-form/lattice-form triangle mesh and Coons/tensor patch mesh shadings are not yet supported)", int(typeNum))
+		return in.buildMeshShading(dict, stream, int(typeNum), shadingToDevice)
 	}
 
 	return in.buildAxialOrRadialShading(dict, int(typeNum), shadingToDevice)

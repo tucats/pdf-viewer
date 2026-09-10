@@ -146,9 +146,18 @@ func TestDoShadingMissingResourceIsSkipped(t *testing.T) {
 
 func TestDoShadingUnsupportedTypeIsError(t *testing.T) {
 	dict := axialShadingDict()
-	dict["ShadingType"] = syntax.Integer(4) // free-form triangle mesh: not yet implemented
+	dict["ShadingType"] = syntax.Integer(5) // lattice-form triangle mesh: not yet implemented
+	dict["BitsPerCoordinate"] = syntax.Integer(16)
+	dict["BitsPerComponent"] = syntax.Integer(8)
+	dict["VerticesPerRow"] = syntax.Integer(2)
+	// axialShadingDict's /Function takes 1 input, so a vertex carries a
+	// single parametric color value - /Decode needs 4 (Coords) + 2 (that
+	// one component) entries.
+	dict["Decode"] = syntax.Array{
+		syntax.Real(0), syntax.Real(1), syntax.Real(0), syntax.Real(1), syntax.Real(0), syntax.Real(1),
+	}
 	// A mesh shading must be a stream (its data carries packed vertex
-	// bytes) - buildShading checks this before it ever gets to "is type 4
+	// bytes) - buildShading checks this before it ever gets to "is type 5
 	// supported", so the resource itself has to be a stream too.
 	resources := syntax.Dictionary{"Shading": syntax.Dictionary{"Sh0": syntax.Stream{Dict: dict}}}
 	ops, err := Parse([]byte("/Sh0 sh"))
@@ -157,7 +166,7 @@ func TestDoShadingUnsupportedTypeIsError(t *testing.T) {
 	}
 	_, err = Interpret(ops, graphics.Identity(), resources, &fakeResolver{})
 	if !errors.Is(err, pdferror.ErrUnsupported) {
-		t.Fatalf("Interpret with /ShadingType 4: got %v, want an error wrapping ErrUnsupported", err)
+		t.Fatalf("Interpret with /ShadingType 5: got %v, want an error wrapping ErrUnsupported", err)
 	}
 }
 

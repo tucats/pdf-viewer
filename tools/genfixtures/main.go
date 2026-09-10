@@ -115,6 +115,7 @@ func main() {
 		{"radial-shading.pdf", buildRadialShading()},
 		{"shading-pattern-fill.pdf", buildShadingPatternFill()},
 		{"function-based-shading.pdf", buildFunctionBasedShading()},
+		{"mesh-shading-type4.pdf", buildFreeFormTriangleMeshShading()},
 		{"form-xobject.pdf", buildFormXObject()},
 		{"annotation-appearance.pdf", buildAnnotationAppearance()},
 		{"annotation-hidden.pdf", buildAnnotationHidden()},
@@ -1191,6 +1192,95 @@ func buildFunctionBasedShading() []byte {
 	fnDict := fmt.Sprintf("<< /FunctionType 0 /Domain [0 1 0 1] /Range [0 1 0 1 0 1] "+
 		"/Size [2 2] /BitsPerSample 8 /Length %d >>", len(samples))
 	b.addObject(5, 0, fnDict, samples)
+
+	return b.finish(1)
+}
+
+// meshBitWriter packs successive most-significant-bit-first fields into a
+// byte slice - the forward direction of the same bit-packing convention
+// internal/content/meshshading.go's bitReader reads, letting this file
+// hand-author a real Type 4 mesh shading's packed vertex stream the same
+// way every other fixture here hand-authors its content stream. This
+// project has no production PDF-*writing* code at all (see the package
+// doc comment's "hand-authored" note), so - exactly like
+// internal/content/meshshading_test.go's own identical-in-shape helper -
+// this exists purely to build test/fixture input, not because anything
+// in the library itself ever needs to write a mesh shading stream.
+type meshBitWriter struct {
+	data   []byte
+	bitPos int
+}
+
+func (w *meshBitWriter) write(value uint32, bits int) {
+	for i := bits - 1; i >= 0; i-- {
+		byteIdx := w.bitPos / 8
+		for byteIdx >= len(w.data) {
+			w.data = append(w.data, 0)
+		}
+		if (value>>uint(i))&1 != 0 {
+			w.data[byteIdx] |= 1 << uint(7-w.bitPos%8)
+		}
+		w.bitPos++
+	}
+}
+
+// align pads to the next byte boundary - Type 4's per-vertex rule (see
+// buildFreeFormTriangleMeshShading below); harmless to call when already
+// aligned.
+func (w *meshBitWriter) align() {
+	if rem := w.bitPos % 8; rem != 0 {
+		w.bitPos += 8 - rem
+	}
+}
+
+// buildFreeFormTriangleMeshShading returns a single 100x100-point page
+// whose content stream paints a named free-form Gouraud-shaded triangle
+// mesh (/ShadingType 4) directly via "sh": one triangle, red at PDF-space
+// (0,0), green at (100,0), blue at (0,100) - the right triangle covering
+// the half of the page on the origin side of that diagonal, left
+// unpainted (background white) on the other side.
+//
+// /BitsPerCoordinate and /BitsPerComponent are both 8, with /Decode
+// mapping the coordinate byte range [0,255] onto the page's own [0,100]
+// extent and the component byte range onto color range [0,1] - chosen
+// specifically so this fixture's three vertices (all at coordinate 0 or
+// 255) map to *exactly* 0 or 100 with no rounding at all, unlike an
+// interior point would; working out expected pixel colors only needs the
+// triangle's exact geometry, not any bit-quantization rounding.
+//
+// As with buildFunctionBasedShading, remember Page.Render's PDF-to-device
+// y-axis flip: PDF-space (0,0) [red] ends up at the device image's
+// *bottom*-left, (100,0) [green] at bottom-right, and (0,100) [blue] at
+// top-left - so the painted (lower-left) half of the page, in device
+// terms, is where device x <= device y.
+func buildFreeFormTriangleMeshShading() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Shading << /Sh0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n0 0 100 100 re\nW\nn\n/Sh0 sh\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	w := &meshBitWriter{}
+	writeMeshVertex := func(flag, x, y, r, g, bl byte) {
+		w.write(uint32(flag), 8)
+		w.write(uint32(x), 8)
+		w.write(uint32(y), 8)
+		w.write(uint32(r), 8)
+		w.write(uint32(g), 8)
+		w.write(uint32(bl), 8)
+		w.align() // a no-op here (48 bits is already a whole number of bytes), but every Type 4 vertex must do this
+	}
+	writeMeshVertex(0, 0, 0, 255, 0, 0)   // red at (0,0)
+	writeMeshVertex(0, 255, 0, 0, 255, 0) // green at (100,0)
+	writeMeshVertex(0, 0, 255, 0, 0, 255) // blue at (0,100)
+
+	shDict := fmt.Sprintf("<< /ShadingType 4 /ColorSpace /DeviceRGB "+
+		"/BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 "+
+		"/Decode [0 100 0 100 0 1 0 1 0 1] /Length %d >>", len(w.data))
+	b.addObject(5, 0, shDict, w.data)
 
 	return b.finish(1)
 }

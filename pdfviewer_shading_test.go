@@ -54,6 +54,39 @@ func TestRenderFunctionBasedShading(t *testing.T) {
 	assertPixel(t, img, 99, 99, 255, 0, 0)  // bottom-right: domain ~(1,0), red
 }
 
+// TestRenderFreeFormTriangleMeshShading exercises "sh" painting a Type 4
+// (free-form Gouraud-shaded triangle mesh) shading: one triangle, red at
+// PDF-space (0,0), green at (100,0), blue at (0,100) - see
+// tools/genfixtures's buildFreeFormTriangleMeshShading doc comment for
+// the exact geometry and the y-axis flip that puts red at the device
+// image's bottom-left rather than top-left. Unlike every other shading
+// type this project supports, a mesh shading also leaves part of the
+// page entirely unpainted (wherever no triangle covers it) - checked
+// here via the top-right corner, which lies outside this fixture's one
+// triangle.
+func TestRenderFreeFormTriangleMeshShading(t *testing.T) {
+	img := renderFixture(t, "mesh-shading-type4.pdf")
+	// Gouraud shading blends linearly across the *whole* triangle, so
+	// even a pixel close to a vertex already carries a few percent of the
+	// other two corners' colors (over a ~100-unit-wide triangle, a couple
+	// of pixels in is a couple of percent of the way across) - too much
+	// for assertPixel's fixed +/-2 tolerance, so "dominant color" checks
+	// are used here instead, the same reasoning as
+	// TestRenderAxialShading's own manual mid-gradient tolerance check.
+	dominant := func(x, y int, wantChannel int, other1, other2 int) {
+		t.Helper()
+		vals := []int{0, 0, 0}
+		vals[0], vals[1], vals[2], _ = rgba8(img, x, y)
+		if vals[wantChannel] < 200 || vals[other1] > 60 || vals[other2] > 60 {
+			t.Errorf("pixel (%d,%d) = (%d,%d,%d), want channel %d clearly dominant", x, y, vals[0], vals[1], vals[2], wantChannel)
+		}
+	}
+	dominant(1, 98, 0, 1, 2)                  // near the red vertex (bottom-left): R dominant
+	dominant(98, 98, 1, 0, 2)                 // near the green vertex (bottom-right): G dominant
+	dominant(1, 1, 2, 0, 1)                   // near the blue vertex (top-left): B dominant
+	assertPixel(t, img, 98, 1, 255, 255, 255) // top-right: outside the triangle, untouched background
+}
+
 // TestRenderShadingPatternFill exercises a shading pattern selected via
 // "cs Pattern"/"scn" used to fill an 80x80 square: the gradient (black
 // to white, spanning the square's own x extent) must be visible inside

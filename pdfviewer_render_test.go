@@ -245,6 +245,7 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"axial-shading.pdf",
 		"radial-shading.pdf",
 		"function-based-shading.pdf",
+		"mesh-shading-type4.pdf",
 		"shading-pattern-fill.pdf",
 		"form-xobject.pdf",
 		"annotation-appearance.pdf",

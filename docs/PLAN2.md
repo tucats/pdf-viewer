@@ -261,7 +261,7 @@ checkbox).
 
 ## Phase 13: Mesh and function-based shadings (Types 1, 4-7)
 
-**Status: 13a done; 13b-13e (mesh shadings, Types 4-7) in progress.**
+**Status: 13a and 13b done; 13c-13e (Types 5-7) in progress.**
 
 Axial and radial shadings (Types 2-3, the large majority of real-world
 gradients) are done. Function-based (Type 1) and mesh shadings (Types
@@ -1501,3 +1501,110 @@ in order, not rewritten later except to fix mistakes.
     (axial/radial never read them either), now called out explicitly in
     `docs/capability-matrix.md` since mesh shadings will make `/BBox`
     more commonly relevant once Phase 13b lands.
+
+### Phase 13b: Mesh shading infrastructure and Type 4 (free-form triangle mesh) — done (2026-09-10)
+
+- **Why 4 first.** All four mesh types (4-7) ultimately reduce to the
+    same on-screen representation - a flat list of Gouraud-shaded
+    triangles - but get there via completely different packed-stream
+    formats (Type 4's per-vertex edge flags, Type 5's implicit grid
+    adjacency, Types 6/7's Bezier patch control points). Type 4 is the
+    simplest of the four and was built first specifically to stand up the
+    shared plumbing (the bit reader, `/BitsPerCoordinate`/
+    `/BitsPerComponent`/`/Decode` parsing, the `/Function`-or-raw-
+    components color path, and `graphics.MeshTriangle`'s own rendering)
+    that Types 5-7 (later sub-phases) will reuse rather than duplicate.
+- **Getting the bit-packing rules right.** Neither this document's
+    authors nor a from-memory reading of the specification text alone
+    was trusted for one specific, easy-to-get-wrong detail: which mesh
+    types byte-align each vertex/patch record and which pack bits
+    continuously with no padding at all. This was cross-checked against
+    Mozilla's pdf.js (`src/core/pattern.js`'s `MeshStreamReader`/
+    `MeshShading` - a mature, spec-conformant, MPL-2.0-licensed
+    implementation) rather than assumed: Type 4 pads every vertex to a
+    byte boundary (`align()` called after each one); Types 5, 6, and 7
+    (later sub-phases) do not pad at all. Getting this wrong would
+    produce a mesh that decodes without any error at all, just complete
+    visual garbage - exactly the class of mistake this project's own
+    round-trip self-testing (encode with this project's own code, decode
+    with this project's own code) structurally cannot catch, since there
+    is no production PDF-*writing* encoder here to round-trip against in
+    the first place (see 8a's JBIG2 entry above for the same concern in a
+    different codec). Only the bit-layout/control-point-ordering rules
+    were consulted from pdf.js's source; nothing was copied, and this
+    project's Go implementation, types, and structure are its own - see
+    `internal/content/meshshading.go`'s own doc comment for the full
+    provenance note.
+- **`internal/content/meshshading.go` (new).** `bitReader`
+    (MSB-first unsigned-integer reads, `hasData`/`align`) is this file's
+    own small duplicate of the same bit-reading shape
+    `internal/image/decode.go` and `internal/function/type0.go` each
+    already have their own copy of, matching this project's established
+    precedent of a few duplicated lines over a shared micro-package.
+    `meshParams` bundles what every mesh type's per-vertex reads need
+    (bit widths, `/Decode`, component count, optional `/Function`, color
+    space); `readCoordinate`/`readColor` map raw bits through `/Decode`;
+    `meshColor` applies the optional `/Function` then the color space
+    (mirroring `buildAxialOrRadialShading`'s `ColorAt` closure, including
+    its same defensive black-on-error fallback); `latticeToTriangles`
+    triangulates any regular vertex grid (used directly by Type 5 and, by
+    patch subdivision, Types 6/7 - all later sub-phases) into
+    `graphics.MeshTriangle`s. `buildMeshShading` parses everything the
+    four types share (`/BitsPerCoordinate`, `/BitsPerComponent`, the
+    optional `/Function`, `/ColorSpace`, `/Decode` - validating its length
+    against how many raw color components a vertex actually carries, 1 if
+    a `/Function` exists, else the color space's own component count,
+    exactly mirroring the axial/radial-shading rule) before dispatching
+    to whichever per-type decoder does the actual bitstream walk -
+    currently only `decodeType4Mesh`; Types 5-7 fall through to a
+    dedicated `ErrUnsupported` branch there.
+- **`decodeType4Mesh`** implements 8.7.4.5.5's triangle-strip-like
+    encoding: edge flag 0 starts an independent triangle (needing 2 more
+    vertices); flag 1 shares the *previous* triangle's own 2nd and 3rd
+    vertices as the new triangle's 1st and 2nd (needing 1 more vertex);
+    flag 2 shares the previous triangle's 1st and 3rd the same way - built
+    as a flat, growing index list rather than reading three vertices at a
+    time, since a flag-1/2 triangle only ever supplies one new vertex of
+    its own. A truncated trailing partial triangle is dropped rather than
+    erroring, this project's usual tolerance for malformed trailing data.
+- **`internal/content/shading.go` wiring.** `buildShading`'s mesh-type
+    case now calls `buildMeshShading` instead of returning
+    `ErrUnsupported` unconditionally; `TestDoShadingUnsupportedTypeIsError`
+    was updated to exercise Type 5 (still genuinely unsupported) instead
+    of Type 4.
+- **Tests.** `internal/content/meshshading_test.go` covers `bitReader`
+    (MSB-first reads across a byte boundary, past-end zero-fill, `align`,
+    `hasData`), `readCoordinate`/`readColor`'s `/Decode` mapping,
+    `meshColor`, `latticeToTriangles`, and `decodeType4Mesh` end to end at
+    the Go-value level: a single fresh triangle; edge flag 1 sharing
+    *exactly* the previous triangle's 2nd/3rd vertices (not some other
+    plausible-looking pairing, which would still look like a mesh, just a
+    geometrically wrong one); edge flag 2's equivalent case; an invalid
+    flag and a flag-1-with-no-prior-triangle both erroring; and a
+    truncated trailing triangle being dropped rather than fabricated. A
+    `meshBitWriter` test helper (this file's own small forward-direction
+    inverse of `bitReader`, needed because this project has no production
+    mesh-shading encoder to build test input with otherwise) packs the
+    synthetic streams these tests exercise. `tools/genfixtures` gained its
+    own identically-shaped `meshBitWriter` and `buildFreeFormTriangleMeshShading`,
+    building `mesh-shading-type4.pdf`: one real triangle (red/green/blue
+    corners) through an actual PDF stream and content-stream `sh` operator,
+    not just this package's own unit tests. `pdfviewer_shading_test.go`'s
+    `TestRenderFreeFormTriangleMeshShading` checks device-space "dominant
+    color near each vertex" (a fixed-tolerance exact-color check does not
+    work this close to a vertex of a ~100-unit triangle under linear
+    Gouraud interpolation - see that test's own comment) plus one point
+    genuinely outside the triangle, confirming a mesh shading really does
+    leave part of the page unpainted rather than defaulting to some
+    background color the way axial/radial's `/Extend` might suggest. The
+    fixture was added to `TestRenderMatchesReferenceImages`'s golden-image
+    list. Full test suite, `go build`, `go vet`, and the race detector all
+    pass clean; 20+-second fuzz runs of both the root package's
+    `FuzzOpenAndRender` and `internal/content`'s `FuzzParseAndInterpret`
+    (which pick up the new fixture/mesh-shading code paths automatically)
+    found no panic or hang.
+- **What's carried forward.** Types 5 (lattice-form triangle mesh), 6
+    (Coons patch mesh), and 7 (tensor-product patch mesh) remain
+    `ErrUnsupported`, tracked as Phase 13c-13e. `latticeToTriangles`
+    already exists ready for Type 5 to call directly and for Types 6/7 to
+    call after subdividing a patch's bicubic surface into a fine grid.

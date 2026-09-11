@@ -297,9 +297,17 @@ func (in *interpreter) buildMeshShading(dict syntax.Dictionary, stream syntax.St
 		}
 	}
 
-	csObj, ok := dict["ColorSpace"]
+	csEntry, ok := dict["ColorSpace"]
 	if !ok {
 		return nil, pdferror.Malformedf("shading has no /ColorSpace")
+	}
+	// See shading.go's identical resolveIfRef call for why this step -
+	// missing here until this fix - is necessary: /ColorSpace may itself
+	// be an indirect reference, and pdfimage.ResolveColorSpace expects
+	// its caller to have already resolved one level.
+	csObj, err := resolveIfRef(in.resolver, csEntry)
+	if err != nil {
+		return nil, err
 	}
 	cs, err := pdfimage.ResolveColorSpace(in.resolver, csObj, in.resources)
 	if err != nil {

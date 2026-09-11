@@ -248,9 +248,22 @@ func (in *interpreter) buildAxialOrRadialShading(dict syntax.Dictionary, typeNum
 		return nil, err
 	}
 
-	csObj, ok := dict["ColorSpace"]
+	csEntry, ok := dict["ColorSpace"]
 	if !ok {
 		return nil, pdferror.Malformedf("shading has no /ColorSpace")
+	}
+	// /ColorSpace, like almost any dictionary entry, may itself be an
+	// indirect reference rather than the color space object directly -
+	// internal/image's resolveColorSpace documents that it expects its
+	// caller to have already resolved one level (see resolveIfRef),
+	// which every other caller of pdfimage.ResolveColorSpace in this
+	// package already does; this one didn't, so a real-world shading
+	// dictionary with an indirectly-referenced /ColorSpace failed with a
+	// misleading "neither a name nor an array" error instead of
+	// resolving correctly.
+	csObj, err := resolveIfRef(in.resolver, csEntry)
+	if err != nil {
+		return nil, err
 	}
 	cs, err := pdfimage.ResolveColorSpace(in.resolver, csObj, in.resources)
 	if err != nil {
@@ -329,9 +342,22 @@ func (in *interpreter) buildFunctionBasedShading(dict syntax.Dictionary, shading
 		return nil, pdferror.Malformedf("Type 1 shading /Function must take 2 inputs (x, y), takes %d", fn.NumInputs())
 	}
 
-	csObj, ok := dict["ColorSpace"]
+	csEntry, ok := dict["ColorSpace"]
 	if !ok {
 		return nil, pdferror.Malformedf("shading has no /ColorSpace")
+	}
+	// /ColorSpace, like almost any dictionary entry, may itself be an
+	// indirect reference rather than the color space object directly -
+	// internal/image's resolveColorSpace documents that it expects its
+	// caller to have already resolved one level (see resolveIfRef),
+	// which every other caller of pdfimage.ResolveColorSpace in this
+	// package already does; this one didn't, so a real-world shading
+	// dictionary with an indirectly-referenced /ColorSpace failed with a
+	// misleading "neither a name nor an array" error instead of
+	// resolving correctly.
+	csObj, err := resolveIfRef(in.resolver, csEntry)
+	if err != nil {
+		return nil, err
 	}
 	cs, err := pdfimage.ResolveColorSpace(in.resolver, csObj, in.resources)
 	if err != nil {

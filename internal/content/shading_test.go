@@ -106,6 +106,37 @@ func TestDoShadingAppendsShadingDrawOpWithNoPath(t *testing.T) {
 	}
 }
 
+// TestDoShadingColorSpaceAsIndirectReference is the regression test for
+// a real-world crash: a shading dictionary's /ColorSpace entry can
+// itself be an indirect reference (a producer choosing to share one
+// /ColorSpace object across several shadings, say), not just a Name or
+// Array directly inline - and buildShading previously read dict[
+// "ColorSpace"] straight into pdfimage.ResolveColorSpace without
+// resolving it first, which that function's own doc comment documents
+// it does not do itself. A reference landed in resolveColorSpace's
+// switch with none of its cases matching (a syntax.Reference is neither
+// a Name nor an Array), producing a "malformed PDF input: /ColorSpace is
+// neither a name nor an array" error that aborted rendering the entire
+// page, rather than resolving to the real color space underneath.
+func TestDoShadingColorSpaceAsIndirectReference(t *testing.T) {
+	dict := axialShadingDict()
+	dict["ColorSpace"] = syntax.Reference{Number: 5}
+	resources := syntax.Dictionary{"Shading": syntax.Dictionary{"Sh0": dict}}
+	resolver := &fakeResolver{objects: map[int]syntax.Object{5: syntax.Name("DeviceRGB")}}
+
+	ops, err := Parse([]byte("/Sh0 sh"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	list, err := Interpret(ops, graphics.Identity(), resources, resolver)
+	if err != nil {
+		t.Fatalf("Interpret: %v, want the indirectly-referenced /ColorSpace to resolve", err)
+	}
+	if len(list) != 1 || list[0].Shading == nil {
+		t.Fatalf("Interpret: want exactly one DrawOp with a resolved Shading, got %+v", list)
+	}
+}
+
 // TestDoShadingUsesCurrentCTMNotInitial confirms "sh" (unlike a shading
 // pattern - see TestScnShadingPatternUsesInitialCTMNotCurrent) maps
 // shading space through whatever CTM is live at the moment "sh" runs.
@@ -237,6 +268,49 @@ func TestScnMeshShadingPatternPaintsFilledShape(t *testing.T) {
 	}
 	if col, ok := list[0].Shading.At(0, 0); !ok || col.R < 0.99 {
 		t.Fatalf("Shading.At(0,0) = (%+v,%v), want (red,true)", col, ok)
+	}
+}
+
+// TestMeshShadingColorSpaceAsIndirectReference is buildMeshShading's own
+// counterpart to TestDoShadingColorSpaceAsIndirectReference above - the
+// same missing resolveIfRef bug existed independently in
+// meshshading.go's buildMeshShading (mesh shading types 4-7 have their
+// own, separate /ColorSpace-reading code, not shared with axial/radial/
+// function-based shadings' buildShading), so it needed its own
+// regression test rather than being provably covered by the other one.
+func TestMeshShadingColorSpaceAsIndirectReference(t *testing.T) {
+	w := &meshBitWriter{}
+	writeVertex := func(x, y, r, g, b byte) {
+		w.write(uint32(x), 8)
+		w.write(uint32(y), 8)
+		w.write(uint32(r), 8)
+		w.write(uint32(g), 8)
+		w.write(uint32(b), 8)
+	}
+	writeVertex(0, 0, 255, 0, 0)
+	writeVertex(10, 0, 0, 255, 0)
+	writeVertex(0, 10, 0, 0, 255)
+	writeVertex(10, 10, 255, 255, 0)
+	meshStream := syntax.Stream{Dict: syntax.Dictionary{
+		"ShadingType": syntax.Integer(5), "ColorSpace": syntax.Reference{Number: 5},
+		"BitsPerCoordinate": syntax.Integer(8), "BitsPerComponent": syntax.Integer(8),
+		"VerticesPerRow": syntax.Integer(2),
+		"Decode":         syntax.Array{syntax.Real(0), syntax.Real(10), syntax.Real(0), syntax.Real(10), syntax.Real(0), syntax.Real(1), syntax.Real(0), syntax.Real(1), syntax.Real(0), syntax.Real(1)},
+	}, Raw: w.data}
+
+	resources := syntax.Dictionary{"Shading": syntax.Dictionary{"Sh0": meshStream}}
+	resolver := &fakeResolver{objects: map[int]syntax.Object{5: syntax.Name("DeviceRGB")}}
+
+	ops, err := Parse([]byte("/Sh0 sh"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	list, err := Interpret(ops, graphics.Identity(), resources, resolver)
+	if err != nil {
+		t.Fatalf("Interpret: %v, want the indirectly-referenced /ColorSpace to resolve", err)
+	}
+	if len(list) != 1 || list[0].Shading == nil {
+		t.Fatalf("Interpret: want exactly one DrawOp with a resolved mesh Shading, got %+v", list)
 	}
 }
 

@@ -64,9 +64,18 @@ type packetIterator interface {
 // componentDecode is one tile-component's geometry and effective coding
 // style (with any per-tile COC override already resolved - see
 // Header.effectiveCoding), everything the packet iterators and
-// packetheader.go need per component.
+// packetheader.go need per component. quant, bitDepth, and tcx0/tcy0
+// are unused before 14d (dequantization and the inverse wavelet
+// transform, idwt.go), which needs each of them: quant and bitDepth to
+// recover a subband's real-valued step size (Annex E.1), and tcx0/tcy0
+// (this tile-component's own pixel offset - see tileComponentBounds) to
+// resolve the degenerate width==1/height==1 boundary case §F.3.4/F.3.5
+// call out.
 type componentDecode struct {
 	coding      CodingStyle
+	quant       QuantizationStyle
+	bitDepth    int
+	tcx0, tcy0  int
 	resolutions []*resolutionInfo
 }
 

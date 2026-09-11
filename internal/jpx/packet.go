@@ -44,6 +44,10 @@ func buildTileComponents(h *Header, tileIndex int) ([]*componentDecode, error) {
 		cs := h.effectiveCoding(tileIndex, c)
 		components[c] = &componentDecode{
 			coding:      cs,
+			quant:       h.effectiveQuant(tileIndex, c),
+			bitDepth:    h.Components[c].BitDepth,
+			tcx0:        tcx0,
+			tcy0:        tcy0,
 			resolutions: buildResolutions(tcx0, tcy0, tcx1, tcy1, cs),
 		}
 	}

@@ -64,9 +64,17 @@
 //     package's usual from-the-specification-alone approach, made
 //     because those 75-entry lookup tables are unusually easy to get
 //     silently wrong - see tier1.go's Provenance section).
-//   - 14d: dequantization and the inverse discrete wavelet transform (both
-//     the 5/3 reversible integer filter and the 9/7 irreversible filter),
-//     reassembling one tile-component's samples from its subbands.
+//   - 14d (done): dequantization (dequantize.go - Annex E.1's inverse
+//     quantization procedure, including the "insert a reconstruction bit
+//     for any bit-planes a code-block's contributions truncated" rule)
+//     and the inverse discrete wavelet transform (idwt.go - both the 5/3
+//     reversible integer filter and the 9/7 irreversible filter, applied
+//     row-then-column per resolution level per §F.3's own recursion),
+//     reassembling one tile-component's full sample array from its
+//     subbands. Still not reachable from internal/filter - the result
+//     (reconstructedComponent) is real-valued, not yet DC-level-shifted,
+//     clamped, or passed through any multiple component transform, all
+//     three of which are 14e's job.
 //   - 14e: the multiple component transform (reversible RCT / irreversible
 //     ICT), DC level shifting, and tile compositing into a final image.
 //   - 14f: internal/filter wiring (the JPXDecode case in filter.go) and

@@ -293,7 +293,7 @@ types), not re-scoped.
 
 ## Phase 14: JPXDecode (JPEG 2000)
 
-**Status: 14a, 14b, 14c done.**
+**Status: 14a, 14b, 14c, 14d done.**
 
 Same class of gap as JBIG2 (Phase 8) - a page using this filter fails
 outright - but JPEG 2000 in practice appears mostly in narrower
@@ -358,10 +358,10 @@ they ever need to diverge):
 - **14c: tier-1 coding** - the EBCOT bit-plane coding passes
     (significance propagation, magnitude refinement, cleanup) that turn
     a code-block's compressed bytes into quantized wavelet coefficients.
-- **14d: dequantization and the inverse discrete wavelet transform**
-    (both the 5/3 reversible integer filter and the 9/7 irreversible
-    filter), reassembling one tile-component's samples from its
-    subbands.
+- **14d (done): dequantization and the inverse discrete wavelet
+    transform** (both the 5/3 reversible integer filter and the 9/7
+    irreversible filter), reassembling one tile-component's samples from
+    its subbands. See this phase's closeout note below.
 - **14e: the multiple component transform** (reversible RCT /
     irreversible ICT), DC level shifting, and tile compositing into a
     final image.
@@ -2674,3 +2674,93 @@ in order, not rewritten later except to fix mistakes.
     except this sub-phase's own tests. `internal/filter` and
     `docs/capability-matrix.md` are unchanged; a JPXDecode stream still
     fails with `ErrUnsupported`.
+
+### Phase 14d: dequantization and the inverse wavelet transform — done (2026-09-10)
+
+- **`dequantize.go`.** Implements ISO/IEC 15444-1 Annex E.1's inverse
+    quantization procedure: for each subband, selects that subband's
+    step-size exponent/mantissa (handling all three `QuantStyle`s -
+    `QuantScalarDerived`'s formula E-5, where only the LL band's step
+    size is given and every other subband's is derived from how many
+    decomposition levels separate it from LL, and `QuantNone`/
+    `QuantScalarExpounded`'s per-subband-explicit indexing), computes
+    that subband's real-valued step size (always exactly 1 for a
+    reversible-transform component) and nominal bit-plane count `mb`,
+    and dequantizes every code-block's tier-1 output (14c) accordingly -
+    including Annex E.1's "insert a reconstruction bit at the first
+    never-transmitted bit-plane position" rule for a code-block whose
+    contributions were truncated (`bitsDecoded < mb`), which applies
+    only to an irreversible-transform subband (a truncated
+    reversible-transform code-block is zero-padded instead, matching
+    lossless mode's own semantics - see `copyCoefficients`'s doc
+    comment). Also performs Annex F.3.3's interleaving of a resolution
+    level's HL/LH/HH subbands into their final grid positions (the LL
+    corner is left zero for `idwt.go` to fill in from the previous,
+    coarser level's own output).
+- **`idwt.go`.** Implements Annex F.3's inverse discrete wavelet
+    transform: both defined synthesis filters (the 5/3 reversible
+    integer filter, exact integer arithmetic throughout; the 9/7
+    irreversible filter, genuinely floating-point and therefore never
+    exactly reversible even from a bit-exact tier-1 decode), Annex
+    F.3.7's whole-sample symmetric boundary extension, the row-then-
+    column 2D application (`synthesizeLevel`), and the per-resolution-
+    level recursion that folds `dequantize.go`'s per-level coefficient
+    arrays together into one tile-component's full reconstructed sample
+    array (`reconstructTileComponent`/`reconstructTile`/`decodeTile`,
+    the last tying 14b/14c/14d into one per-tile entry point). The
+    result is real-valued, not yet DC-level-shifted, clamped, or passed
+    through any multiple component transform - all three are 14e's job,
+    along with compositing every component into a finished image.
+- **Provenance.** Cross-checked against pdf.js v3.11.174's
+    `copyCoefficients`/`transformTile`/`Transform`/`IrreversibleTransform`/
+    `ReversibleTransform` (`jpx.js`), the same approach 14c's tier-1
+    tables used and for the same reason: Annex E.1's dequantization
+    formula and Annex F.3's lifting-step buffer indexing (in particular,
+    exactly which padding positions each filter step deliberately
+    overreads into so a *later* step finds what it needs there, saving a
+    second extension pass) are easy to get subtly wrong from the
+    standard's prose alone, with nothing to self-check against. This
+    package's own code is restructured from pdf.js's manually
+    loop-unrolled, in-place `Float32Array` steps into ordinary Go loops
+    over `[]float64` (an independent, deliberate choice for extra
+    precision headroom - see `idwt.go`'s doc comment - not a mechanical
+    port), and the 9/7 filter's individual lifting-step formulas are
+    written with the same operand grouping pdf.js uses (`gamma*a +
+    gamma*b` rather than `gamma*(a+b)`) specifically to avoid introducing
+    a floating-point-reassociation difference of its own.
+- **Verification.** No real-world JPX sample exists to test against (as
+    with every hard piece of this package), so `idwt_test.go` verifies
+    each piece independently: `filter53`/`filter97` round-trip against
+    `forward53`/`forward97`, from-scratch forward lifting transforms
+    written independently from the textbook definition (not derived by
+    algebraically inverting the decoder's own code) across a range of
+    signal lengths including size 1-3 edge cases, 5/3 exactly and 9/7 to
+    a small floating-point tolerance; `dequantizeComponent`/
+    `copyCoefficients` are checked directly against hand-computed
+    expected values for the reversible-exact, irreversible-delta,
+    truncated-reconstruction-bit, and subband-interleaving cases; and
+    `TestReconstructTileComponentTier1RoundTrip` drives the *real* 14c
+    tier-1 encoder/decoder round trip (not hand-built magnitude arrays)
+    through `reconstructTileComponent` for a single-resolution
+    (`DecompositionLevels: 0`, no wavelet synthesis needed) reversible
+    component, confirming the originally-encoded integer coefficients
+    come back out exactly. A full multi-level round trip needs a forward
+    wavelet transform and quantizer this package does not have yet
+    (14g's own from-scratch encoder is the first sub-phase planned to
+    build one) - see "what's carried forward" below. All tests passed on
+    the first full run once the forward-lifting test helpers' own
+    boundary handling was corrected (each needed a second
+    `extendSymmetric` call between its lifting steps that the *decoder*
+    side gets for free from its own single-step overread trick, but a
+    from-scratch encoder built in reverse does not - a real, instructive
+    bug in the test-only code itself, not in `idwt.go`, caught by the
+    round trip failing exactly as intended). Full test suite, `go vet`,
+    and `gofmt` all pass clean.
+- **What's carried forward.** The multiple component transform, DC level
+    shifting, and tile compositing (14e) do not exist yet -
+    `reconstructTile`/`decodeTile`'s output is unused by anything except
+    this sub-phase's own tests. There is still no forward wavelet
+    transform or quantizer anywhere in this package (only tier-1's own
+    from-scratch encoder exists) - 14g is where fixtures need one built.
+    `internal/filter` and `docs/capability-matrix.md` are unchanged; a
+    JPXDecode stream still fails with `ErrUnsupported`.

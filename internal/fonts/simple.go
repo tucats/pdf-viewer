@@ -163,7 +163,7 @@ func trySubstitute(f *Font, dict syntax.Dictionary, resolver Resolver, encoding 
 // silent change, per this package's own doc comment on making every
 // fallback an explicit, documented decision.
 func applySubstituteWidths(f *Font, dict syntax.Dictionary, glyphSource glyphOutlineSource, resolver Resolver) {
-	if arr, ok := dict["Widths"].(syntax.Array); ok && len(arr) > 0 {
+	if arr, ok := widthsArray(dict, resolver); ok && len(arr) > 0 {
 		return
 	}
 	if _, ok := glyphSource.(advanceWidthSource); !ok {
@@ -171,6 +171,19 @@ func applySubstituteWidths(f *Font, dict syntax.Dictionary, glyphSource glyphOut
 	}
 	f.substituteWidths = true
 	diag.Note(resolver, "font %v (%v) has no /Widths; using the substitute font's own advance widths instead of the generic default", dict["BaseFont"], dict["Subtype"])
+}
+
+// widthsArray resolves dict's /Widths entry - which, like /DescendantFonts
+// (see cid.go's firstDescendantFont), some producers give as an indirect
+// reference to the array object rather than writing it inline - before
+// type-asserting it, so that form is not mistaken for a missing /Widths.
+func widthsArray(dict syntax.Dictionary, resolver Resolver) (syntax.Array, bool) {
+	resolved, err := resolveIfRef(resolver, dict["Widths"])
+	if err != nil {
+		return nil, false
+	}
+	arr, ok := resolved.(syntax.Array)
+	return arr, ok
 }
 
 // simpleWidths reads a simple font's /Widths array (indexed from
@@ -192,7 +205,7 @@ func simpleWidths(dict syntax.Dictionary, resolver Resolver) (map[int]float64, f
 	widths := make(map[int]float64)
 
 	firstChar, hasFirst := numberValue(dict["FirstChar"])
-	arr, _ := dict["Widths"].(syntax.Array)
+	arr, _ := widthsArray(dict, resolver)
 	if hasFirst && len(arr) > 0 {
 		for i, v := range arr {
 			resolved, err := resolveIfRef(resolver, v)

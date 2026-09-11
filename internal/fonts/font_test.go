@@ -108,6 +108,44 @@ func TestLoad_SimpleFontWithEmbeddedTrueType(t *testing.T) {
 	}
 }
 
+// TestLoad_SimpleFontIndirectWidths confirms /Widths is resolved
+// correctly when the PDF writes it as an indirect reference to the
+// array object (e.g. "/Widths 42 0 R") rather than inline - both are
+// legal per the specification, but only the inline form was previously
+// handled; simpleWidths asserted the un-resolved dictionary value
+// directly against syntax.Array, so the indirect form was silently
+// treated as "no /Widths", collapsing every character in the run to
+// the flat generic defaultMissingWidth regardless of its real glyph
+// width (see widthsArray's doc comment).
+func TestLoad_SimpleFontIndirectWidths(t *testing.T) {
+	glyphs := [][]byte{{}, unitSquareGlyph()}
+	cmap := buildCmapFormat0Table(map[rune]uint16{'A': 1})
+	sfntData := buildTestSfnt(t, glyphs, cmap)
+
+	resolver := fakeResolver{objects: map[int]syntax.Object{
+		10: syntax.Stream{Dict: syntax.Dictionary{"Length1": syntax.Integer(len(sfntData))}, Raw: sfntData},
+		20: syntax.Array{syntax.Integer(750)},
+	}}
+	dict := syntax.Dictionary{
+		"Subtype":   syntax.Name("TrueType"),
+		"FirstChar": syntax.Integer(65),
+		"LastChar":  syntax.Integer(65),
+		"Widths":    syntax.Reference{Number: 20},
+		"Encoding":  syntax.Name("WinAnsiEncoding"),
+		"FontDescriptor": syntax.Dictionary{
+			"FontFile2": syntax.Reference{Number: 10},
+		},
+	}
+
+	f, err := Load(dict, resolver)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if w := f.Width(65); w != 750 {
+		t.Errorf("Width('A') = %v, want 750 (the indirect /Widths entry's own value)", w)
+	}
+}
+
 // TestLoad_SimpleFontWithEmbeddedCFF is TestLoad_SimpleFontWithEmbeddedTrueType's
 // counterpart for a bare CFF/Type1C /FontFile3 program (cff.go),
 // confirming the same square outline comes back through Font.Glyph

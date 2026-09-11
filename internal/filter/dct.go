@@ -40,14 +40,46 @@ import (
 // A JPEG file's own headers say how many color components it has (1 for
 // grayscale, 3 for YCbCr, or 4 for CMYK/YCCK - the "Adobe" varieties);
 // Go's image/jpeg decodes each into image.Gray, image.YCbCr, or
-// image.CMYK respectively, already reversing YCbCr's own color transform
-// and the Adobe-specific CMYK inversion where its APP14 marker calls for
-// it. This function converts each into plain interleaved bytes (1, 3, or
-// 4 bytes per pixel) in the component order PDF expects for
+// image.CMYK respectively, already reversing YCbCr's own color transform.
+// This function converts each into plain interleaved bytes (1, 3, or 4
+// bytes per pixel) in the component order PDF expects for
 // DeviceGray/DeviceRGB/DeviceCMYK - internal/image then treats the
 // result exactly like any other image filter's output, cross-checking
 // its length against the image dictionary's own declared /Width,
 // /Height, and /ColorSpace component count.
+//
+// # Undoing Go's own Adobe CMYK inversion
+//
+// For a 4-component (CMYK) JPEG, Go's decoder requires an Adobe APP14
+// marker to even attempt a decode (an unmarked 4-component JPEG is
+// UnsupportedError), and whenever that marker is present it always
+// inverts every sample ("v = 255 - v") before handing back an
+// *image.CMYK - see the standard library's own applyBlack doc comment.
+// That inversion is the right, well-established convention for a
+// *standalone* CMYK JPEG file written by an Adobe application
+// (Photoshop, etc.), which really does store 255 for "no ink". It is
+// the wrong convention here: a CMYK JPEG Distiller/Acrobat embeds
+// *inside a PDF* via DCTDecode is written with direct, uninverted
+// samples (0 = no ink), because the PDF's own /Decode array - not the
+// JPEG's internal Adobe marker - is the specification-defined place to
+// request inversion (7.4.8), and defaults to [0 1 0 1 0 1 0 1] (direct,
+// no inversion) when absent. A producer's own JPEG encoder still writes
+// the Adobe marker regardless (it is a property of the encoder, not a
+// per-file choice tied to the PDF's /Decode array), so Go's blanket
+// invert-whenever-marker-present rule silently flips every such image.
+//
+// unApplyAdobeCMYKInversion inverts the samples back ("v = 255 - v" again,
+// which cancels Go's own inversion) so decodeDCT hands internal/image
+// the same direct, un-inverted bytes the file's /Decode array (almost
+// always left at its [0 1]-repeated default for this exact reason) is
+// written to expect - see internal/image/decode.go's decodeArray. This
+// was confirmed against a real production PDF (an Apple hardware
+// manual originally distilled from QuarkXPress) whose photographic
+// figures rendered as solid near-black blobs before this fix: macOS's
+// own PDF renderer (Quartz/PDFKit, as used by Preview.app) shows the
+// same file's same images correctly, and does so precisely because it
+// does not apply Go's standalone-JPEG-file convention to a DCTDecode
+// image stream either.
 func decodeDCT(data []byte) ([]byte, error) {
 	// Peek at the JPEG header only (image.Config, not the full pixel
 	// data) before committing to a full decode, so a tiny file with a
@@ -75,7 +107,7 @@ func decodeDCT(data []byte) ([]byte, error) {
 	case *image.YCbCr:
 		return ycbcrToRGBBytes(px), nil
 	case *image.CMYK:
-		return cmykToBytes(px), nil
+		return cmykToBytes(unApplyAdobeCMYKInversion(px)), nil
 	default:
 		// image/jpeg only ever produces one of the three concrete types
 		// above; this default only guards against a future standard
@@ -110,6 +142,18 @@ func ycbcrToRGBBytes(img *image.YCbCr) []byte {
 		}
 	}
 	return out
+}
+
+// unApplyAdobeCMYKInversion inverts every sample of img ("v = 255 - v")
+// in place and returns it, undoing the unconditional Adobe-marker-driven
+// inversion Go's own image/jpeg decoder already applied - see decodeDCT's
+// doc comment for why a DCTDecode image stream inside a PDF needs that
+// inversion undone rather than kept.
+func unApplyAdobeCMYKInversion(img *image.CMYK) *image.CMYK {
+	for i, v := range img.Pix {
+		img.Pix[i] = 255 - v
+	}
+	return img
 }
 
 func cmykToBytes(img *image.CMYK) []byte {

@@ -153,6 +153,32 @@ func TestLoad_Type0CIDFontType0CFF(t *testing.T) {
 	}
 }
 
+// TestFirstDescendantFont_IndirectArray confirms /DescendantFonts is
+// resolved correctly when the PDF writes it as an indirect reference to
+// the array object (e.g. "/DescendantFonts 30 0 R") rather than inline
+// (e.g. "/DescendantFonts [20 0 R]") - both are legal per the
+// specification, but only the inline form was previously handled;
+// firstDescendantFont asserted the un-resolved dictionary value
+// directly against syntax.Array, so the indirect form was silently
+// treated as "no descendant font" (see cid.go's doc comment on this
+// function).
+func TestFirstDescendantFont_IndirectArray(t *testing.T) {
+	t.Parallel()
+	resolver := fakeResolver{objects: map[int]syntax.Object{
+		20: syntax.Dictionary{"Subtype": syntax.Name("CIDFontType2")},
+		30: syntax.Array{syntax.Reference{Number: 20}},
+	}}
+	dict := syntax.Dictionary{"DescendantFonts": syntax.Reference{Number: 30}}
+
+	descendant, ok := firstDescendantFont(dict, resolver)
+	if !ok {
+		t.Fatalf("firstDescendantFont: ok = false, want true")
+	}
+	if descendant["Subtype"] != syntax.Name("CIDFontType2") {
+		t.Errorf("descendant[Subtype] = %v, want CIDFontType2", descendant["Subtype"])
+	}
+}
+
 func TestCidGlyphLookup_UnrecognizedNameFallsBackToIdentity(t *testing.T) {
 	t.Parallel()
 	descendant := syntax.Dictionary{"CIDToGIDMap": syntax.Name("SomeUnknownName")}

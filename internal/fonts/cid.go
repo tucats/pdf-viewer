@@ -161,8 +161,17 @@ func loadType0Encoding(f *Font, dict syntax.Dictionary, resolver Resolver) {
 // firstDescendantFont resolves dict's /DescendantFonts entry - per the
 // specification, an array of exactly one indirect reference to the
 // descendant CID font dictionary - and returns that dictionary.
+//
+// /DescendantFonts itself may be given as an indirect reference to the
+// array object, rather than written inline (some producers do this), so
+// it is resolved the same way dictValue resolves every other top-level
+// dictionary entry before being type-asserted.
 func firstDescendantFont(dict syntax.Dictionary, resolver Resolver) (syntax.Dictionary, bool) {
-	arr, ok := dict["DescendantFonts"].(syntax.Array)
+	arrValue, err := resolveIfRef(resolver, dict["DescendantFonts"])
+	if err != nil {
+		return nil, false
+	}
+	arr, ok := arrValue.(syntax.Array)
 	if !ok || len(arr) == 0 {
 		return nil, false
 	}

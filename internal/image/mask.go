@@ -51,6 +51,24 @@ func smaskAlphaFn(dict syntax.Dictionary, width, height int, opts Options, depth
 	return resample(smImg, width, height, func(r, g, b, a float64) float64 { return r }), nil
 }
 
+// embeddedAlphaFn returns a function giving the alpha (0-1) alpha - one
+// byte (0-255) per pixel, row-major - contributes at each (x, y) pixel of
+// a width x height base image. See Options.EmbeddedAlpha's doc comment
+// for where this data comes from (JPXDecode's /SMaskInData - ISO
+// 32000-1 7.4.9); unlike smaskAlphaFn/maskAlphaOrColorKey, there is no
+// separate image stream to decode or resample here, since the alpha data
+// already shares the base image's own width and height (both were
+// decoded from the same JPX codestream - see internal/filter's
+// DecodeImage).
+func embeddedAlphaFn(alpha []byte, width, height int) (func(x, y int) float64, error) {
+	if len(alpha) < width*height {
+		return nil, pdferror.Malformedf("embedded alpha data is %d bytes, need at least %d for %dx%d", len(alpha), width*height, width, height)
+	}
+	return func(x, y int) float64 {
+		return float64(alpha[y*width+x]) / 255
+	}, nil
+}
+
 // maskAlphaOrColorKey returns whichever of the two forms of /Mask the
 // dictionary uses: an alpha function (mirroring smaskAlphaFn, but
 // sourced from the referenced image's own computed alpha channel rather

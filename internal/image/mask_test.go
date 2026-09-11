@@ -109,6 +109,45 @@ func TestDecodeWithColorKeyMask(t *testing.T) {
 	assertPixel(t, img, 1, 0, 201, 201, 201, 255)
 }
 
+func TestDecodeWithEmbeddedAlphaAppliesPerPixelAlpha(t *testing.T) {
+	dict := syntax.Dictionary{
+		"Width": syntax.Integer(2), "Height": syntax.Integer(1),
+		"BitsPerComponent": syntax.Integer(8),
+		"ColorSpace":       syntax.Name("DeviceRGB"),
+	}
+	samples := []byte{255, 0, 0, 0, 255, 0} // red pixel, green pixel
+	img, err := Decode(dict, samples, Options{EmbeddedAlpha: []byte{0, 255}})
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	assertPixel(t, img, 0, 0, 255, 0, 0, 0)   // alpha 0 -> fully transparent
+	assertPixel(t, img, 1, 0, 0, 255, 0, 255) // alpha 255 -> fully opaque
+}
+
+func TestDecodeSMaskTakesPriorityOverEmbeddedAlpha(t *testing.T) {
+	smaskDict := syntax.Dictionary{
+		"Width": syntax.Integer(1), "Height": syntax.Integer(1),
+		"BitsPerComponent": syntax.Integer(8),
+		"ColorSpace":       syntax.Name("DeviceGray"),
+	}
+	smaskStream := syntax.Stream{Dict: smaskDict, Raw: []byte{255}} // fully opaque via SMask
+
+	r := &fakeResolver{objects: map[int]syntax.Object{41: smaskStream}}
+	dict := syntax.Dictionary{
+		"Width": syntax.Integer(1), "Height": syntax.Integer(1),
+		"BitsPerComponent": syntax.Integer(8),
+		"ColorSpace":       syntax.Name("DeviceGray"),
+		"SMask":            syntax.Reference{Number: 41},
+	}
+	// EmbeddedAlpha would make this pixel transparent if it were
+	// consulted despite /SMask being present.
+	img, err := Decode(dict, []byte{200}, Options{Resolver: r, EmbeddedAlpha: []byte{0}})
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	assertPixel(t, img, 0, 0, 200, 200, 200, 255)
+}
+
 func TestDecodeSMaskTakesPriorityOverMask(t *testing.T) {
 	smaskDict := syntax.Dictionary{
 		"Width": syntax.Integer(1), "Height": syntax.Integer(1),

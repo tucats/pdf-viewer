@@ -28,6 +28,20 @@ type Options struct {
 	// using whatever color a "g"/"rg"/"k"/"scn" operator most recently
 	// set, exactly like an ordinary path fill would.
 	FillColor graphics.Color
+
+	// EmbeddedAlpha, when non-nil, supplies this image's own per-pixel
+	// alpha directly - one byte (0-255) per pixel, row-major, width*height
+	// long - instead of via a /SMask or /Mask dictionary entry. This
+	// exists for JPXDecode's /SMaskInData behavior (ISO 32000-1 7.4.9): an
+	// opacity channel embedded directly in the already-decoded JPX image
+	// data, which internal/filter's adapter (DecodeImage) splits out
+	// before this package ever sees the image's sample bytes - see
+	// internal/content, the only caller that sets this field. Checked
+	// after /SMask but before /Mask - see decodeInternal - matching the
+	// specification's requirement that a conforming file never combines a
+	// nonzero /SMaskInData with an explicit /SMask of its own, so the
+	// exact ordering between the two rarely matters in practice.
+	EmbeddedAlpha []byte
 }
 
 // maxImagePixels bounds the total pixel count (width * height) Decode
@@ -125,10 +139,16 @@ func decodeInternal(dict syntax.Dictionary, samples []byte, opts Options, depth 
 	if err != nil {
 		return nil, err
 	}
+	if alphaFn == nil && opts.EmbeddedAlpha != nil {
+		alphaFn, err = embeddedAlphaFn(opts.EmbeddedAlpha, width, height)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var colorKey [][2]uint32
 	if alphaFn == nil {
-		// /Mask is only consulted when /SMask is absent - see the package
-		// doc comment's masking section.
+		// /Mask is only consulted when /SMask (and EmbeddedAlpha) are
+		// absent - see the package doc comment's masking section.
 		alphaFn, colorKey, err = maskAlphaOrColorKey(dict, width, height, opts, depth, rawComponents)
 		if err != nil {
 			return nil, err

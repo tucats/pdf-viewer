@@ -248,6 +248,55 @@ func TestInterpretDoAndInlineImageWithNilResolverDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestInterpretDoWithJPXImageRoutesThroughPaintJPXImage confirms doXObject
+// detects a JPXDecode-filtered image (filter.IsJPXImage) and dispatches
+// to paintJPXImage instead of the ordinary resolver.DecodeStream path -
+// checked indirectly, since building a real encoded JPEG 2000 codestream
+// needs internal/jpx's own from-scratch encoder (test-only, added in
+// 14g): garbage bytes reach internal/jpx and fail as malformed input, not
+// as an unsupported filter name (TestDecodeUnsupportedFilter in
+// internal/filter covers that "still not implemented" case for a
+// genuinely unsupported filter like Crypt) - the only way this error
+// shape arises is if decodeOne/DecodeImage actually ran JPXDecode's own
+// decoder over the data.
+func TestInterpretDoWithJPXImageRoutesThroughPaintJPXImage(t *testing.T) {
+	imgDict := syntax.Dictionary{
+		"Subtype": syntax.Name("Image"),
+		"Width":   syntax.Integer(1), "Height": syntax.Integer(1),
+		"Filter": syntax.Name("JPXDecode"),
+	}
+	resources := syntax.Dictionary{"XObject": syntax.Dictionary{"Im0": syntax.Stream{Dict: imgDict, Raw: []byte("not a JPEG 2000 file")}}}
+
+	ops, err := Parse([]byte("/Im0 Do"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = Interpret(ops, graphics.Identity(), resources, &fakeResolver{})
+	if errors.Is(err, pdferror.ErrUnsupported) {
+		t.Fatalf("Interpret with a JPXDecode image: got %v, want ErrMalformed (JPXDecode is implemented - Phase 14f), not ErrUnsupported", err)
+	}
+	if !errors.Is(err, pdferror.ErrMalformed) {
+		t.Fatalf("Interpret with a JPXDecode image and garbage data: got %v, want an error wrapping ErrMalformed", err)
+	}
+}
+
+// TestInterpretInlineJPXImageRoutesThroughPaintJPXImage is
+// TestInterpretDoWithJPXImageRoutesThroughPaintJPXImage's counterpart for
+// "BI" (doInlineImage's own filter.IsJPXImage check).
+func TestInterpretInlineJPXImageRoutesThroughPaintJPXImage(t *testing.T) {
+	ops, err := Parse([]byte("BI /W 1 /H 1 /F /JPXDecode ID not a JPEG 2000 file EI"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	_, err = Interpret(ops, graphics.Identity(), nil, &fakeResolver{})
+	if errors.Is(err, pdferror.ErrUnsupported) {
+		t.Fatalf("Interpret with an inline JPXDecode image: got %v, want ErrMalformed, not ErrUnsupported", err)
+	}
+	if !errors.Is(err, pdferror.ErrMalformed) {
+		t.Fatalf("Interpret with an inline JPXDecode image and garbage data: got %v, want an error wrapping ErrMalformed", err)
+	}
+}
+
 func TestInterpretInlineImageMalformedIsError(t *testing.T) {
 	// /W 0 is not a valid image width.
 	ops, err := Parse([]byte("BI /W 0 /H 1 /BPC 8 /CS /G ID  EI"))

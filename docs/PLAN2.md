@@ -293,7 +293,7 @@ types), not re-scoped.
 
 ## Phase 14: JPXDecode (JPEG 2000)
 
-**Status: 14a, 14b, 14c, 14d, 14e done.**
+**Status: 14a, 14b, 14c, 14d, 14e, 14f done.**
 
 Same class of gap as JBIG2 (Phase 8) - a page using this filter fails
 outright - but JPEG 2000 in practice appears mostly in narrower
@@ -365,13 +365,14 @@ they ever need to diverge):
 - **14e (done): the multiple component transform** (reversible RCT /
     irreversible ICT), DC level shifting, and tile compositing into a
     final image. See this phase's closeout note below.
-- **14f: `internal/filter` wiring** (the JPXDecode case in
-    `filter.go`) and the PDF-specific behaviors ISO 32000-1 7.4.9
-    documents for this filter specifically: a `/ColorSpace`-absent image
-    falls back to the JPX data's own embedded color space (from
-    `internal/jpx`'s JP2 box parsing), and `/SMaskInData` controls
-    whether an embedded opacity channel is used as the image's soft
-    mask.
+- **14f (done): `internal/filter` wiring** (the JPXDecode case in
+    `filter.go`, plus `DecodeImage`, the richer entry point
+    `internal/content` uses for an actual image XObject or inline image)
+    and the PDF-specific behaviors ISO 32000-1 7.4.9 documents for this
+    filter specifically: a `/ColorSpace`-absent image falls back to a
+    Device family of the right arity by decoded component count, and a
+    nonzero `/SMaskInData` splits the trailing decoded component off as
+    a per-pixel alpha channel. See this phase's closeout note below.
 - **14g: fixtures** (built with this package's own from-scratch
     encoder), **end-to-end render tests, and documentation** -
     `tools/genfixtures`, `docs/capability-matrix.md`, and
@@ -2865,3 +2866,148 @@ in order, not rewritten later except to fix mistakes.
     multi-tile *placement* math separately, but not both at once) -
     14g's fixtures, built with this package's own from-scratch encoder,
     are what a genuine multi-tile round trip needs.
+
+### Phase 14f: `internal/filter` wiring and JPXDecode's PDF-specific behaviors — done (2026-09-11)
+
+- **`internal/jpx/stream.go` (new).** `DecodeStream(data []byte) (*Image,
+    ColorInfo, error)` - the one-call entry point `internal/filter`'s
+    adapter uses: unwraps any JP2 container, parses the header, and
+    decodes every tile, in one step. `ColorInfo` exports box.go's
+    (unexported) `containerInfo`'s own color-space fields (`Present`,
+    `Method`, `EnumeratedColorSpace`, `ICCProfile`) for a caller outside
+    this package. `markers.go`'s `ParseHeader` was refactored to share
+    the same JP2-unwrapping logic via a new `unwrapContainer` helper
+    (previously inlined in `ParseHeader` itself) rather than duplicating
+    it - `ParseHeader` itself still only returns geometry, discarding the
+    color info its own callers (14a onward) never needed.
+- **`internal/filter/jpx.go` (new).** This phase's actual adapter, in
+    three parts:
+    - `decodeJPX` - the `JPXDecode` case `decodeOne` now dispatches to
+        (`filter.go`'s `switch` gained one more `case`, the literal
+        "JPXDecode case in filter.go" 14f's own plan entry names),
+        flattening every one of `internal/jpx`'s decoded components into
+        plain interleaved sample bytes via `packJPXComponents` - the same
+        "flatten a decoded image to the raw interleaved sample bytes
+        `internal/image` expects" role `dct.go`'s `decodeDCT` plays for
+        DCTDecode. This path has no image dictionary to consult, so every
+        decoded component is included, in codestream order - no
+        `/ColorSpace` fallback or `/SMaskInData` splitting, both of which
+        need `DecodeImage` below instead.
+    - `packJPXComponents` - requires every component to share one
+        unsigned bit depth from `{1, 2, 4, 8, 16}` (`internal/image`'s own
+        supported set - decode.go there), reporting `ErrUnsupported` for
+        a signed component, mismatched per-component bit depths, or any
+        other bit depth, rather than silently rescaling and losing or
+        fabricating precision; packs 8-bit and 16-bit components directly,
+        and reuses `predictor.go`'s existing `writeBitsMSB` big-endian
+        bitfield writer for 1/2/4-bit packing (PDF 8.9.5.2's own
+        high-order-bit-first, byte-padded-per-row layout).
+    - `DecodeImage(dict, raw, resolver, smaskInData) ([]byte, *JPXInfo,
+        error)` - `DecodeWith`'s counterpart for an actual image
+        dictionary: identical to `DecodeWith` for any filter chain not
+        ending in `JPXDecode` (`IsJPXImage` is the same check, exported
+        for `internal/content` to use before deciding which path to
+        call), but for one that does, applies every filter before the
+        last via the existing (unexported) `filterNames`/
+        `decodeParmsList`/`decodeOne` helpers, then calls
+        `jpx.DecodeStream` once and hands the result to
+        `buildJPXImageResult` - split out from `DecodeImage` itself
+        specifically so it could be unit-tested directly against a
+        hand-built `*jpx.Image` (a plain exported struct) rather than
+        needing a real encoded JPEG 2000 codestream for every branch this
+        logic needs covering. `buildJPXImageResult` implements both
+        PDF-specific behaviors ISO 32000-1 7.4.9 documents:
+        - **`/ColorSpace` fallback** (`JPXInfo.FallbackColorSpace`): by
+            decoded color-component count alone - 1 -> `DeviceGray`, 3 ->
+            `DeviceRGB`, 4 -> `DeviceCMYK`, matching the same "N
+            components -> Device family of that arity" approximation this
+            project's own `/ICCBased` handling already uses
+            (`internal/image/colorspace.go`'s `resolveICCBased`), rather
+            than interpreting the JP2 container's own "colr" box (an
+            enumerated color space or embedded ICC profile) in full. This
+            is not merely convenient but actually sufficient: `internal/
+            jpx`'s own multiple component transform (`mct.go`, 14e) has
+            already converted a codestream using RCT/ICT back to plain R,
+            G, B by the time this code runs, so component count already
+            *is* Device family, for every enumerated JP2 color space
+            (greyscale, sRGB, sYCC) this project has real-world evidence
+            of a PDF producer using.
+        - **`/SMaskInData`** (`JPXInfo.Alpha`, `packAlphaComponent`): when
+            `smaskInData` is nonzero and more than one component was
+            decoded, the *last* decoded component is split off as a
+            per-pixel alpha channel (normalized to 0-255 regardless of
+            its own bit depth) rather than treated as color. A fully
+            general reading would need to parse the JP2 container's own
+            "cdef" (Channel Definition) box to know precisely which
+            component an encoder meant as opacity - `internal/jpx`'s box
+            parsing does not implement "cdef" (see that package's own
+            "Scope" section) - but the trailing-component convention is
+            what every real-world JPX-with-alpha encoder this project is
+            aware of already follows (the same convention pdf.js relies
+            on for this same case), so this is a documented scope
+            decision, not a silent approximation.
+    - `translateJPXError` - the one place that converts `internal/jpx`'s
+        own `ErrMalformed`/`ErrUnsupported` sentinels (that package
+        deliberately does not import `pdferror` - see its own doc
+        comment) into this module's `pdferror.Malformedf`/`Unsupportedf`.
+- **`internal/image` (`decode.go`, `mask.go`).** One new `Options` field,
+    `EmbeddedAlpha []byte` - one byte (0-255) of opacity per pixel,
+    row-major - alongside a new `embeddedAlphaFn` helper mirroring
+    `smaskAlphaFn`'s shape but without any image stream to decode or
+    resample (the alpha data already shares the base image's own width
+    and height, both decoded from the same JPX codestream).
+    `decodeInternal`'s alpha-selection order is now `/SMask`, then
+    `EmbeddedAlpha`, then `/Mask`/color-key - the specification requires a
+    conforming file never combine a nonzero `/SMaskInData` with an
+    explicit `/SMask` of its own, so the exact ordering between the two
+    rarely matters in practice, but `/SMask` winning when both
+    incorrectly appear is the more conservative choice (an explicit,
+    separately-decoded mask stream over an inferred one).
+- **`internal/content` (`image.go`).** `doXObject` and `doInlineImage`
+    both gained one check apiece (`filter.IsJPXImage(dict)`) ahead of
+    their existing decode call, branching to a new `paintJPXImage` instead
+    of the ordinary `resolver.DecodeStream`/`filter.Decode` path when it
+    is true. `paintJPXImage` reads the image dictionary's own
+    `/SMaskInData` (defaulting to 0), calls `filter.DecodeImage`,
+    synthesizes a `/ColorSpace` entry into a *copy* of the dictionary only
+    when the original has none of its own and `JPXInfo.FallbackColorSpace`
+    is non-empty, and passes `JPXInfo.Alpha` through as `paintImage`'s new
+    `embeddedAlpha` parameter (`paintImage` itself gained that one
+    parameter, threaded straight into `pdfimage.Options.EmbeddedAlpha`).
+    `resolver` is passed as `nil` to `filter.DecodeImage` - JPXDecode is
+    never preceded by a filter needing `StreamResolver` (only
+    JBIG2Decode's own `/JBIG2Globals` does, and a JBIG2-then-JPX chain has
+    no real-world meaning: both filters independently produce a complete
+    raster image).
+- **Verification.** New tests in `internal/filter/jpx_test.go`
+    (`packJPXComponents` for 8/16/1-bit packing and each rejection case,
+    `packAlphaComponent`'s normalization, `buildJPXImageResult`'s
+    fallback-by-component-count and alpha-splitting rules including the
+    single-component edge case, `IsJPXImage`, and that `Decode`/
+    `DecodeImage` actually dispatch to `decodeJPX` now - a malformed-input
+    error, not an unsupported-filter one), `internal/image/mask_test.go`
+    (`EmbeddedAlpha` applied per-pixel, and that `/SMask` still wins when
+    both are present), and `internal/content/image_test.go` (both "Do"
+    and "BI" route a JPXDecode-filtered image through `paintJPXImage`,
+    confirmed the same indirect way as the filter-level dispatch test).
+    `TestDecodeUnsupportedFilter` (`internal/filter`) was updated to use
+    `Crypt`, the one remaining unimplemented filter name, now that
+    JPXDecode is wired up. Full test suite, `go build ./...`, `go vet`,
+    and `gofmt` all pass clean.
+- **What's carried forward.** No real encoded JPEG 2000 bytes flow
+    through this phase's own new tests - every filter/content-level test
+    either hand-builds a `*jpx.Image` directly (bypassing
+    `jpx.DecodeStream`'s own container/marker parsing) or feeds garbage
+    bytes in just to confirm the dispatch and error-classification wiring
+    is reached; a genuine "encode with this package's own from-scratch
+    encoder, decode through the full stack, check pixels" round trip - the
+    kind `dct_test.go` already has for DCTDecode - is 14g's job, along
+    with `docs/capability-matrix.md` and `FIXTURES.md` (both still say
+    JPXDecode is "Not started", unchanged by this phase on purpose - see
+    Phase 14's own sub-phase list). The `/SMaskInData` "trailing
+    component" convention and the component-count `/ColorSpace` fallback
+    are both real, documented scope decisions rather than gaps, but
+    neither has been checked yet against an actual real-world JPX-with-
+    alpha or JPX-with-no-explicit-/ColorSpace PDF sample, since this
+    project does not have one on hand (the same situation every other
+    part of this phase started from - see doc.go's "Provenance" section).

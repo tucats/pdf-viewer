@@ -13,11 +13,13 @@
 // (with PNG and TIFF predictors), DCTDecode (JPEG, via the standard
 // library's image/jpeg - see dct.go), CCITTFaxDecode (Group 3 and
 // Group 4 fax compression, a from-scratch decoder since the standard
-// library has none - see ccitt.go), and JBIG2Decode (a from-scratch
+// library has none - see ccitt.go), JBIG2Decode (a from-scratch
 // decoder covering every arithmetic-coded JBIG2 mode - see jbig2.go's
-// doc comment for exactly what is and is not implemented) are
-// implemented. Any other
-// filter name - JPXDecode and Crypt - returns an error wrapping
+// doc comment for exactly what is and is not implemented), and
+// JPXDecode (JPEG 2000, via the from-scratch internal/jpx package - see
+// jpx.go's doc comment, and internal/jpx/doc.go's own "Scope" section
+// for exactly what is and is not implemented) are implemented. Any other
+// filter name - only Crypt remains - returns an error wrapping
 // pdferror.ErrUnsupported naming the filter, rather than being silently
 // skipped or misread; see docs/capability-matrix.md for the up-to-date
 // status of each.
@@ -230,6 +232,8 @@ func decodeOne(name syntax.Name, parms syntax.Dictionary, data []byte, resolver 
 			return nil, err
 		}
 		return decodeJBIG2(data, globals)
+	case "JPXDecode":
+		return decodeJPX(data)
 	default:
 		return nil, pdferror.Unsupportedf("stream filter %q", name)
 	}

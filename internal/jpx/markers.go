@@ -111,20 +111,42 @@ func (tp *TilePart) Data(codestream []byte) []byte {
 // image's geometry and coding parameters and to locate every tile-part's
 // byte range, without decoding any compressed sample data.
 func ParseHeader(data []byte) (*Header, error) {
-	codestream := data
-	if looksLikeJP2(data) {
-		info, err := parseContainer(data)
-		if err != nil {
-			return nil, err
-		}
-		codestream = info.codestream
-		// info's ihdr/colr fields (image size cross-check, embedded
-		// color space) are consumed by internal/filter's adapter once
-		// it exists (14f) - ParseHeader's own contract is codestream
-		// geometry via SIZ, which is authoritative regardless of what a
-		// wrapping JP2 file's ihdr box happens to also claim.
+	codestream, _, err := unwrapContainer(data)
+	if err != nil {
+		return nil, err
 	}
+	// A wrapping JP2 file's own color information (unwrapContainer's
+	// second return value) is discarded here - ParseHeader's contract is
+	// codestream geometry via SIZ alone, authoritative regardless of what
+	// a wrapping JP2 file's ihdr/colr boxes also claim. DecodeStream
+	// (stream.go, 14f) is the entry point that surfaces it, for
+	// internal/filter's adapter to use as JPXDecode's own /ColorSpace
+	// fallback (ISO 32000-1 7.4.9).
 	return parseCodestream(codestream)
+}
+
+// unwrapContainer strips away data's JP2 box wrapper, if it has one
+// (looksLikeJP2), returning the bare codestream bytes either way (data
+// itself, unchanged, when there was no wrapper) plus whatever color
+// space information only a JP2 container carries - a bare codestream
+// carries none at all, so ColorInfo.Present is false in that case. Shared
+// by ParseHeader (which only wants the codestream) and DecodeStream
+// (which wants both).
+func unwrapContainer(data []byte) ([]byte, ColorInfo, error) {
+	if !looksLikeJP2(data) {
+		return data, ColorInfo{}, nil
+	}
+	info, err := parseContainer(data)
+	if err != nil {
+		return nil, ColorInfo{}, err
+	}
+	colorInfo := ColorInfo{
+		Present:              true,
+		Method:               info.colorSpaceMethod,
+		EnumeratedColorSpace: info.enumeratedColorSpace,
+		ICCProfile:           info.iccProfile,
+	}
+	return info.codestream, colorInfo, nil
 }
 
 // parseCodestream implements ParseHeader once any JP2 container wrapper

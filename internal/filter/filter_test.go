@@ -80,11 +80,10 @@ func TestDecodeParmsArrayMatchesFilterArray(t *testing.T) {
 }
 
 func TestDecodeUnsupportedFilter(t *testing.T) {
-	// JPXDecode (JPEG 2000) remains unimplemented - see docs/PLAN2.md's
-	// Phase 14 - unlike JBIG2Decode, which Phase 8 implemented (generic
-	// region coding only; see jbig2.go), so this test no longer uses
-	// JBIG2Decode as its "definitely still unsupported" example.
-	dict := syntax.Dictionary{"Filter": syntax.Name("JPXDecode")}
+	// Crypt is the one remaining unimplemented filter name now that
+	// Phase 14f has wired up JPXDecode (JPEG 2000) - see jpx.go and
+	// jpx_test.go.
+	dict := syntax.Dictionary{"Filter": syntax.Name("Crypt")}
 	_, err := Decode(dict, []byte("whatever"))
 	if !errors.Is(err, pdferror.ErrUnsupported) {
 		t.Fatalf("Decode with unsupported filter: got %v, want an error wrapping ErrUnsupported", err)

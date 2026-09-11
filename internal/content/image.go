@@ -62,11 +62,14 @@ func (in *interpreter) doXObject(st *graphics.State, operands []syntax.Object) e
 	subtype, _ := dict["Subtype"].(syntax.Name)
 	switch subtype {
 	case "Image":
+		if filter.IsJPXImage(dict) {
+			return in.paintJPXImage(st, dict, stream.Raw)
+		}
 		samples, err := in.resolver.DecodeStream(stream)
 		if err != nil {
 			return err
 		}
-		return in.paintImage(st, dict, samples)
+		return in.paintImage(st, dict, samples, nil)
 	case "Form":
 		return in.doForm(st, dict, stream)
 	default:
@@ -135,11 +138,56 @@ func (in *interpreter) doInlineImage(st *graphics.State, inline *InlineImage) er
 		// resolver at all, skipping is the only safe option.
 		return nil
 	}
+	if filter.IsJPXImage(inline.Dict) {
+		return in.paintJPXImage(st, inline.Dict, inline.Raw)
+	}
 	samples, err := filter.Decode(inline.Dict, inline.Raw)
 	if err != nil {
 		return err
 	}
-	return in.paintImage(st, inline.Dict, samples)
+	return in.paintImage(st, inline.Dict, samples, nil)
+}
+
+// paintJPXImage is paintImage's counterpart for an image dictionary
+// whose /Filter chain ends in JPXDecode (see filter.IsJPXImage, checked
+// by both of this function's callers above): it calls
+// filter.DecodeImage instead of the ordinary filter chain, so it can
+// additionally apply that filter's own PDF-specific behaviors (ISO
+// 32000-1 7.4.9) before handing off to paintImage - a synthesized
+// /ColorSpace when dict has none of its own (filter.JPXInfo.
+// FallbackColorSpace), and an /SMaskInData-declared embedded alpha
+// channel (filter.JPXInfo.Alpha), passed through as paintImage's own
+// embeddedAlpha parameter rather than through the ordinary /SMask
+// machinery (internal/image/mask.go), since no separate image stream
+// exists for that package to decode.
+func (in *interpreter) paintJPXImage(st *graphics.State, dict syntax.Dictionary, raw []byte) error {
+	smaskInData := 0
+	if v, ok := dict["SMaskInData"].(syntax.Integer); ok {
+		smaskInData = int(v)
+	}
+
+	// resolver is nil: JPXDecode is never preceded by a filter needing
+	// one (only JBIG2Decode's own /JBIG2Globals does - see
+	// filter.StreamResolver) - see DecodeImage's own doc comment.
+	samples, info, err := filter.DecodeImage(dict, raw, nil, smaskInData)
+	if err != nil {
+		return err
+	}
+
+	if _, hasColorSpace := dict["ColorSpace"]; !hasColorSpace && info != nil && info.FallbackColorSpace != "" {
+		withFallback := make(syntax.Dictionary, len(dict)+1)
+		for k, v := range dict {
+			withFallback[k] = v
+		}
+		withFallback["ColorSpace"] = info.FallbackColorSpace
+		dict = withFallback
+	}
+
+	var alpha []byte
+	if info != nil {
+		alpha = info.Alpha
+	}
+	return in.paintImage(st, dict, samples, alpha)
 }
 
 // paintImage decodes one image (dict/samples already fully resolved and
@@ -152,11 +200,16 @@ func (in *interpreter) doInlineImage(st *graphics.State, inline *InlineImage) er
 // 1x1 square in user space, ... mapped by the CTM to a region in the
 // output device's coordinate space" (8.9.4). No separate image-space
 // matrix beyond the CTM is needed.
-func (in *interpreter) paintImage(st *graphics.State, dict syntax.Dictionary, samples []byte) error {
+//
+// embeddedAlpha is nil for every image except one decoded via
+// paintJPXImage with a nonzero /SMaskInData - see
+// pdfimage.Options.EmbeddedAlpha.
+func (in *interpreter) paintImage(st *graphics.State, dict syntax.Dictionary, samples []byte, embeddedAlpha []byte) error {
 	img, err := pdfimage.Decode(dict, samples, pdfimage.Options{
-		Resolver:  in.resolver,
-		Resources: in.resources,
-		FillColor: st.FillColor,
+		Resolver:      in.resolver,
+		Resources:     in.resources,
+		FillColor:     st.FillColor,
+		EmbeddedAlpha: embeddedAlpha,
 	})
 	if err != nil {
 		return err

@@ -85,11 +85,20 @@
 //     per-component finalization and placement). Still not reachable from
 //     internal/filter, and Image carries no colour-space or soft-mask
 //     concept yet - both are 14f's job.
-//   - 14f: internal/filter wiring (the JPXDecode case in filter.go) and
-//     the PDF-specific behaviors ISO 32000-1 7.4.9 documents for this
-//     filter specifically (a /ColorSpace-absent image falls back to the
-//     JPX data's own embedded color space; /SMaskInData controls whether
-//     an embedded opacity channel is used as this image's soft mask).
+//   - 14f (done): internal/filter wiring (jpx.go there - the JPXDecode
+//     case in filter.go's decodeOne, plus DecodeImage, the richer entry
+//     point internal/content uses for an actual image XObject or inline
+//     image) and the PDF-specific behaviors ISO 32000-1 7.4.9 documents
+//     for this filter specifically: a /ColorSpace-absent image falls back
+//     to a Device family of the right arity (DeviceGray/RGB/CMYK by
+//     decoded component count - the same "component count, not the
+//     embedded profile itself" approximation this project's own
+//     /ICCBased handling already uses, per internal/image/colorspace.go's
+//     resolveICCBased), and a nonzero /SMaskInData splits the *last*
+//     decoded component off as a per-pixel alpha channel rather than
+//     parsing the JP2 container's own "cdef" (Channel Definition) box to
+//     find it precisely - see DecodeImage's doc comment for why the
+//     trailing-component convention is enough in practice.
 //   - 14g: fixtures (built with this package's own from-scratch encoder,
 //     for the round-trip-testing reason given below), end-to-end render
 //     tests, and documentation.

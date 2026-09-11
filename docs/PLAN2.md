@@ -499,6 +499,67 @@ expected partial transparency; `/SMask /None` and `q`/`Q` correctly
 clear/restore an active mask; `docs/capability-matrix.md`'s Soft masks
 row is Done.
 
+## Phase 18: Isolated transparency group compositing for Form XObjects
+
+**Status: Done (18a).**
+
+Promoted out of the Backlog section below by a concrete user-reported
+file, not scheduled speculatively. This is a **visible defect**: a real
+DJI product's PDF quick start guide sets ExtGState `ca=0` before `Do`-ing
+a decorative `/Group` `/S` `/Transparency` Form XObject, expecting it
+invisible - but the group's own content stream sets its *own*,
+differently-numbered local `/GS0` resource (`ca=1`) before painting a
+solid fill, relying on 11.4.7.2's guarantee that a group's internal
+alpha/blend-mode/soft-mask changes never leak out to affect how the
+finished group is composited into its backdrop. Before this phase,
+`doForm` always flattened a form's `DrawOp`s directly into the calling
+display list, so each flattened fill only ever carried the *nested*
+interpreter's own `FillAlpha` (1, after the group's internal reset) -
+never the outer `ca=0` - so the "invisible" decoration rendered fully
+opaque, covering a large fraction of several pages (see
+`internal/content/form_test.go`'s
+`TestDoFormIsolatedGroupUsesOuterAlphaNotInnerReset` for the reduced
+repro).
+
+- **18a: `doIsolatedGroupForm` and calling-state inheritance.**
+    `internal/content/form.go`'s `doForm` now detects a `/Group` `/S`
+    `/Transparency` entry (`isTransparencyGroup`) and, only when the
+    outer state could actually produce a different result
+    (`needsIsolatedGroupComposite`: `ca`/`CA` &lt; 1, a non-Normal blend
+    mode, or an active soft mask), renders the group offscreen
+    (`internal/raster.RenderTransparent`, the same machinery tiling
+    patterns and ExtGState soft masks already use) and emits a single
+    image `DrawOp` compositing that buffer with the *outer* alpha/blend
+    mode/soft mask - resetting alpha/blend/soft-mask to their initial
+    values for the group's own internal painting first, per spec. When
+    the outer state is already "boring" (opaque, Normal, no mask), the
+    existing direct-flattening path (`doInlineForm`) is used instead,
+    since the two produce identical pixels in that case and flattening
+    is cheaper. Both paths now also correctly inherit the *rest* of the
+    calling graphics state (fill/stroke color, line style, text state)
+    into a form's initial state, per 8.10.2 - previously every form
+    started from `graphics.NewState`'s bare defaults regardless of what
+    was active where `Do` ran, a separate (usually invisible, since most
+    forms set their own color before painting anyway) gap in the same
+    area.
+
+**Scope cuts:** the `/I` (isolated) and `/K` (knockout) `/Group` flags
+are not distinguished - every transparency group is treated as isolated
+(fully transparent initial backdrop), which is only an approximation for
+a non-isolated group's backdrop-aware blending; a soft mask's own `/G`
+group (`softmask.go`'s `buildSoftMask`) is unchanged by this phase and
+still does not get isolated compositing for its own internal painting -
+its doc comment's existing scope-cut note points here for why, but
+fixing it was not needed by the motivating file and is left for a future
+phase if a real file needs it.
+
+**Exit criteria:** the motivating DJI PDF's affected pages render without
+the erroneous opaque box (verified against a `PDFKit`-rendered ground
+truth of the real file, not just the fixture regression test);
+`docs/capability-matrix.md`'s Form XObjects/Alpha constants/Transparency
+groups rows reflect this; all existing `internal/content` tests
+(including the pre-existing `TestDoForm*` suite) still pass unchanged.
+
 ## Backlog: revisit only on concrete demand
 
 These are real, known gaps - already documented in
@@ -527,11 +588,15 @@ frequency estimate.
     to Normal per spec, which is a defined, non-broken behavior, not a
     failure; revisit if a corpus shows these are common enough to matter
     visually.
-- **Transparency groups** (isolated/knockout compositing for a `/Group`
-    Form XObject) - a real gap, but content generally still looks
-    reasonable without group isolation except in specific overlapping-
-    transparency compositions; revisit if real-world pages show visibly
-    wrong compositing.
+- **Transparency groups: `/I`/`/K` isolated/knockout flags.** Phase 18
+    added isolated-by-default compositing for a `/Group` Form XObject
+    where the outer alpha/blend mode/soft mask makes it matter (see
+    "Form XObjects" and Phase 18 above); this item now covers only the
+    narrower remaining gap - a non-isolated group's backdrop-aware
+    blending and true knockout compositing are still not distinguished.
+    Revisit if a real-world file shows visibly wrong compositing from
+    that specific gap (as opposed to the outer-alpha case Phase 18
+    already fixed).
 - **Type 3 fonts** (glyphs as content streams) - rare in practice.
 - **LZWDecode `/EarlyChange 0`** - rare; the standard library offers no
     direct way to select this variant, so support would require a
@@ -3120,3 +3185,100 @@ in order, not rewritten later except to fix mistakes.
     drove Phase 8d-8h's symbol/text-region support; a follow-on phase can
     do the same for JPX if a real-world file turns out to need something
     this phase's own from-scratch encoder never had reason to exercise.
+
+### Phase 18a: Isolated transparency group compositing for Form XObjects — done (2026-09-11)
+
+- **User-reported real-world bug.** A DJI product's PDF quick start
+    guide rendered several pages with a large, fully opaque red or gray
+    box covering roughly the bottom half of the page - reported as a
+    "masking or box issue" with a rendered screenshot and a macOS
+    Preview screenshot of the correct page to compare against. Diagnosis
+    (decompressed the PDF via `qpdf --qdf` and traced the page's content
+    stream by hand, then independently confirmed the correct appearance
+    against a `PDFKit`-based ground-truth renderer, since neither
+    attached screenshot happened to be of the exact same page number):
+    the page sets ExtGState `ca=0`/`CA=0` immediately before `/Fm4 Do`,
+    expecting the decorative form invisible, but `Fm4`'s own content
+    stream (a `/Group` `/S` `/Transparency` form) sets its own local
+    `/GS0` (a *different* object than the page's own `/GS0`, despite the
+    same resource name - `ca=1`) before painting a solid fill covering
+    its entire (oversized, larger than the page) `/BBox`. Per 11.4.7.2,
+    that internal reset is correct and must not leak out - the finished
+    group should still composite at the *outer* `ca=0` - but `doForm`
+    had no concept of "composite the group as one unit"; it flattened
+    every `DrawOp` with whatever `FillAlpha` was live in the *nested*
+    interpreter at the moment each one painted (1, after the internal
+    reset), so the outer `ca=0` was silently discarded and the box
+    rendered fully opaque.
+- **`internal/content/form.go`: `doForm` split into two paths.**
+    `doInlineForm` is the pre-existing direct-flattening behavior,
+    factored out unchanged except for one fix that applies to it too
+    (see below). `doIsolatedGroupForm` (new) handles a `/Group` `/S`
+    `/Transparency` form when `needsIsolatedGroupComposite` says the
+    outer alpha/blend mode/soft mask could actually matter: it renders
+    the group's content to an offscreen buffer sized to the `/BBox`'s
+    device-space bounding box (`internal/raster.RenderTransparent`,
+    mirroring `softmask.go`'s `buildSoftMask` almost exactly - same
+    device-to-buffer matrix construction, same `clampGroupDimension`
+    pixel-count bound reusing `maxSoftMaskDimension`'s value), first
+    resetting alpha/blend mode/soft mask to their initial values for the
+    nested interpretation (so the group's own internal content, however
+    it resets those parameters itself, only ever affects painting
+    *inside* the buffer), then emits one image `DrawOp` for the whole
+    group using the *outer* `st.FillAlpha`/`BlendMode`/`SoftMask` - the
+    ones active where `Do` was invoked. `doForm` only takes this path
+    when it could visibly matter; otherwise the cheaper `doInlineForm`
+    path is used, since compositing an opaque buffer at alpha 1 with
+    Normal blending and no mask is pixel-identical to flattening
+    directly.
+- **Calling-state inheritance (both paths).** A second, related gap
+    fixed in the same change: per 8.10.2, a form's initial graphics
+    state should inherit the calling state's own paint parameters (fill/
+    stroke color, line style, text state, alpha, blend mode, soft mask)
+    as if its content were spliced in directly, bracketed by an implicit
+    `q`/`Q` - but `doForm` previously always started the nested
+    interpreter from `graphics.NewState`'s bare defaults (black fill,
+    alpha 1, ...) regardless of what was active at the point of
+    invocation. New `interpretFormAtDepth` (`form.go`) takes a caller-
+    built initial `*graphics.State` instead of just a CTM, used by both
+    `doInlineForm` and `doIsolatedGroupForm` (each clones `st`, then
+    overrides `CTM`/`Clips`, and - for the group path only -
+    resets alpha/blend/soft-mask per the point above).
+    `interpretAtDepth` itself (the machinery `Interpret`/`InterpretCached`
+    and this package's other two callers - `tilingpattern.go`'s tiling-
+    pattern cells and `softmask.go`'s mask groups, both deliberately
+    *independent* of the invoking graphics state per spec - build on) is
+    unchanged, to avoid affecting either of those.
+- **Tests.** New `TestDoFormIsolatedGroupUsesOuterAlphaNotInnerReset`
+    (`internal/content/form_test.go`) reproduces the exact bug shape
+    (outer `ca=0`, a nested group form with its own same-named-but-
+    different `/GS0` resetting `ca=1` before an opaque red fill) and
+    confirms both that the resulting `DrawOp`'s `Alpha` is the outer 0
+    (not the inner 1) and that the offscreen buffer itself still holds
+    opaque red at its center (confirming the reset only changes *how*
+    the finished group composites, not what is painted inside it). The
+    full pre-existing `internal/content` suite (including every
+    `TestDoForm*` test, none of which sets alpha/blend/soft-mask before
+    `Do` and so never takes the new buffer path) passes unmodified;
+    `go vet`, `gofmt`, and the full project test suite all pass clean.
+    Manually re-rendered the reporting user's actual PDF (all three
+    affected pages, plus the unaffected cover page as a no-regression
+    check) both before and after the fix and compared against a
+    `PDFKit`-rendered ground truth built for this session (macOS
+    `PDFKit`/`Quartz`, via a small `swift` script - not committed, ground
+    truth only) - all four pages now match.
+- **Documentation.** `docs/capability-matrix.md`'s Form XObjects, Alpha
+    constants, and Transparency groups rows updated; this plan's Backlog
+    "Transparency groups" item narrowed to the still-unaddressed `/I`/`/K`
+    isolated/knockout-flag gap.
+- **What's carried forward.** The `/I`/`/K` flags are still not
+    distinguished (every group is treated as isolated); a soft mask's
+    own `/G` group (`softmask.go`) still does not get isolated
+    compositing for its own internal content - unaffected by this
+    change, tracked at that file's own pre-existing scope-cut note. The
+    unrelated crash this investigation also surfaced in the same PDF
+    (pages past the affected ones fail with `malformed PDF input:
+    /ColorSpace is neither a name nor an array (found syntax.Reference)`)
+    is a different bug in a different area (color space resolution, not
+    forms/transparency) and was reported to the user separately rather
+    than fixed here.

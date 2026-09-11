@@ -172,6 +172,68 @@ func TestDoFormOwnResourcesOverrideParent(t *testing.T) {
 	}
 }
 
+// TestDoFormIsolatedGroupUsesOuterAlphaNotInnerReset is the regression
+// test for the real-world bug that motivated doIsolatedGroupForm: a
+// producer-generated PDF (a DJI product's quick start guide) set
+// ExtGState ca=0 before "Do"-ing a decorative /Group /S /Transparency
+// form, expecting it invisible - but the form's own content stream
+// immediately set its *own*, differently-numbered local "GS0" resource
+// (ca=1) before painting a solid fill, since 11.4.7.2 guarantees that
+// reset stays local to the group's own internal painting and can never
+// leak out to affect how the finished group is composited into the
+// backdrop. Before doIsolatedGroupForm existed, doForm always flattened
+// a form's DrawOps directly, so each flattened fill only remembered the
+// *nested* interpreter's own FillAlpha (1, after the inner reset) -
+// never the outer ca=0 - and the "invisible" decoration rendered fully
+// opaque.
+func TestDoFormIsolatedGroupUsesOuterAlphaNotInnerReset(t *testing.T) {
+	groupDict := syntax.Dictionary{
+		"Subtype": syntax.Name("Form"),
+		"BBox":    syntax.Array{syntax.Real(0), syntax.Real(0), syntax.Real(10), syntax.Real(10)},
+		"Group":   syntax.Dictionary{"Type": syntax.Name("Group"), "S": syntax.Name("Transparency")},
+		// The group's own /Resources /ExtGState /GS0 is a *different*
+		// object than the outer content stream's - same resource name,
+		// unrelated dictionary, exactly the object-number collision the
+		// real DJI file has between a page's own /GS0 and a nested
+		// form's /GS0.
+		"Resources": syntax.Dictionary{
+			"ExtGState": syntax.Dictionary{"GS0": syntax.Dictionary{"ca": syntax.Real(1.0)}},
+		},
+	}
+	groupStream := syntax.Stream{Dict: groupDict, Raw: []byte("/GS0 gs\n1 0 0 rg\n0 0 10 10 re\nf\n")}
+	resources := syntax.Dictionary{
+		"ExtGState": syntax.Dictionary{"GS0": syntax.Dictionary{"ca": syntax.Real(0.0)}},
+		"XObject":   syntax.Dictionary{"Fm0": groupStream},
+	}
+
+	ops, err := Parse([]byte("/GS0 gs\n/Fm0 Do"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	list, err := Interpret(ops, graphics.Identity(), resources, &fakeResolver{})
+	if err != nil {
+		t.Fatalf("Interpret: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("len(list) = %d, want 1", len(list))
+	}
+	if list[0].Image == nil {
+		t.Fatalf("DrawOp has no Image - want the isolated-group buffer path, not a flattened fill")
+	}
+	// The outer ca=0 (not the group's own internal ca=1 reset) must
+	// govern the group's own compositing back into the page.
+	if list[0].Alpha != 0 {
+		t.Fatalf("Alpha = %v, want 0 (the outer ca at the point \"Do\" ran)", list[0].Alpha)
+	}
+	// The group's own internal content still painted fully opaque red
+	// into its own offscreen buffer - the reset only changes how that
+	// finished buffer is composited afterward, not what is inside it.
+	r, g, b, a := list[0].Image.At(list[0].Image.Width/2, list[0].Image.Height/2)
+	if r != 1 || g != 0 || b != 0 || a != 1 {
+		t.Fatalf("group buffer center = (%v,%v,%v,%v), want opaque red (1,0,0,1)", r, g, b, a)
+	}
+}
+
 // TestDoFormCyclicSelfReferenceIsBoundedNotInfinite confirms a form
 // whose own content invokes itself again (directly - the simplest cycle
 // shape) is rejected past maxFormDepth rather than recursing forever.

@@ -47,6 +47,7 @@ import (
 
 	"github.com/tucats/pdf-viewer/internal/crypt"
 	"github.com/tucats/pdf-viewer/internal/filter"
+	"github.com/tucats/pdf-viewer/internal/jpx"
 )
 
 // outputDir is where every generated fixture is written: the
@@ -98,6 +99,8 @@ func main() {
 		{"image-jpeg.pdf", buildImageJPEG()},
 		{"image-jbig2.pdf", buildImageJBIG2()},
 		{"image-jbig2-text.pdf", buildImageJBIG2Text()},
+		{"image-jpx.pdf", buildImageJPX()},
+		{"image-jpx-rgb.pdf", buildImageJPXRGB()},
 		{"inline-image.pdf", buildInlineImage()},
 		{"rotated-page.pdf", buildRotatedPage()},
 		{"page-boxes.pdf", buildPageBoxes()},
@@ -1112,6 +1115,130 @@ func buildImageJBIG2Text() []byte {
 	b.addObject(5, 0, imgDict, page)
 
 	b.addObject(6, 0, fmt.Sprintf("<< /Length %d >>", len(globals)), globals)
+
+	return b.finish(1)
+}
+
+// buildImageJPX returns a single 100x100-point page that paints a
+// referenced image XObject encoded with JPXDecode (see docs/PLAN2.md's
+// Phase 14): a 32x32 single-component (grayscale) bitmap, four distinct
+// gray levels in each quadrant plus a black one-pixel border, with an
+// explicit /ColorSpace /DeviceGray /BitsPerComponent 8 - the "ordinary,
+// nothing-implicit" case internal/filter's decodeJPX (the generic filter-
+// chain path, not DecodeImage's PDF-specific one) handles.
+//
+// The quadrant levels are deliberately all different (unlike
+// buildImageJBIG2's two-value black/white pattern, which a bilevel
+// codec's own inversion bug could still pass by accident) so a rendering
+// test can catch a horizontal flip, a vertical flip, or a transposed
+// quadrant, not just an inverted bitmap; the border - like JBIG2's own -
+// puts foreground samples along every edge, where tier-1's context
+// template and idwt.go's boundary extension both read past the image's
+// own bounds if mishandled.
+//
+// The JPX bytes come from internal/jpx's own from-scratch encoder
+// (jpx.EncodeGray - see that package's encode.go for why this project
+// needed one, and its own Scope section for exactly what configuration
+// it produces), which keeps this fixture's provenance identical to every
+// other hand-authored one here - nothing is sourced externally.
+func buildImageJPX() []byte {
+	const dim = 32
+	pix := make([]byte, dim*dim)
+	for y := 0; y < dim; y++ {
+		for x := 0; x < dim; x++ {
+			border := x == 0 || y == 0 || x == dim-1 || y == dim-1
+			switch {
+			case border:
+				pix[y*dim+x] = 0
+			case x < dim/2 && y < dim/2: // top-left
+				pix[y*dim+x] = 40
+			case x >= dim/2 && y < dim/2: // top-right
+				pix[y*dim+x] = 220
+			case x < dim/2 && y >= dim/2: // bottom-left
+				pix[y*dim+x] = 120
+			default: // bottom-right
+				pix[y*dim+x] = 190
+			}
+		}
+	}
+	jpxData, err := jpx.EncodeGray(dim, dim, pix)
+	if err != nil {
+		panic(fmt.Sprintf("genfixtures: encoding test JPX image: %v", err))
+	}
+
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n100 0 0 100 0 0 cm\n/Im0 Do\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	imgDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d "+
+		"/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length %d >>",
+		dim, dim, len(jpxData))
+	b.addObject(5, 0, imgDict, jpxData)
+
+	return b.finish(1)
+}
+
+// buildImageJPXRGB returns a single 100x100-point page that paints a
+// referenced image XObject encoded with JPXDecode: a 32x32 3-component
+// image (red/green/blue/yellow quadrants, the same layout buildImageRGB
+// uses at a coarser 2x2 resolution), with *no* /ColorSpace entry at all -
+// exercising the Phase 14f-specific behavior buildImageJPX's plain
+// /DeviceGray case does not: ISO 32000-1 7.4.9's /ColorSpace-absent
+// fallback (a Device family chosen by decoded component count - here
+// DeviceRGB, for 3), which only internal/content's paintJPXImage
+// (DecodeImage's PDF-specific caller) applies. This also exercises the
+// multiple component transform (RCT) internal/jpx applies whenever a
+// tile declares one, which buildImageJPX's single-component fixture
+// cannot.
+//
+// The JPX bytes again come from internal/jpx's own from-scratch encoder
+// (jpx.EncodeRGB), the same provenance reasoning buildImageJPX's own doc
+// comment gives.
+func buildImageJPXRGB() []byte {
+	const dim = 32
+	r := make([]byte, dim*dim)
+	g := make([]byte, dim*dim)
+	bl := make([]byte, dim*dim)
+	for y := 0; y < dim; y++ {
+		for x := 0; x < dim; x++ {
+			i := y*dim + x
+			var cr, cg, cb byte
+			switch {
+			case x < dim/2 && y < dim/2: // top-left: red
+				cr, cg, cb = 255, 0, 0
+			case x >= dim/2 && y < dim/2: // top-right: green
+				cr, cg, cb = 0, 255, 0
+			case x < dim/2 && y >= dim/2: // bottom-left: blue
+				cr, cg, cb = 0, 0, 255
+			default: // bottom-right: yellow
+				cr, cg, cb = 255, 255, 0
+			}
+			r[i], g[i], bl[i] = cr, cg, cb
+		}
+	}
+	jpxData, err := jpx.EncodeRGB(dim, dim, r, g, bl)
+	if err != nil {
+		panic(fmt.Sprintf("genfixtures: encoding test JPX RGB image: %v", err))
+	}
+
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n100 0 0 100 0 0 cm\n/Im0 Do\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	imgDict := fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width %d /Height %d "+
+		"/BitsPerComponent 8 /Filter /JPXDecode /Length %d >>",
+		dim, dim, len(jpxData))
+	b.addObject(5, 0, imgDict, jpxData)
 
 	return b.finish(1)
 }

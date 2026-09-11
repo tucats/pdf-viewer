@@ -99,9 +99,18 @@
 //     parsing the JP2 container's own "cdef" (Channel Definition) box to
 //     find it precisely - see DecodeImage's doc comment for why the
 //     trailing-component convention is enough in practice.
-//   - 14g: fixtures (built with this package's own from-scratch encoder,
-//     for the round-trip-testing reason given below), end-to-end render
-//     tests, and documentation.
+//   - 14g (done): a from-scratch codestream *encoder* (encode.go - a
+//     single, fixed configuration: one tile, zero decomposition levels,
+//     5/3 reversible only, single layer, LRCP - see that file's own
+//     Scope section for why), tools/genfixtures fixtures built with it
+//     (image-jpx.pdf, image-jpx-rgb.pdf), end-to-end render tests, and
+//     documentation (docs/capability-matrix.md, FIXTURES.md). Also fixed
+//     a real bug this sub-phase's own FuzzDecode seeds immediately
+//     found: siz.go's validateGeometry was missing the standard's own
+//     "XTOsiz+XTsiz > XOsiz" (and Y) requirement, letting a malformed
+//     SIZ describe a tile grid whose first column/row does not reach the
+//     image area's own origin - tileGridBounds then handed a negative
+//     width/height down to dequantizeComponent's slice allocation.
 //
 // # Provenance: an independent, from-scratch implementation
 //

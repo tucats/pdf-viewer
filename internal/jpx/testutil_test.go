@@ -9,37 +9,10 @@ package jpx
 // small helpers keep that assembly readable instead of a wall of
 // opaque hex literals in every test.
 
-import "encoding/binary"
-
-// u16/u32 append a big-endian value's bytes to buf, returning the
-// extended slice - the same convention append itself uses, so these
-// compose naturally in a builder chain.
-func u16(buf []byte, v uint16) []byte {
-	var b [2]byte
-	binary.BigEndian.PutUint16(b[:], v)
-	return append(buf, b[:]...)
-}
-
-func u32(buf []byte, v uint32) []byte {
-	var b [4]byte
-	binary.BigEndian.PutUint32(b[:], v)
-	return append(buf, b[:]...)
-}
-
-// segment builds one marker segment: the two-byte marker code, a
-// two-byte length field covering itself plus content (per the standard's
-// own convention - see readMarkerSegment), and content itself.
-func segment(code uint16, content []byte) []byte {
-	out := u16(nil, code)
-	out = u16(out, uint16(len(content)+2))
-	return append(out, content...)
-}
-
-// bareMarker builds one of the few markers with no length field or
-// content at all (SOC, SOD, EOC).
-func bareMarker(code uint16) []byte {
-	return u16(nil, code)
-}
+// u16, u32, segment, bareMarker, codeSIZ and buildTilePart (which every
+// test in this file also uses) now live in encode.go, promoted there by
+// 14g so tools/genfixtures - an ordinary non-test build - can reach them
+// too. See that file's own doc comment.
 
 // tileConfig describes one tile's worth of coding/quantization
 // parameters for buildCodestream, letting a test build codestreams that
@@ -66,30 +39,6 @@ var defaultTileConfig = tileConfig{
 	transform:    1, // 5-3 reversible
 	quantStyle:   0, // none
 	guardBits:    2,
-}
-
-// codeSIZ builds a SIZ marker segment's content for one or more
-// components, all sharing bitDepth/signed (real multi-component test
-// codestreams in this package never need mixed depths).
-func codeSIZ(xsiz, ysiz, xtsiz, ytsiz uint32, numComponents int, bitDepth int, signed bool) []byte {
-	c := u16(nil, 0) // Rsiz
-	c = u32(c, xsiz)
-	c = u32(c, ysiz)
-	c = u32(c, 0) // XOsiz
-	c = u32(c, 0) // YOsiz
-	c = u32(c, xtsiz)
-	c = u32(c, ytsiz)
-	c = u32(c, 0) // XTOsiz
-	c = u32(c, 0) // YTOsiz
-	c = u16(c, uint16(numComponents))
-	ssiz := byte(bitDepth - 1)
-	if signed {
-		ssiz |= 0x80
-	}
-	for i := 0; i < numComponents; i++ {
-		c = append(c, ssiz, 1, 1) // Ssiz, XRsiz=1, YRsiz=1
-	}
-	return c
 }
 
 // codeCOD builds a COD marker segment's content for tc, with no
@@ -153,34 +102,6 @@ func codeCOC(componentIndex byte, tc tileConfig) []byte {
 func codeQCC(componentIndex byte, tc tileConfig, subbandCount int) []byte {
 	c := []byte{componentIndex}
 	return append(c, codeQCD(tc, subbandCount)...)
-}
-
-// codeSOT builds an SOT marker segment's content with a placeholder
-// Psot (patched in later by buildTilePart, once the tile-part's total
-// length is known).
-func codeSOT(tileIndex uint16, partIndex, partCount byte) []byte {
-	c := u16(nil, tileIndex)
-	c = u32(c, 0) // Psot placeholder
-	c = append(c, partIndex, partCount)
-	return c
-}
-
-// buildTilePart assembles one complete tile-part - SOT segment, SOD
-// marker, and data - patching Psot to the tile-part's own total length
-// once known, exactly as a real encoder must.
-func buildTilePart(tileIndex uint16, partIndex, partCount byte, data []byte) []byte {
-	sot := segment(markerSOT, codeSOT(tileIndex, partIndex, partCount))
-	tilePart := append(append([]byte{}, sot...), bareMarker(markerSOD)...)
-	tilePart = append(tilePart, data...)
-
-	// Psot occupies bytes [4:8) of the SOT segment: 2 (marker) + 2
-	// (length) + 2 (Isot) = offset 6... recompute precisely: segment
-	// layout is marker(2) + length(2) + content; content is
-	// Isot(2)+Psot(4)+TPsot(1)+TNsot(1). So Psot starts at byte offset
-	// 2+2+2 = 6 within the segment.
-	const psotOffset = 6
-	binary.BigEndian.PutUint32(tilePart[psotOffset:psotOffset+4], uint32(len(tilePart)))
-	return tilePart
 }
 
 // buildCodestream assembles a complete, minimal-but-valid bare

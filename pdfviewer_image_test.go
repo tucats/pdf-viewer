@@ -174,6 +174,52 @@ func TestRenderJBIG2SymbolTextImage(t *testing.T) {
 	assertRGB8(t, img, 75, 75, 255, 255, 255, 2) // bottom-right: no instance placed here
 }
 
+// TestRenderJPXImage confirms a JPXDecode-filtered single-component
+// (grayscale) image (buildImageJPX: a 32x32 bitmap, four distinct gray
+// levels in each quadrant plus a black one-pixel border) decodes and
+// paints correctly end to end - through the real cross-reference/
+// object-resolution pipeline and internal/image's 8-bit sample handling,
+// not just internal/jpx's own unit tests.
+//
+// Every quadrant level is different (unlike TestRenderJBIG2Image's
+// two-value black/white pattern), so this catches a horizontal flip, a
+// vertical flip, or a transposed quadrant, not just an inverted bitmap.
+func TestRenderJPXImage(t *testing.T) {
+	img := renderPage(t, "image-jpx.pdf")
+	if b := img.Bounds(); b.Dx() != 100 || b.Dy() != 100 {
+		t.Fatalf("Render size = %dx%d, want 100x100", b.Dx(), b.Dy())
+	}
+	assertRGB8(t, img, 25, 25, 40, 40, 40, 2)    // top-left quadrant
+	assertRGB8(t, img, 75, 25, 220, 220, 220, 2) // top-right quadrant
+	assertRGB8(t, img, 25, 75, 120, 120, 120, 2) // bottom-left quadrant
+	assertRGB8(t, img, 75, 75, 190, 190, 190, 2) // bottom-right quadrant
+	assertRGB8(t, img, 50, 1, 0, 0, 0, 2)        // top border
+	assertRGB8(t, img, 1, 50, 0, 0, 0, 2)        // left border
+	assertRGB8(t, img, 98, 98, 0, 0, 0, 2)       // bottom-right border corner
+}
+
+// TestRenderJPXRGBImageColorSpaceFallback confirms a JPXDecode-filtered
+// 3-component image with *no* /ColorSpace entry at all
+// (buildImageJPXRGB: red/green/blue/yellow quadrants) decodes and paints
+// correctly end to end, exercising two things TestRenderJPXImage's plain
+// /DeviceGray fixture cannot: internal/jpx's own multiple component
+// transform (RCT, which every non-grayscale codestream this project's
+// own encoder produces applies - see internal/jpx/encode.go), and Phase
+// 14f's ISO 32000-1 7.4.9 /ColorSpace-absent fallback (DeviceRGB, chosen
+// by the decoded 3-component count) that only internal/content's
+// paintJPXImage applies - a plain internal/filter.Decode call has no
+// image dictionary to consult and cannot apply it at all.
+func TestRenderJPXRGBImageColorSpaceFallback(t *testing.T) {
+	img := renderPage(t, "image-jpx-rgb.pdf")
+	if b := img.Bounds(); b.Dx() != 100 || b.Dy() != 100 {
+		t.Fatalf("Render size = %dx%d, want 100x100", b.Dx(), b.Dy())
+	}
+	assertRGB8(t, img, 25, 25, 255, 0, 0, 2)   // top-left: red
+	assertRGB8(t, img, 75, 25, 0, 255, 0, 2)   // top-right: green
+	assertRGB8(t, img, 25, 75, 0, 0, 255, 2)   // bottom-left: blue
+	assertRGB8(t, img, 75, 75, 255, 255, 0, 2) // bottom-right: yellow
+}
+
 // TestRenderInlineImage confirms an inline ("BI"/"ID"/"EI") image
 // (buildInlineImage: a 2x1 red/green DeviceRGB image, no /Resources
 // /XObject entry at all) paints correctly - the inline-image counterpart

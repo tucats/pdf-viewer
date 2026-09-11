@@ -293,7 +293,7 @@ types), not re-scoped.
 
 ## Phase 14: JPXDecode (JPEG 2000)
 
-**Status: 14a, 14b, 14c, 14d, 14e, 14f done.**
+**Status: Done (14a-14g).**
 
 Same class of gap as JBIG2 (Phase 8) - a page using this filter fails
 outright - but JPEG 2000 in practice appears mostly in narrower
@@ -373,11 +373,11 @@ they ever need to diverge):
     Device family of the right arity by decoded component count, and a
     nonzero `/SMaskInData` splits the trailing decoded component off as
     a per-pixel alpha channel. See this phase's closeout note below.
-- **14g: fixtures** (built with this package's own from-scratch
+- **14g (done): fixtures** (built with this package's own from-scratch
     encoder), **end-to-end render tests, and documentation** -
     `tools/genfixtures`, `docs/capability-matrix.md`, and
     `FIXTURES.md` all updated together, mirroring Phase 8c's own
-    closeout.
+    closeout. See this phase's closeout note below.
 
 **Exit criteria:** a representative JPX-encoded image fixture decodes
 and renders correctly, with any deliberately-unsupported JPEG 2000
@@ -3011,3 +3011,112 @@ in order, not rewritten later except to fix mistakes.
     alpha or JPX-with-no-explicit-/ColorSpace PDF sample, since this
     project does not have one on hand (the same situation every other
     part of this phase started from - see doc.go's "Provenance" section).
+
+### Phase 14g: fixtures, end-to-end render tests, and documentation — done (2026-09-11)
+
+- **`internal/jpx/encode.go` (new).** The from-scratch codestream
+    *encoder* 14f's own carried-forward note said this sub-phase owed -
+    `internal/jpx`'s first production (non-test) encoder, needed because
+    `tools/genfixtures` is an ordinary `go run`/`go build` command that
+    never compiles `_test.go` files, so the several test-only encoders
+    earlier sub-phases already built to validate their own decoders
+    (`bitWriter` and the tag-tree encode-side helpers from
+    `packet_test.go`, `tier1Encoder`/`encodeCodeBlockTier1` from
+    `tier1_test.go`, `forwardRCT` from `mct_test.go`) were not reachable
+    from it. Rather than duplicate that logic, this sub-phase *moved*
+    each piece into `encode.go` unchanged - the test files that used to
+    define them now just use them from there, so nothing was rewritten,
+    only relocated (confirmed by the full existing test suite passing
+    unmodified after the move).
+    - **Scope.** Deliberately one fixed, minimal configuration rather
+        than a general-purpose encoder mirroring the decoder's own full
+        generality: a single tile spanning the whole image, zero
+        decomposition levels (no wavelet transform at all - idwt.go's
+        multi-level inverse already has thorough dedicated unit coverage
+        against hand-built coefficient arrays, so a real codestream does
+        not also need to re-prove it), the 5/3 reversible filter and
+        reversible colour transform only (so every value round-trips as
+        an exact integer, checkable bit-for-bit), a single quality layer,
+        LRCP progression, and the default code-block style. See
+        `encode.go`'s own doc comment for the full reasoning - the same
+        "don't build speculative generality" judgment call Phase 8's own
+        JBIG2 generic-region-first fixture made.
+    - **New logic.** `EncodeGray`/`EncodeRGB` (the two public entry
+        points - grayscale and RCT-transformed 3-component RGB), the
+        shared `encodeCodestream` (DC level shift, forward RCT, per-
+        code-block tier-1 encoding via the promoted `encodeCodeBlockTier1`,
+        marker assembly), and `encodeTileData` - a new function, *not* a
+        promoted one: it plays `encodeSyntheticTile`'s (`packet_test.go`)
+        role of driving the promoted tag-tree/coding-pass/length helpers
+        into a real packet stream, but keys its ground truth by
+        `*codeBlockInfo` pointer identity rather than `encodeSyntheticTile`'s
+        own `(cbx,cby)` tuple - necessary because a real multi-component
+        tile has its own distinct code-block at every `(cbx,cby)`
+        coordinate per component (one shared `[2]int`-keyed map cannot
+        tell them apart), which none of `encodeSyntheticTile`'s own
+        single-component tests ever needed to. `codeBlockTruth` itself
+        (the ground-truth struct, only the *map key* differs) is shared
+        by both.
+    - **A real bug found immediately.** The new `FuzzDecode` seeds below
+        found a `makeslice: len out of range` panic in
+        `dequantizeComponent` within seconds of fuzzing. Root cause was
+        upstream, in `siz.go`'s `validateGeometry` (present since 14a):
+        ISO/IEC 15444-1 A.5.1 requires `XTOsiz+XTsiz > XOsiz` (and the Y
+        equivalent) - the tile grid's first column/row must actually
+        reach the image area's own origin - and that check was missing.
+        Without it, a malformed SIZ can describe a tile grid whose first
+        tile does not overlap the image area at all, and
+        `tileGridBounds`' `tx0` (clamped up to `XOsiz`) ends up greater
+        than its own `tx1` (the tile's unclamped right edge) - a negative
+        width silently propagating downstream until `dequantizeComponent`
+        tried to allocate a negative-length slice. Fixed by adding the
+        missing check to `validateGeometry`, which rejects the input
+        before any tile geometry is ever computed; the fuzzer's
+        originally-failing input is kept as a permanent regression seed
+        (`internal/filter/testdata/fuzz/FuzzDecode/`).
+    - **Fixtures.** `tools/genfixtures` gained `buildImageJPX` (a 32x32
+        single-component grayscale image, four distinct gray levels - one
+        per quadrant - plus a one-pixel black border, explicit
+        `/ColorSpace /DeviceGray`) and `buildImageJPXRGB` (a 32x32
+        3-component image, red/green/blue/yellow quadrants matching
+        `image-rgb.pdf`'s own layout, with *no* `/ColorSpace` entry at
+        all - the multi-component/RCT and 14f `/ColorSpace`-fallback
+        case `buildImageJPX`'s single-component fixture cannot exercise).
+        Both quadrant patterns are deliberately asymmetric enough (unlike
+        JBIG2's own two-value pattern) that a flip or transposed quadrant
+        fails the rendering test, not just an inverted image.
+    - **End-to-end tests.** `TestRenderJPXImage` and
+        `TestRenderJPXRGBImageColorSpaceFallback`
+        (`pdfviewer_image_test.go`) render both fixtures through the
+        public API; both fixtures were added to
+        `TestRenderMatchesReferenceImages`'s list, with golden PNGs
+        checked in at `testdata/renderrefs/`. `internal/jpx/encode_test.go`
+        additionally round-trips `EncodeGray`/`EncodeRGB` output through
+        the real `ParseHeader`/`Decode` entry points directly (random
+        data, every saturated primary/secondary colour and black/white -
+        the RCT inputs that push a Cb/Cr-like difference component to its
+        extreme 255 magnitude - and a size that does not divide evenly by
+        the fixed 16x16 code-block size). `internal/filter`'s `FuzzDecode`
+        gained two JPX seeds (grayscale and RGB); the root package's
+        `FuzzOpenAndRender` picks up both new fixtures automatically.
+        Full test suite, `go vet`, `gofmt`, and the race detector all
+        pass clean; `FuzzDecode` ran 4.5M+ executions and
+        `FuzzOpenAndRender` 4M+ after the `validateGeometry` fix, both
+        clean.
+    - **Documentation.** `docs/capability-matrix.md`'s JPXDecode filter
+        and images rows moved from "Not started" to "Partial", each
+        naming what is and is not implemented and pointing at
+        `internal/jpx/doc.go`'s own "Scope" section as the living,
+        authoritative list. `FIXTURES.md` documents both new fixtures.
+- **What's carried forward.** Phase 14 is now complete for this
+    project's own defined scope (see `internal/jpx/doc.go`'s "Scope"
+    section): region-of-interest coding, JPEG 2000 Part 2 extensions,
+    four of the six code-block style bits, and subsampled components each
+    fail cleanly with `ErrUnsupported` naming the feature, so the gap is
+    visible rather than silent. As 14f's own carried-forward note already
+    said, this project still has no independently-produced real-world JPX
+    sample to validate against - the same situation JBIG2 (Phase 8)
+    started in, where the first real-world file handed to this project
+    drove Phase 8d-8h's symbol/text-region support; a follow-on phase can
+    do the same for JPX if a real-world file turns out to need something
+    this phase's own from-scratch encoder never had reason to exercise.

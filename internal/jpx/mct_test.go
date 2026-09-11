@@ -6,22 +6,10 @@ import (
 	"testing"
 )
 
-// forwardRCT is a from-scratch, test-only forward reversible colour
-// transform (§G.2's own encoder-direction formulas), used only to build
-// known-good Y/Cb/Cr-like input for inverseRCT's round-trip test below.
-// Written independently from inverseRCT's own formulas (not derived by
-// mechanically inverting them) for the same "opposite ends of the
-// standard's own description" reason doc.go's Provenance section and
-// idwt_test.go's forward53/forward97 give.
-func forwardRCT(r, g, b []float64) {
-	for i := range r {
-		ri, gi, bi := int64(r[i]), int64(g[i]), int64(b[i])
-		y := (ri + 2*gi + bi) >> 2
-		cb := bi - gi
-		cr := ri - gi
-		r[i], g[i], b[i] = float64(y), float64(cb), float64(cr)
-	}
-}
+// forwardRCT (used below to build known-good Y/Cb/Cr-like input for
+// inverseRCT's round-trip test) now lives in encode.go, promoted there
+// by 14g so tools/genfixtures - an ordinary non-test build - can reach
+// it too. See that file's own doc comment.
 
 // forwardICT is forwardRCT's floating-point counterpart for the
 // irreversible transform (§G.3's own encoder-direction matrix).

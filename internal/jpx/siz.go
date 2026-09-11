@@ -289,6 +289,18 @@ func validateGeometry(h *Header) error {
 		return malformedf("SIZ declares non-positive tile size %dx%d", h.XTsiz, h.YTsiz)
 	case h.XTOsiz < 0 || h.YTOsiz < 0 || h.XTOsiz > h.XOsiz || h.YTOsiz > h.YOsiz:
 		return malformedf("SIZ tile grid offset (%d,%d) must be non-negative and no greater than the image area offset (%d,%d)", h.XTOsiz, h.YTOsiz, h.XOsiz, h.YOsiz)
+	case h.XTOsiz+h.XTsiz <= h.XOsiz || h.YTOsiz+h.YTsiz <= h.YOsiz:
+		// A.5.1 additionally requires XTOsiz+XTsiz > XOsiz (and the same
+		// for Y): the tile grid's very first column/row must actually
+		// reach the image area's own origin, not stop short of it. Without
+		// this check, tileGridBounds' tx0 (clamped up to XOsiz) can exceed
+		// its own tx1 (the first tile's unclamped right edge) for tile
+		// column/row 0, handing a negative width/height down to every
+		// later computation that assumes tx1 >= tx0 - caught by fuzzing
+		// (FuzzDecode) as a makeslice panic in dequantizeComponent, well
+		// downstream of where the real defect (an unvalidated geometry
+		// field) actually is.
+		return malformedf("SIZ tile grid's first column/row (offset (%d,%d), size %dx%d) does not reach the image area's own origin (%d,%d)", h.XTOsiz, h.YTOsiz, h.XTsiz, h.YTsiz, h.XOsiz, h.YOsiz)
 	}
 	return nil
 }

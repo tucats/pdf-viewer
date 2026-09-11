@@ -10,7 +10,7 @@
 //
 // # Usage
 //
-//	go run ./cmd/pdfbrowser [-port N] [-no-browser]
+//	go run ./cmd/pdfbrowser [-port N] [-no-browser] [-scale N] [-use-system-fonts]
 //
 // With no -port, the OS picks an available port; either way, the URL to
 // open is printed to stdout as soon as the server is listening (the
@@ -21,6 +21,18 @@
 // page shown full-size in the main viewer. "Previous"/"Next" step
 // through pages, clicking a thumbnail jumps straight to that page, and
 // "Quit" tells the server to shut itself down.
+//
+// -scale sets the device-pixels-per-PDF-point used to render the
+// full-size page image (see pdfviewer.RenderOptions.Scale), for anyone
+// who wants a sharper or cheaper-to-render initial view than
+// defaultPageScale's default; the frontend's own "scale" query
+// parameter (server.go's handlePage) still overrides this per request.
+//
+// -use-system-fonts sets the initial state of the web UI's "Use system
+// fonts" checkbox (see pdfviewer.WithFontSubstitution) - handy for
+// leaving it on by default across restarts without having to click it
+// every time. The checkbox can still be toggled from the page
+// afterward exactly as before.
 //
 // Unless -no-browser is given, pdfbrowser also makes a best-effort
 // attempt to open the URL in the system's default web browser (see
@@ -45,9 +57,16 @@ import (
 func main() {
 	port := flag.Int("port", 0, "TCP port to listen on (0 = let the OS choose an available port)")
 	noBrowser := flag.Bool("no-browser", false, "do not attempt to open a web browser automatically")
+	scale := flag.Float64("scale", defaultPageScale, "device-pixels-per-PDF-point used to render the full-size page image")
+	useSystemFonts := flag.Bool("use-system-fonts", false, "initial state of the web UI's \"Use system fonts\" checkbox")
 	flag.Parse()
 
-	if err := run(*port, !*noBrowser); err != nil {
+	if *scale <= 0 {
+		fmt.Fprintf(os.Stderr, "pdfbrowser: -scale must be greater than 0\n")
+		os.Exit(1)
+	}
+
+	if err := run(*port, !*noBrowser, *scale, *useSystemFonts); err != nil {
 		fmt.Fprintf(os.Stderr, "pdfbrowser: %v\n", err)
 		os.Exit(1)
 	}
@@ -58,7 +77,7 @@ func main() {
 // same "keep main thin" split used by the other cmd/ examples in this
 // repository (see cmd/pdfpreview/main.go's doc comment on
 // renderPreviewToFile for why).
-func run(port int, launchBrowser bool) error {
+func run(port int, launchBrowser bool, pageScale float64, useSystemFonts bool) error {
 	// Listening on 127.0.0.1 rather than all interfaces (0.0.0.0) keeps
 	// this development tool reachable only from the machine it runs on,
 	// which matches its intended use (see this file's package doc
@@ -82,7 +101,7 @@ func run(port int, launchBrowser bool) error {
 		}
 	}
 
-	srv := &browserServer{}
+	srv := newBrowserServer(pageScale, useSystemFonts)
 
 	// quit is closed exactly once, either by a client POSTing
 	// /api/quit (see handleQuit in server.go) or by this process

@@ -38,8 +38,9 @@ const thumbnailMaxDimension = 200
 
 // defaultPageScale is the device-pixels-per-PDF-point (see
 // pdfviewer.RenderOptions.Scale) used for the full-size page image sent
-// to the main viewer when the request does not specify its own "scale"
-// query parameter.
+// to the main viewer, unless overridden by main.go's -scale flag (see
+// browserServer.pageScale) or the request's own "scale" query parameter
+// (see handlePage).
 const defaultPageScale = 1.5
 
 // browserServer holds the single PDF document currently loaded into the
@@ -85,8 +86,32 @@ type browserServer struct {
 	// (including the current one, if any, re-opened right away) should
 	// pass pdfviewer.WithFontSubstitution. It persists across documents
 	// so that dropping a second file after checking the box does not
-	// silently forget the choice.
+	// silently forget the choice. Its initial value comes from main.go's
+	// -use-system-fonts flag (see newBrowserServer); handleConfig reports
+	// that initial value to the frontend so the checkbox can start out
+	// checked to match, without the frontend needing to guess or the
+	// server needing to fake a change event.
 	useSystemFonts bool
+
+	// pageScale is the device-pixels-per-PDF-point (see
+	// pdfviewer.RenderOptions.Scale) handlePage uses for the full-size
+	// page image when the request's own "scale" query parameter is
+	// absent - set once from main.go's -scale flag (see
+	// newBrowserServer) and never changed afterward, so - unlike every
+	// other field on this type - reading it needs no mu (nothing ever
+	// writes it after construction).
+	pageScale float64
+}
+
+// newBrowserServer builds a browserServer with its initial
+// configuration - pageScale and useSystemFonts - taken from main.go's
+// command-line flags. A zero-value browserServer would work just as
+// well for pageScale (handlePage would just always fall through to
+// defaultPageScale), but not for useSystemFonts, which needs to be
+// seeded from -use-system-fonts before the very first document is
+// opened.
+func newBrowserServer(pageScale float64, useSystemFonts bool) *browserServer {
+	return &browserServer{pageScale: pageScale, useSystemFonts: useSystemFonts}
 }
 
 // Sentinel errors returned by browserServer.withPage, translated to
@@ -119,6 +144,7 @@ func newMux(srv *browserServer, triggerQuit func()) http.Handler {
 	mux.HandleFunc("/api/thumbnail", srv.handleThumbnail)
 	mux.HandleFunc("/api/page", srv.handlePage)
 	mux.HandleFunc("/api/font-substitution", srv.handleFontSubstitution)
+	mux.HandleFunc("/api/config", srv.handleConfig)
 	mux.HandleFunc("/api/diagnostics", srv.handleDiagnostics)
 	mux.HandleFunc("/api/quit", func(w http.ResponseWriter, r *http.Request) {
 		srv.handleQuit(w, r, triggerQuit)
@@ -266,6 +292,31 @@ func (s *browserServer) handleFontSubstitution(w http.ResponseWriter, r *http.Re
 	writeJSON(w, resp)
 }
 
+// configResponse is the JSON body handleConfig sends back.
+type configResponse struct {
+	UseSystemFonts bool `json:"useSystemFonts"`
+}
+
+// handleConfig reports this server's current "Use system fonts" state
+// (see the useSystemFonts field's doc comment) so the frontend can set
+// its checkbox to match on page load - initially seeded from main.go's
+// -use-system-fonts flag, and kept in sync afterward by whatever the
+// checkbox itself last POSTed to /api/font-substitution. This is a
+// plain GET, not paired with a POST the way /api/font-substitution is:
+// it only ever reports state, never changes it.
+func (s *browserServer) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.Lock()
+	useSystemFonts := s.useSystemFonts
+	s.mu.Unlock()
+
+	writeJSON(w, configResponse{UseSystemFonts: useSystemFonts})
+}
+
 // diagnosticsResponse is the JSON body handleDiagnostics sends back.
 type diagnosticsResponse struct {
 	Messages []string `json:"messages"`
@@ -326,7 +377,7 @@ func (s *browserServer) handlePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	scale := defaultPageScale
+	scale := s.pageScale
 	if raw := r.URL.Query().Get("scale"); raw != "" {
 		parsed, err := strconv.ParseFloat(raw, 64)
 		if err != nil || parsed <= 0 {

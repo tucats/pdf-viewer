@@ -197,6 +197,25 @@ viewerEl.addEventListener("drop", (e) => {
 
 // --- Font substitution toggle ------------------------------------------
 
+// initConfig fetches the server's initial configuration (currently just
+// -use-system-fonts - see server.go's handleConfig) and sets the
+// checkbox to match, without going through the "change" handler below -
+// this is reporting state the server already has, not a change the
+// server needs to be told about (it already knows, since that flag is
+// where the value came from in the first place).
+async function initConfig() {
+  let resp;
+  try {
+    resp = await fetch("/api/config");
+  } catch (err) {
+    return; // Best-effort; the checkbox just starts unchecked.
+  }
+  if (!resp.ok) return;
+  const body = await resp.json();
+  fontSubCheckbox.checked = !!body.useSystemFonts;
+}
+initConfig();
+
 fontSubCheckbox.addEventListener("change", async () => {
   const enabled = fontSubCheckbox.checked;
   setStatus(enabled ? "Enabling system font substitution..." : "Disabling system font substitution...");

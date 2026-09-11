@@ -39,7 +39,7 @@ func readFixture(t *testing.T, name string) []byte {
 // browserServer, cleaned up automatically at the end of the test.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := &browserServer{}
+	srv := newBrowserServer(defaultPageScale, false)
 	ts := httptest.NewServer(newMux(srv, func() {}))
 	t.Cleanup(ts.Close)
 	return ts

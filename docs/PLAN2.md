@@ -293,7 +293,7 @@ types), not re-scoped.
 
 ## Phase 14: JPXDecode (JPEG 2000)
 
-**Status: 14a, 14b, 14c, 14d done.**
+**Status: 14a, 14b, 14c, 14d, 14e done.**
 
 Same class of gap as JBIG2 (Phase 8) - a page using this filter fails
 outright - but JPEG 2000 in practice appears mostly in narrower
@@ -362,9 +362,9 @@ they ever need to diverge):
     transform** (both the 5/3 reversible integer filter and the 9/7
     irreversible filter), reassembling one tile-component's samples from
     its subbands. See this phase's closeout note below.
-- **14e: the multiple component transform** (reversible RCT /
+- **14e (done): the multiple component transform** (reversible RCT /
     irreversible ICT), DC level shifting, and tile compositing into a
-    final image.
+    final image. See this phase's closeout note below.
 - **14f: `internal/filter` wiring** (the JPXDecode case in
     `filter.go`) and the PDF-specific behaviors ISO 32000-1 7.4.9
     documents for this filter specifically: a `/ColorSpace`-absent image
@@ -2764,3 +2764,104 @@ in order, not rewritten later except to fix mistakes.
     from-scratch encoder exists) - 14g is where fixtures need one built.
     `internal/filter` and `docs/capability-matrix.md` are unchanged; a
     JPXDecode stream still fails with `ErrUnsupported`.
+
+### Phase 14e: multiple component transform, DC level shifting, and tile compositing — done (2026-09-11)
+
+- **`mct.go`.** Implements Annex G's two multiple component transforms,
+    decoder direction only: `inverseRCT` (§G.2's reversible colour
+    transform - exact integer arithmetic, the same floor-shift-via-`>>`
+    reasoning `filter53` uses) and `inverseICT` (§G.3's irreversible
+    colour transform - the same ITU-R BT.601/JFIF YCbCr<->RGB matrix,
+    genuinely floating-point). `applyMultipleComponentTransform` is the
+    per-tile entry point `image.go`'s `Decode` calls: it reads the tile's
+    *effective* coding style (`Header.effectiveTileDefaultCoding`, so a
+    tile-scoped COD override is honored, not just the main header's
+    default), no-ops if that tile does not declare an MCT, and otherwise
+    picks RCT or ICT by the same style's `Transform` field (5/3 vs. 9/7)
+    and applies it in place across the tile's first three reconstructed
+    components - after checking they share identical dimensions, which
+    the standard requires and this package's existing XRsiz/YRsiz==1
+    restriction (siz.go) already guarantees whenever it applies at all.
+- **`image.go`.** Implements the reconstruction procedure's remaining
+    steps and ties every earlier sub-phase together into one whole-image
+    result:
+    - `Image`/`ImageComponent` - this package's first public whole-image
+        type: one `int32` sample per pixel per component, row-major,
+        already finalized. Carries no PDF-specific concept (colour space,
+        soft mask) per doc.go's "Why this package exists" section - that
+        is 14f's job.
+    - `finalizeSample` - undoes DC level shifting (adds back
+        `2^(bitDepth-1)` for a component SIZ declared unsigned, applied
+        *after* `mct.go`'s inverse transform, mirroring the encoder's own
+        "level-shift, then transform" order in reverse), rounds
+        (`math.Round`, needed only by the irreversible path - a
+        reversible-transform, no-MCT-or-RCT-only pipeline is already
+        exactly integer-valued), and clamps to the range `bitDepth`/
+        `signed` implies - defensive against a corrupt or hostile
+        codestream's out-of-range value rather than an expected case for
+        well-formed input.
+    - `compositeTile` - copies one tile's finalized samples into their
+        correct location within the whole-image buffer, subtracting the
+        image area's own origin (`XOsiz`/`YOsiz`) back out of each
+        tile-component's absolute reference-grid offset
+        (`reconstructedComponent.left`/`top`, from geometry.go's
+        `tileComponentBounds`).
+    - `newImage` - allocates `Image`/`ImageComponent` from `Header`,
+        rejecting (via `ErrUnsupported`) any component declaring a bit
+        depth beyond `maxSupportedBitDepth` (31) - SIZ's own limit is 38
+        bits, wider than an unsigned sample's `2^bitDepth-1` range can fit
+        in an `int32`; no real image approaches even 16 bits, so this only
+        ever rejects an absurd declared value, the same "bounded work"
+        policy `maxReasonableDimension` applies to image dimensions.
+    - `Decode(h *Header, codestream []byte) (*Image, error)` - this
+        package's first public, whole-image entry point: loops over every
+        tile, running `idwt.go`'s `decodeTile` (14b-14d), this sub-phase's
+        `applyMultipleComponentTransform`, and `compositeTile`. Still not
+        reachable from `internal/filter` - 14f wires that up.
+- **Provenance.** Written directly from Annex G's own formulas, not
+    cross-checked against pdf.js - unlike 14c's context tables or 14d's
+    lifting-step buffer indexing, the MCT/level-shift/clamp formulas here
+    are simple, unambiguous, and well-documented enough (the RCT/ICT
+    matrices are the same widely-published constants used outside JPEG
+    2000 too) that doc.go's usual "no independent reference available"
+    caveat does not apply with the same force; round-trip testing against
+    independently-written forward transforms (below) is the verification
+    this sub-phase relies on instead.
+- **Verification.** `mct_test.go` round-trips `inverseRCT`/`inverseICT`
+    against `forwardRCT`/`forwardICT`, from-scratch forward transforms
+    written independently from Annex G's own encoder-direction formulas
+    (not derived by algebraically inverting the decoder's code) - RCT
+    exactly (integer arithmetic throughout), ICT to a tolerance wide
+    enough to absorb the forward and inverse matrices' independently-
+    rounded coefficients (each published to 6 decimal places, so their
+    composition is only an approximate identity) while still catching a
+    real mistake. `applyMultipleComponentTransform` is checked for the
+    no-op (`MultipleComponentTransform` false), too-few-components,
+    mismatched-dimensions, hand-computed-RCT, and tile-COD-override
+    cases. `image_test.go` checks `finalizeSample` (level-shift for
+    unsigned vs. signed, rounding, clamping), `newImage`'s excessive-bit-
+    depth rejection, and `compositeTile`'s `XOsiz`/`YOsiz` offset
+    handling directly; `TestMCTAndLevelShiftEndToEnd` chains a *real* 14c/
+    14d tier-1 round trip (not hand-injected coefficients, the same
+    `encodeCodeBlockTier1`/`decodeCodeBlockTier1` idwt_test.go's own
+    round-trip test uses) into this sub-phase's inverse RCT and level-
+    shift/clamp/composite for three components built from deliberately
+    forward-transformed (level-shifted, then RCT'd) RGB ground truth,
+    confirming the original pixel values come back out exactly; and
+    `TestDecodeSingleTileGrayscale` drives the whole public `Decode` entry
+    point end to end (`ParseHeader` through a real one-tile, one-
+    component, single-code-block codestream) to confirm the marker-level
+    wiring itself is correct, not just the sub-phase's own new logic in
+    isolation. Full test suite, `go vet`, and `gofmt` all pass clean.
+- **What's carried forward.** `Decode` is still unreachable from
+    `internal/filter` - `internal/filter` and
+    `docs/capability-matrix.md` are unchanged, and a JPXDecode stream
+    still fails with `ErrUnsupported`; 14f is what wires this package's
+    now-complete decode pipeline up to a real PDF image, including the
+    PDF-specific `/ColorSpace`-absent-falls-back-to-embedded and
+    `/SMaskInData` behaviors ISO 32000-1 7.4.9 documents. Multi-tile
+    codestreams remain untested against real encoded bytes (this
+    sub-phase's own tests cover multi-*component* real decoding and
+    multi-tile *placement* math separately, but not both at once) -
+    14g's fixtures, built with this package's own from-scratch encoder,
+    are what a genuine multi-tile round trip needs.

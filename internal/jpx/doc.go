@@ -75,8 +75,16 @@
 //     (reconstructedComponent) is real-valued, not yet DC-level-shifted,
 //     clamped, or passed through any multiple component transform, all
 //     three of which are 14e's job.
-//   - 14e: the multiple component transform (reversible RCT / irreversible
-//     ICT), DC level shifting, and tile compositing into a final image.
+//   - 14e (done): the multiple component transform (mct.go - reversible
+//     RCT / irreversible ICT, both decoder-direction only, applied across
+//     a tile's first three reconstructed components), DC level shifting,
+//     rounding/clamping, and tile compositing into a final image
+//     (image.go - Image/ImageComponent, and Decode, this package's first
+//     public whole-image entry point, tying together every earlier
+//     sub-phase's per-tile-component pipeline plus this one's own
+//     per-component finalization and placement). Still not reachable from
+//     internal/filter, and Image carries no colour-space or soft-mask
+//     concept yet - both are 14f's job.
 //   - 14f: internal/filter wiring (the JPXDecode case in filter.go) and
 //     the PDF-specific behaviors ISO 32000-1 7.4.9 documents for this
 //     filter specifically (a /ColorSpace-absent image falls back to the

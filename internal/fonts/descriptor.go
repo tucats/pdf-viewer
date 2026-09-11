@@ -203,9 +203,10 @@ func Characterize(dict syntax.Dictionary, resolver Resolver) FontCharacteristics
 }
 
 // styleToken is one entry in styleTokens below: a substring that, when
-// found in a PostScript font name, indicates a bold and/or italic
-// style and should be removed from the name once recognized (so it
-// doesn't end up looking like part of the family name).
+// found in a PostScript font name, indicates a style (bold and/or
+// italic, or - for "-Roman" - neither) and should be removed from the
+// name once recognized (so it doesn't end up looking like part of the
+// family name).
 type styleToken struct {
 	text   string
 	bold   bool
@@ -223,12 +224,27 @@ type styleToken struct {
 // separately hand-drawn italic) style, but this package treats the two
 // the same way, since the visual distinction does not matter for
 // picking a substitute font.
+//
+// "-Roman" (bold=false, italic=false - already Go's zero value, so
+// nothing needs setting) is PostScript's traditional fourth member of
+// the classic Family-Roman/Family-Bold/Family-Italic/Family-BoldItalic
+// naming convention (e.g. "Times-Roman", "Palatino-Roman"): it marks the
+// plain upright weight, exactly the way "Bold"/"Italic" mark theirs, so
+// it needs stripping from the family name for the same reason. Unlike
+// every other entry here, its token text includes the leading hyphen:
+// a bare "Roman" would also match inside a legitimately compound family
+// name like "TimesNewRoman" (see
+// TestParsePostScriptName_RealWorldNames's "TimesNewRomanPSMT" case,
+// which must keep reading as family "Times New Roman", not have "Roman"
+// stripped out of the middle) - requiring the hyphen restricts the match
+// to the "-Roman" suffix form specifically.
 var styleTokens = []styleToken{
 	{text: "BoldOblique", bold: true, italic: true},
 	{text: "BoldItalic", bold: true, italic: true},
 	{text: "Oblique", italic: true},
 	{text: "Italic", italic: true},
 	{text: "Bold", bold: true},
+	{text: "-Roman"},
 }
 
 // foundrySuffixes lists trailing substrings ParsePostScriptName strips

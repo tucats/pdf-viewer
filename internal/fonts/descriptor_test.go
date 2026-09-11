@@ -26,6 +26,13 @@ func TestParsePostScriptName_RealWorldNames(t *testing.T) {
 		{"TimesNewRomanPS-BoldMT", "Times New Roman", true, false},
 		{"ArialMT", "Arial", false, false},
 		{"Arial-BoldItalicMT", "Arial", true, true},
+		// "-Roman" is the classic PostScript "plain upright weight"
+		// suffix (the fourth member of Family-Roman/-Bold/-Italic/
+		// -BoldItalic), and must be stripped just like "-Bold" is -
+		// without also matching the unrelated compound family name
+		// "TimesNewRoman" above, whose "Roman" is not a suffix at all.
+		{"Times-Roman", "Times", false, false},
+		{"Palatino-Roman", "Palatino", false, false},
 	}
 
 	for _, c := range cases {

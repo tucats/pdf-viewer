@@ -293,7 +293,7 @@ types), not re-scoped.
 
 ## Phase 14: JPXDecode (JPEG 2000)
 
-**Status: 14a, 14b done.**
+**Status: 14a, 14b, 14c done.**
 
 Same class of gap as JBIG2 (Phase 8) - a page using this filter fails
 outright - but JPEG 2000 in practice appears mostly in narrower
@@ -2606,5 +2606,71 @@ in order, not rewritten later except to fix mistakes.
     what `decodeTilePackets` locates into quantized wavelet coefficients)
     does not exist yet - `mq.go`'s decoder is unused by anything except
     its own tests until 14c calls it. `internal/filter` and
+    `docs/capability-matrix.md` are unchanged; a JPXDecode stream still
+    fails with `ErrUnsupported`.
+
+### Phase 14c: EBCOT tier-1 bit-plane entropy decoding — done (2026-09-10)
+
+- **`tier1.go`.** Implements ISO/IEC 15444-1 Annex D: the three coding
+    passes (significance propagation, magnitude refinement, cleanup -
+    including the cleanup pass's run-length optimization for a stripe
+    of four coefficients with no significant neighbor anywhere) that
+    turn one code-block's compressed bytes (14b's `decodeTilePackets`
+    locates them; this sub-phase's `mq.go` decoder actually reads them)
+    into per-sample magnitude, sign, and a `bitsDecoded` count. This is
+    deliberately *not yet* a final, dequantized coefficient value - see
+    `tier1.go`'s own doc comment on why that split matches the
+    standard's own Annex D/Annex E boundary, and is 14d's job.
+- **Provenance exception, documented as such.** This sub-phase departs
+    from this package's usual "write from the specification's prose,
+    loosely cross-check against an old pdf.js tag from memory" pattern
+    (see `doc.go`'s Provenance section and [[phase_14_jpx_in_progress]]):
+    the three 75-entry zero-coding context tables (one per subband
+    orientation) are unusually easy to get silently wrong via
+    transcription, with nothing to self-check against, so this file's
+    tables and pass logic were checked directly against pdf.js
+    v3.11.174's `BitModel` class (`jpx.js`) line-by-line while writing
+    it, via a real fetch of that tagged source rather than recollection.
+    That check also *confirmed* rather than merely informed one
+    important scope decision: pdf.js's own tier-1 decoder implements
+    none of `codeBlockSelectiveBypass`, `codeBlockTermination`,
+    `codeBlockVerticallyCausal`, or `codeBlockPredictableTermination`
+    either, which is real-world evidence (from a decoder used broadly
+    across the web) that PDF-embedded JPX rarely if ever needs them;
+    this decoder reports all four as `ErrUnsupported` by name, and
+    implements only the default code-block style plus
+    `codeBlockResetContext` and `codeBlockSegmentationSymbols` (both
+    cheap, structure-preserving additions).
+- **Verification.** As with every other hard piece of this package (and
+    `internal/filter`'s JBIG2 work before it), there is no real-world
+    JPX sample to test against, so `tier1_test.go` builds a from-scratch
+    tier-1 *encoder* - the same coding-pass control flow, but reading
+    each bit to encode from a caller-supplied ground-truth coefficient
+    array instead of decoding it - sharing only the two smallest,
+    least-interesting helper functions (`signContribution`,
+    `setNeighborsSignificance`) with the decoder so the two
+    implementations can't accidentally cancel out a shared bug. Round-trip
+    tests cover all four subband orientations, several code-block
+    shapes (including 1x1 and non-multiple-of-4 heights), the two
+    supported code-block style bits alone and combined, a deep
+    (20-bit-plane) code-block to stress multi-pass bookkeeping, an
+    all-zero code-block (pure run-length exercise), a nonzero
+    `zeroBitPlanes` preset, `ErrUnsupported` for each of the four
+    unsupported style bits, and a segmentation-symbol mismatch
+    detection. All passed on the first full run. Full test suite,
+    `go vet`, and `gofmt` all pass clean; `FuzzParseHeader` ran an
+    additional 10-second/9M-execution pass with no crash (tier-1 is not
+    yet on that fuzz target's reachable path - see "what's carried
+    forward" below).
+- **`geometry.go`.** `codeBlockInfo` gained `tbx0`/`tby0`/`tbx1`/`tby1`
+    (already-clipped pixel bounds within its subband, set by
+    `buildCodeBlocks`) and a `samples *codeBlockSamples` field for this
+    sub-phase's output - both needed to size and place tier-1's
+    per-code-block sample arrays without recomputing geometry
+    `buildCodeBlocks` already had.
+- **What's carried forward.** Dequantization and the inverse wavelet
+    transform (14d) do not exist yet - `decodeTileTier1`'s output
+    (magnitude/sign/bitsDecoded per code-block) is unused by anything
+    except this sub-phase's own tests. `internal/filter` and
     `docs/capability-matrix.md` are unchanged; a JPXDecode stream still
     fails with `ErrUnsupported`.

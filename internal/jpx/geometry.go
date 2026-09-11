@@ -191,6 +191,13 @@ type codeBlockInfo struct {
 	precinctNumber int
 	precinct       *precinctState
 
+	// tbx0/tby0/tbx1/tby1 are this code-block's own pixel bounds within
+	// its subband's coordinate system (already clipped to the subband's
+	// own extent by buildCodeBlocks - a code-block at a subband's edge
+	// may be smaller than the nominal code-block size) - tier-1 (14c)
+	// uses these to size and place its per-code-block sample arrays.
+	tbx0, tby0, tbx1, tby1 int
+
 	// Lblock starts at 3 (§B.10.7) and only ever grows, by however many
 	// extra bits a later packet's header says its length field needed.
 	Lblock int
@@ -201,6 +208,10 @@ type codeBlockInfo struct {
 	zeroBitPlanes int
 
 	contributions []codeBlockContribution
+
+	// samples is this code-block's tier-1 output (14c's decodeTileCoefficients),
+	// nil until decoded - see codeBlockSamples' doc comment (tier1.go).
+	samples *codeBlockSamples
 }
 
 // codeBlockContribution is one layer's worth of one code-block's
@@ -281,7 +292,10 @@ func buildCodeBlocks(sb *subbandInfo, pg precinctGrid, xcbPrime, ycbPrime int) {
 			pj := (tby0c - sb.tby0) / pg.heightInSubband
 			precinctNumber := pi + pj*pg.numWide
 
-			cb := &codeBlockInfo{cbx: i, cby: j, precinctNumber: precinctNumber, Lblock: 3}
+			cb := &codeBlockInfo{
+				cbx: i, cby: j, precinctNumber: precinctNumber, Lblock: 3,
+				tbx0: tbx0c, tby0: tby0c, tbx1: tbx1c, tby1: tby1c,
+			}
 			sb.codeBlocks = append(sb.codeBlocks, cb)
 
 			p, ok := sb.precincts[precinctNumber]

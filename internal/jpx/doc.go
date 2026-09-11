@@ -47,9 +47,23 @@
 //     siz.go) rather than discarded. Still no pixel output - this
 //     sub-phase locates every code-block's compressed-data byte ranges
 //     and pass counts; nothing yet runs the MQ coder over them.
-//   - 14c: tier-1 coding: the EBCOT bit-plane coding passes (significance
-//     propagation, magnitude refinement, cleanup) that turn a
-//     code-block's compressed bytes into quantized wavelet coefficients.
+//   - 14c (done): tier-1 coding (tier1.go): the EBCOT bit-plane coding
+//     passes (significance propagation, magnitude refinement, cleanup -
+//     including the cleanup pass's run-length optimization) that turn a
+//     code-block's compressed bytes into per-sample magnitude/sign/
+//     bitsDecoded data - not yet a final dequantized coefficient value;
+//     see tier1.go's own doc comment on why that split matches the
+//     standard's own Annex D/Annex E boundary. Supports only the
+//     default code-block style plus codeBlockResetContext and
+//     codeBlockSegmentationSymbols; the other four style bits
+//     (selective bypass, per-pass MQ termination, vertically-causal
+//     context, predictable termination) report ErrUnsupported - the
+//     same scope cut pdf.js's own tier-1 decoder makes, confirmed by
+//     checking this sub-phase's context tables and pass logic directly
+//     against that project's BitModel class (an exception to this
+//     package's usual from-the-specification-alone approach, made
+//     because those 75-entry lookup tables are unusually easy to get
+//     silently wrong - see tier1.go's Provenance section).
 //   - 14d: dequantization and the inverse discrete wavelet transform (both
 //     the 5/3 reversible integer filter and the 9/7 irreversible filter),
 //     reassembling one tile-component's samples from its subbands.
@@ -125,6 +139,14 @@
 //     via the MCT/MCC/MCO markers, arbitrary wavelet kernels, and so on)
 //     are not implemented - these are rare extensions even outside PDF,
 //     and PDF's own JPXDecode filter is defined against Part 1.
+//   - Of the six code-block style bits COD/COC can set (coding.go's
+//     codeBlock* constants), only the default and codeBlockResetContext/
+//     codeBlockSegmentationSymbols are decoded (tier1.go, 14c); the
+//     other four (selective arithmetic coding bypass, termination on
+//     each coding pass, vertically-causal context formation,
+//     predictable termination) report ErrUnsupported by name - the same
+//     scope cut pdf.js's own tier-1 decoder makes, which this package
+//     takes as real-world evidence PDF-embedded JPX rarely needs them.
 //   - The packed-packet-headers markers (PPM in the main header, PPT in
 //     a tile-part header) and the packet/tile-part length markers
 //     (PLM, PLT, TLM) are recognized and skipped where they carry no

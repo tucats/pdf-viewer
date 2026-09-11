@@ -56,6 +56,28 @@ func TestParseCIDWidths_RejectsAbsurdRange(t *testing.T) {
 	}
 }
 
+// TestParseCIDWidths_IndirectReference confirms /W is resolved
+// correctly when the PDF writes it as an indirect reference to the
+// array object (e.g. "/W 3219 0 R") rather than inline - both are legal
+// per the specification, but only the inline form was previously
+// handled; parseCIDWidths asserted the un-resolved dictionary value
+// directly against syntax.Array, so the indirect form was silently
+// treated as "no widths at all" (every code then fell back to /DW, or
+// this package's generic default) instead of the font's real,
+// per-glyph widths - producing badly overspaced text for any CID font
+// whose producer happened to write /W as an indirect object (a real
+// PowerPoint-exported PDF does this).
+func TestParseCIDWidths_IndirectReference(t *testing.T) {
+	t.Parallel()
+	resolver := fakeResolver{objects: map[int]syntax.Object{
+		99: syntax.Array{syntax.Integer(10), syntax.Array{syntax.Integer(500)}},
+	}}
+	widths := parseCIDWidths(syntax.Reference{Number: 99}, resolver)
+	if widths[10] != 500 {
+		t.Errorf("widths[10] = %v, want 500", widths[10])
+	}
+}
+
 // TestCidGlyphLookup_ExplicitStream exercises /CIDToGIDMap as an
 // explicit stream of 2-byte big-endian glyph indices (as opposed to the
 // /Identity default, which font_test.go's TestLoad_Type0IdentityH

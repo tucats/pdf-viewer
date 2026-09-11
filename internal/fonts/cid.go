@@ -56,8 +56,10 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 		return f, nil
 	}
 
-	if dw, ok := numberValue(descendant["DW"]); ok {
-		f.defaultWidth = dw
+	if dwObj, err := resolveIfRef(resolver, descendant["DW"]); err == nil {
+		if dw, ok := numberValue(dwObj); ok {
+			f.defaultWidth = dw
+		}
 	}
 	f.widths = parseCIDWidths(descendant["W"], resolver)
 	loadType0Encoding(f, dict, resolver)
@@ -201,7 +203,11 @@ func firstDescendantFont(dict syntax.Dictionary, resolver Resolver) (syntax.Dict
 // (rather than aborting width parsing for the whole font), consistent
 // with this project's general tolerance for one malformed field.
 func parseCIDWidths(wObj syntax.Object, resolver Resolver) map[int]float64 {
-	arr, ok := wObj.(syntax.Array)
+	resolved, err := resolveIfRef(resolver, wObj)
+	if err != nil {
+		return nil
+	}
+	arr, ok := resolved.(syntax.Array)
 	if !ok {
 		return nil
 	}

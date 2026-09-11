@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>pdfbrowser</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Left-hand thumbnail gutter. One placeholder <div class="thumb">
+         is added here per page as soon as a document is loaded; each
+         one's own <img> is only given a real src once it scrolls into
+         view (see app.js's IntersectionObserver-based lazy loading). -->
+    <div id="gutter"></div>
+
+    <div id="main">
+      <div id="viewer">
+        <div id="dropHint">Drop a PDF document here</div>
+        <img id="pageImage" alt="Current page" hidden>
+      </div>
+
+      <!-- Populated from GET /api/diagnostics after every page/thumbnail
+           render; hidden entirely whenever there is nothing to show
+           (see app.js's refreshDiagnostics). -->
+      <div id="diagnostics" hidden>
+        <div id="diagnosticsHeader">Diagnostics</div>
+        <ul id="diagnosticsList"></ul>
+      </div>
+
+      <div id="controls">
+        <button id="prevBtn" disabled>&larr; Previous</button>
+        <span id="pageLabel"></span>
+        <button id="nextBtn" disabled>Next &rarr;</button>
+        <span class="spacer"></span>
+        <label id="fontSubToggle">
+          <input type="checkbox" id="fontSubCheckbox">
+          Use system fonts
+        </label>
+        <span id="statusText"></span>
+        <button id="quitBtn">Quit</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

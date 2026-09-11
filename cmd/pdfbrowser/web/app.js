@@ -66,6 +66,30 @@ async function refreshDiagnostics() {
   diagnosticsEl.hidden = messages.length === 0;
 }
 
+// reportPageRenderError surfaces why a page image failed to load. An
+// <img> element's own "error" event carries no information about the
+// failure - not even the HTTP status - so pageImage.src pointing at a
+// URL that fails (e.g. Page.Render returning an error the server
+// reports as a 500, per server.go's writeRenderError) would otherwise
+// leave the viewer looking blank/broken with no clue why. Re-fetching
+// the same URL directly recovers the server's actual error text.
+async function reportPageRenderError(url) {
+  // Hide the <img> itself rather than leave the browser's own broken-image
+  // icon on screen - the status line and diagnostics panel below are
+  // where the actual error text goes.
+  pageImageEl.hidden = true;
+
+  let resp;
+  try {
+    resp = await fetch(url);
+  } catch (err) {
+    setStatus("Rendering failed: " + err);
+    return;
+  }
+  setStatus("Rendering failed: " + (await resp.text()).trim());
+  refreshDiagnostics();
+}
+
 // --- Loading a document ------------------------------------------------
 
 async function uploadFile(file) {
@@ -140,10 +164,16 @@ function onThumbIntersect(entries) {
 
 function loadThumbnail(thumb) {
   const page = Number(thumb.dataset.page);
+  const url = "/api/thumbnail?gen=" + generation + "&page=" + page;
   const img = document.createElement("img");
   img.alt = "Page " + (page + 1) + " thumbnail";
-  img.src = "/api/thumbnail?gen=" + generation + "&page=" + page;
+  img.src = url;
   img.addEventListener("load", refreshDiagnostics);
+  img.addEventListener("error", () => {
+    thumb.classList.add("renderError");
+    thumb.title = "Page " + (page + 1) + " failed to render - see the main viewer for details";
+    refreshDiagnostics();
+  });
   thumb.insertBefore(img, thumb.firstChild);
 }
 
@@ -158,8 +188,10 @@ function updateActiveThumb() {
 function showPage(page) {
   if (page < 0 || page >= pageCount) return;
   currentPage = page;
-  pageImageEl.src = "/api/page?gen=" + generation + "&page=" + page;
-  pageImageEl.addEventListener("load", refreshDiagnostics, { once: true });
+  const url = "/api/page?gen=" + generation + "&page=" + page;
+  pageImageEl.src = url;
+  pageImageEl.addEventListener("load", () => { pageImageEl.hidden = false; setStatus(""); refreshDiagnostics(); }, { once: true });
+  pageImageEl.addEventListener("error", () => reportPageRenderError(url), { once: true });
 
   pageLabelEl.textContent = "Page " + (page + 1) + " of " + pageCount;
   prevBtn.disabled = page <= 0;

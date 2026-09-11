@@ -66,6 +66,10 @@ html, body {
   border-color: var(--thumb-active);
 }
 
+.thumb.renderError {
+  border-color: #c00;
+}
+
 .thumb img {
   max-width: 100%;
   display: block;

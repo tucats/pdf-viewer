@@ -262,6 +262,17 @@ func defaultFontScanDirsFor(goos string) []scanDir {
 		return append(dirs,
 			scanDir{path: "/Library/Fonts"},
 			scanDir{path: "/System/Library/Fonts"},
+			// Fonts Apple ships but doesn't activate by default - Arial,
+			// Arial Narrow, Georgia, Times New Roman, Verdana, and other
+			// common Microsoft-metric-compatible fonts among them - live
+			// in this flat subdirectory rather than directly under
+			// /System/Library/Fonts (macOS itself, and apps like Preview,
+			// resolve into it too). It is exactly the kind of font a PDF's
+			// non-embedded "ArialMT" is asking to be substituted with, so
+			// without this entry a real-world PDF built with Arial
+			// substitutes nothing here even though the file is present on
+			// disk and other viewers find it.
+			scanDir{path: "/System/Library/Fonts/Supplemental"},
 		)
 
 	case "linux":

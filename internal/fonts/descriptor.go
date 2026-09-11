@@ -160,7 +160,22 @@ func Characterize(dict syntax.Dictionary, resolver Resolver) FontCharacteristics
 	// reasonable place to draw that line for now.
 	family := nameFamily
 	if fam, ok := descriptor["FontFamily"].(syntax.String); ok && len(fam) > 0 {
-		family = string(fam)
+		// Per the specification /FontFamily should just be a bare family
+		// name ("Arial", not "VMKTGI+ArialMT") - it is documented as a
+		// separate field from /BaseFont precisely so a subsetted font's
+		// full PostScript name doesn't need to appear here at all - but
+		// some real-world producers (observed here: a "VMKTGI+ArialMT"
+		// /FontFamily alongside a plain "ArialMT" /BaseFont) copy
+		// /BaseFont's value in verbatim, subset tag and "MT"-style suffix
+		// included. Running it through the exact same cleanup
+		// ParsePostScriptName already applies to /BaseFont - rather than
+		// just stripping the subset tag - keeps matchFace's exact
+		// family-name step working for those files (matching installed
+		// candidates' own "Arial", not an unmatchable "ArialMT") instead
+		// of silently missing every substitution; the bold/italic guess
+		// this also produces is simply discarded, since nameBold/nameItalic
+		// above (from /BaseFont) already cover that.
+		family, _, _ = ParsePostScriptName(string(fam))
 	}
 
 	// A font is treated as bold if any one of three independent signals

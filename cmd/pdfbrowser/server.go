@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	pdfviewer "github.com/tucats/pdf-viewer"
 )
@@ -122,11 +125,21 @@ var (
 	errPageRange          = errors.New("page index out of range")
 )
 
+// quitGraceDelay is how long /api/browser-closed waits before actually
+// calling triggerQuit. A tab that is truly closing sends no further
+// requests, so its quit fires unimpeded once this elapses; a page
+// reload - the frontend's pagehide handler cannot tell the two apart,
+// see app.js - lands its next request (for "/", app.js, ...) well
+// within this window, and the middleware newMux installs below cancels
+// the pending quit when that happens. A var, not a const, so tests can
+// shrink it rather than actually sleep a human-scale delay.
+var quitGraceDelay = 1500 * time.Millisecond
+
 // newMux builds the http.Handler for the whole pdfbrowser web app: the
 // embedded static frontend at "/", plus the small JSON/image API srv's
 // methods implement. triggerQuit is called once /api/quit is asked to
 // stop the server - see main.go's run for what it does.
-func newMux(srv *browserServer, triggerQuit func()) http.Handler {
+func newMux(srv *browserServer, triggerQuit func(), browserSession string) http.Handler {
 	// fs.Sub rooted at "web" so the embedded files are served at "/",
 	// "/app.js", "/style.css", ... rather than under a "/web/" prefix.
 	staticFiles, err := fs.Sub(webFS, "web")
@@ -146,10 +159,61 @@ func newMux(srv *browserServer, triggerQuit func()) http.Handler {
 	mux.HandleFunc("/api/font-substitution", srv.handleFontSubstitution)
 	mux.HandleFunc("/api/config", srv.handleConfig)
 	mux.HandleFunc("/api/diagnostics", srv.handleDiagnostics)
+	var quitTimerMu sync.Mutex
+	var quitTimer *time.Timer
+	cancelPendingQuit := func() {
+		quitTimerMu.Lock()
+		defer quitTimerMu.Unlock()
+		if quitTimer != nil {
+			quitTimer.Stop()
+			quitTimer = nil
+		}
+	}
+
+	mux.HandleFunc("/api/browser-closed", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || browserSession == "" || r.URL.Query().Get("session") != browserSession {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+
+		quitTimerMu.Lock()
+		if quitTimer != nil {
+			quitTimer.Stop()
+		}
+		quitTimer = time.AfterFunc(quitGraceDelay, triggerQuit)
+		quitTimerMu.Unlock()
+	})
 	mux.HandleFunc("/api/quit", func(w http.ResponseWriter, r *http.Request) {
 		srv.handleQuit(w, r, triggerQuit)
 	})
-	return mux
+
+	// Wrapping the whole mux, rather than adding this to every handler
+	// above, means any request at all - not just the ones the frontend
+	// happens to send right after a reload - cancels a pending quit; see
+	// quitGraceDelay's doc comment for why one might be pending.
+	return withPendingQuitCancel(mux, cancelPendingQuit)
+}
+
+// withPendingQuitCancel wraps next so that cancel runs before every
+// request it handles - see newMux's use of it with cancelPendingQuit.
+func withPendingQuitCancel(next http.Handler, cancel func()) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// newBrowserSession creates an unguessable capability used only by the page
+// this process launched. A failure is fatal because without a capability a
+// close notification could not be kept separate from an independently opened
+// page.
+func newBrowserSession() string {
+	var token [16]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		panic(fmt.Sprintf("creating browser session: %v", err))
+	}
+	return hex.EncodeToString(token[:])
 }
 
 // documentResponse is the JSON body handleOpen and handleFontSubstitution

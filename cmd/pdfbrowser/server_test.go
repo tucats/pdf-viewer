@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // fixturePath resolves a fixture file name to its path in the shared
@@ -40,7 +41,7 @@ func readFixture(t *testing.T, name string) []byte {
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	srv := newBrowserServer(defaultPageScale, false)
-	ts := httptest.NewServer(newMux(srv, func() {}))
+	ts := httptest.NewServer(newMux(srv, func() {}, ""))
 	t.Cleanup(ts.Close)
 	return ts
 }
@@ -263,7 +264,7 @@ func TestHandleDiagnostics(t *testing.T) {
 func TestHandleQuitTriggersCallback(t *testing.T) {
 	srv := &browserServer{}
 	triggered := make(chan struct{}, 1)
-	ts := httptest.NewServer(newMux(srv, func() { triggered <- struct{}{} }))
+	ts := httptest.NewServer(newMux(srv, func() { triggered <- struct{}{} }, ""))
 	t.Cleanup(ts.Close)
 
 	resp, err := http.Post(ts.URL+"/api/quit", "text/plain", nil)
@@ -279,6 +280,113 @@ func TestHandleQuitTriggersCallback(t *testing.T) {
 	case <-triggered:
 	default:
 		t.Error("triggerQuit was not called")
+	}
+}
+
+// TestBrowserClosedRequiresMatchingSession confirms /api/browser-closed
+// is a no-op - not just "declines to quit" but genuinely indistinguishable
+// from a route that does not exist - unless the request carries the exact
+// session token newMux was given. This is what keeps a page opened
+// independently of pdfbrowser (no session in its URL at all, or one
+// opened with -no-browser) from being able to stop the server: see
+// main.go's run and this file's own doc comment on newBrowserSession.
+func TestBrowserClosedRequiresMatchingSession(t *testing.T) {
+	srv := &browserServer{}
+	triggered := make(chan struct{}, 1)
+	ts := httptest.NewServer(newMux(srv, func() { triggered <- struct{}{} }, "correct-token"))
+	t.Cleanup(ts.Close)
+
+	cases := []string{
+		ts.URL + "/api/browser-closed",
+		ts.URL + "/api/browser-closed?session=wrong-token",
+	}
+	for _, url := range cases {
+		resp, err := http.Post(url, "text/plain", nil)
+		if err != nil {
+			t.Fatalf("POST %s: %v", url, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("POST %s: status = %d, want %d", url, resp.StatusCode, http.StatusNotFound)
+		}
+	}
+
+	select {
+	case <-triggered:
+		t.Error("triggerQuit was called despite a missing/wrong session token")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestBrowserClosedTriggersQuitAfterGraceDelay confirms a correctly
+// authenticated /api/browser-closed request eventually calls
+// triggerQuit, but not immediately - see quitGraceDelay's doc comment on
+// why the call is delayed rather than made inline.
+func TestBrowserClosedTriggersQuitAfterGraceDelay(t *testing.T) {
+	origDelay := quitGraceDelay
+	quitGraceDelay = 20 * time.Millisecond
+	t.Cleanup(func() { quitGraceDelay = origDelay })
+
+	srv := &browserServer{}
+	triggered := make(chan struct{}, 1)
+	ts := httptest.NewServer(newMux(srv, func() { triggered <- struct{}{} }, "tok"))
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/api/browser-closed?session=tok", "text/plain", nil)
+	if err != nil {
+		t.Fatalf("POST /api/browser-closed: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	select {
+	case <-triggered:
+		t.Error("triggerQuit was called before quitGraceDelay elapsed")
+	default:
+	}
+
+	select {
+	case <-triggered:
+	case <-time.After(time.Second):
+		t.Error("triggerQuit was not called after quitGraceDelay elapsed")
+	}
+}
+
+// TestBrowserClosedCanceledByFollowupRequest confirms that a request
+// arriving after /api/browser-closed - standing in for the reload a
+// browser makes right after firing that beacon, which the frontend
+// cannot tell apart from an actual tab close, see app.js's pagehide
+// handler - cancels the pending quit instead of letting it fire.
+func TestBrowserClosedCanceledByFollowupRequest(t *testing.T) {
+	origDelay := quitGraceDelay
+	quitGraceDelay = 50 * time.Millisecond
+	t.Cleanup(func() { quitGraceDelay = origDelay })
+
+	srv := newBrowserServer(defaultPageScale, false)
+	triggered := make(chan struct{}, 1)
+	ts := httptest.NewServer(newMux(srv, func() { triggered <- struct{}{} }, "tok"))
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Post(ts.URL+"/api/browser-closed?session=tok", "text/plain", nil)
+	if err != nil {
+		t.Fatalf("POST /api/browser-closed: %v", err)
+	}
+	resp.Body.Close()
+
+	// Stand in for the reload's own request, arriving well before
+	// quitGraceDelay elapses.
+	getResp, err := http.Get(ts.URL + "/api/config")
+	if err != nil {
+		t.Fatalf("GET /api/config: %v", err)
+	}
+	getResp.Body.Close()
+
+	select {
+	case <-triggered:
+		t.Error("triggerQuit was called even though a follow-up request arrived")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

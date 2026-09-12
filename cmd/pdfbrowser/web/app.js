@@ -36,6 +36,11 @@ const fontSubCheckbox = document.getElementById("fontSubCheckbox");
 const statusTextEl = document.getElementById("statusText");
 const quitBtn = document.getElementById("quitBtn");
 
+// Only a page carrying the launch capability may stop pdfbrowser when it is
+// closed. Pages opened directly, including those started with -no-browser,
+// have no session and leave the server running.
+const browserSession = new URLSearchParams(window.location.search).get("session");
+
 // --- Status/diagnostics helpers ---------------------------------------
 
 function setStatus(text) {
@@ -296,4 +301,16 @@ quitBtn.addEventListener("click", async () => {
   prevBtn.disabled = true;
   nextBtn.disabled = true;
   fontSubCheckbox.disabled = true;
+});
+
+// pagehide fires both when this tab is actually closing and when it is
+// merely reloading (e.g. after editing this very file) or navigating
+// away - there is no client-side way to tell those apart. So this always
+// sends the beacon, and it is server.go's quitGraceDelay that tells them
+// apart in practice: a reload's next request (for "/", app.js, ...)
+// arrives well within that delay and cancels the pending quit, while an
+// actual close sends nothing further and lets it fire.
+window.addEventListener("pagehide", () => {
+  if (!browserSession) return;
+  navigator.sendBeacon("/api/browser-closed?session=" + encodeURIComponent(browserSession));
 });

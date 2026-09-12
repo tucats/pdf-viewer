@@ -39,7 +39,13 @@
 // openBrowser in browser.go) - this is a convenience, not a
 // requirement, so a platform this doesn't recognize (or a failure to
 // launch one) is not treated as an error; the printed URL is always
-// there as a fallback.
+// there as a fallback. Closing that tab or window then also stops the
+// server, exactly as clicking "Quit" would - see this function's own
+// browserSession and server.go's /api/browser-closed handler. That only
+// applies to the tab pdfbrowser itself opened, though: the printed URL
+// opened by hand, another tab, or -no-browser's whole run all leave the
+// server alone when closed, since there is then no single tab whose
+// closing should be allowed to mean "shut down."
 package main
 
 import (
@@ -48,6 +54,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"sync"
@@ -90,13 +97,28 @@ func run(port int, launchBrowser bool, pageScale float64, useSystemFonts bool) e
 	// When port was 0, the OS chose a free port for us; either way,
 	// listener.Addr() reports whichever port is actually in use.
 	actualPort := listener.Addr().(*net.TCPAddr).Port
-	url := fmt.Sprintf("http://127.0.0.1:%d", actualPort)
-	fmt.Printf("pdfbrowser listening on %s\n", url)
+	pageURL := fmt.Sprintf("http://127.0.0.1:%d", actualPort)
+	fmt.Printf("pdfbrowser listening on %s\n", pageURL)
 
+	browserSession := ""
 	if launchBrowser {
-		if err := openBrowser(url); err != nil {
+		// The token is only put in the URL given to a browser that this
+		// process launched. The page uses it to report when that browser
+		// tab is closed; URLs opened independently cannot stop the server.
+		browserSession = newBrowserSession()
+		browserURL, err := url.Parse(pageURL)
+		if err != nil {
+			return fmt.Errorf("building browser URL: %w", err)
+		}
+		query := browserURL.Query()
+		query.Set("session", browserSession)
+		browserURL.RawQuery = query.Encode()
+		pageURL = browserURL.String()
+
+		if err := openBrowser(pageURL); err != nil {
 			// Not fatal - see this file's package doc comment. The user
 			// already has the URL printed above to open by hand.
+			browserSession = ""
 			fmt.Fprintf(os.Stderr, "pdfbrowser: could not open a browser automatically: %v\n", err)
 		}
 	}
@@ -113,7 +135,7 @@ func run(port int, launchBrowser bool, pageScale float64, useSystemFonts bool) e
 	var quitOnce sync.Once
 	triggerQuit := func() { quitOnce.Do(func() { close(quit) }) }
 
-	httpServer := &http.Server{Handler: newMux(srv, triggerQuit)}
+	httpServer := &http.Server{Handler: newMux(srv, triggerQuit, browserSession)}
 
 	// httpServer.Serve blocks until the server stops, so it runs in its
 	// own goroutine; serveErr carries its result back to the select

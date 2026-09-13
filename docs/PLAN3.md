@@ -45,7 +45,7 @@ the capability matrix.
 
 ## Phase 19: Type 4 (PostScript calculator) functions
 
-**Status: In progress (19a-19c done; 19d not started).**
+**Status: Done (19a-19d complete).**
 
 PDF Functions (ISO 32000-1 7.10) have four representations; this
 project's `internal/function` package (built for PLAN.md's Phase 5)
@@ -431,3 +431,52 @@ appended in order, not rewritten later except to fix mistakes.
 - **Deferred to 19d** (unchanged): `docs/capability-matrix.md`'s
     Separation/DeviceN and Shading rows, and `testdata/fixtures/FIXTURES.md`'s
     entries for the two new fixtures.
+
+### Phase 19d: documentation — done (2026-09-13)
+
+- **`docs/capability-matrix.md`.** Added a new row, "PDF Functions
+    (`/FunctionType` 0, 2, 3, 4)", to the "Color spaces" table - the
+    matrix previously had no single place recording that all four
+    function types are implemented at all; that fact was only ever
+    stated as a parenthetical inside the Separation/DeviceN and Shading
+    rows' own Notes, in two different words, which is exactly the kind
+    of scattered-answer problem this document's own opening paragraph
+    says it exists to avoid. The new row is the one place documenting
+    the full Type 0/2/3/4 breakdown (mirroring `internal/function/
+    doc.go`'s package comment), the safety bounds Type 4 specifically
+    adds, and the fact that - since the specification defines exactly
+    four function types and this package now implements all of them -
+    there is no further function type left to add; any future Type
+    4-related work would extend how thoroughly it is exercised (more
+    real-world fixtures), not its Annex B operator coverage, which is
+    already complete. The Separation/DeviceN and Shading rows' own Notes
+    were trimmed to cross-reference the new row instead of re-stating
+    the same four-type breakdown a third and fourth time, while keeping
+    each row's own specific detail (the real-world "rich black"
+    motivation and `type4-tint-transform-fill.pdf` for Separation/
+    DeviceN; the non-monotonic-curve rationale and
+    `type4-axial-shading.pdf` for Shading). Both rows' Target phase
+    columns already read "Phase 5, 19a-19c" from 19c's own commit.
+- **`testdata/fixtures/FIXTURES.md`.** Added table rows for
+    `type4-tint-transform-fill.pdf` (immediately after `separation-fill.pdf`,
+    the fixture it most directly parallels) and `type4-axial-shading.pdf`
+    (immediately after `axial-shading.pdf`), each following this file's
+    existing one-row-per-fixture convention: what the fixture contains,
+    which Type 4 call site it exercises, and why its specific numbers
+    were chosen (the fallback-distinguishing tints for the tint-transform
+    fixture; the no-fallback-at-all shading call site for the other).
+    `testdata/renderrefs/`'s own "Rendered reference images" section
+    needed no changes - it already describes the golden-PNG directory
+    generically rather than enumerating fixtures by name.
+- **Verification.** `go build ./...`, `go vet ./...`, `gofmt -l .`, and
+    `go test ./...` all still pass clean (docs-only change; no Go source
+    touched in this sub-phase).
+
+**Phase 19 is now complete (19a-19d).** Exit criteria met: Type 4 tint
+transforms and shading functions both evaluate correctly rather than
+falling back or failing (19a-19b, confirmed end to end by 19c's
+fixtures); the trigger file's `CS1` resolves without a diagnostic, and
+all 80 of its pages render with zero diagnostics recorded (19c); the
+full test suite, `go vet`, `gofmt`, and fuzzing all pass clean; and every
+capability-matrix/fixture-documentation obligation the phase took on is
+now recorded (19d).

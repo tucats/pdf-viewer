@@ -482,6 +482,17 @@ const (
 // how this function's own end is detected without needing an explicit
 // end-of-Subrs keyword (the real format has none; Subrs is simply
 // followed immediately by /CharStrings).
+//
+// Every real font also writes one more token right after each entry's
+// binary data - conventionally "NP" (bound to "noaccess put"), though
+// "|" is also common - before the next "dup". That closing token is
+// consumed and ignored here; without this, the token loop above would
+// see it instead of "dup" on the very next iteration and conclude
+// (wrongly) that entry 0 was the only one Subrs had, leaving every
+// other index nil and silently turning every glyph whose charstring
+// calls one of them into a placeholder box - the shape of bug this
+// function's own tolerant design otherwise looks like it should have
+// ruled out.
 func parseType1Subrs(sc *type1Scanner, lenIV int) ([][]byte, bool) {
 	n, ok := sc.nextInt()
 	if !ok || n < 0 || n > maxType1Subrs {
@@ -521,6 +532,14 @@ func parseType1Subrs(sc *type1Scanner, lenIV int) ([][]byte, bool) {
 		}
 		if idx >= 0 && idx < len(subrs) {
 			subrs[idx] = decryptType1Charstring(raw, lenIV)
+		}
+
+		// Consume this entry's closing token (see doc comment above) -
+		// unless it turns out to already be the next "dup", which means
+		// this font omitted it.
+		save = sc.pos
+		if tok, ok := sc.next(); !ok || tok == "dup" {
+			sc.pos = save
 		}
 	}
 }

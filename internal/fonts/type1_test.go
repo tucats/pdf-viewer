@@ -137,6 +137,48 @@ func TestType1_CallsubrRoundTrip(t *testing.T) {
 	}
 }
 
+// TestType1_MultipleSubrs exercises a glyph calling the *last* of
+// several local subroutines - regression coverage for a parseType1Subrs
+// bug where the loop reading "dup <idx> <len> RD <binary> NP" entries
+// stopped after the first one: it went looking for the next entry's
+// "dup" token immediately after readBinary, without first consuming
+// that entry's own trailing "NP" closer, so it always found "NP" (not
+// "dup") and quit right there - leaving every Subrs index but 0 nil.
+// Real-world fonts with more than one local subroutine (essentially all
+// of them) hit this on every glyph using any subroutine but the first;
+// this project's own EncodeType1FontProgram fixture writes that same
+// "NP" closer per entry (see type1_encode.go), so a single-subr test
+// like TestType1_CallsubrRoundTrip above could never have caught it -
+// only a second entry exposes the early-return bug.
+func TestType1_MultipleSubrs(t *testing.T) {
+	subr0 := new(t1).num(100).num(0).op(t1Rlineto).op(t1Return).bytes()
+	subr1 := new(t1).num(0).num(100).op(t1Rlineto).op(t1Return).bytes()
+
+	glyph := new(t1)
+	glyph.num(0).num(0).op(t1Hsbw)
+	glyph.num(0).num(0).op(t1Rmoveto)
+	glyph.num(1).op(t1Callsubr) // calls subr 1: +0,+100
+	glyph.op(t1Closepath)
+	glyph.op(t1Endchar)
+
+	font := buildTestType1Font(t, []Type1TestGlyph{
+		{Name: "A", Charstring: glyph.bytes()},
+	}, [][]byte{subr0, subr1})
+
+	gid, ok := font.GIDForRune('A')
+	if !ok {
+		t.Fatalf("GIDForRune('A') failed")
+	}
+	path, ok := font.GlyphOutline(gid)
+	if !ok {
+		t.Fatalf("GlyphOutline(%d) failed - subr 1 was likely parsed as nil", gid)
+	}
+	minX, minY, maxX, maxY := pathBounds(t, path)
+	if minX != 0 || minY != 0 || maxX != 0 || maxY != 100 {
+		t.Errorf("bounds = (%v,%v)-(%v,%v), want (0,0)-(0,100)", minX, minY, maxX, maxY)
+	}
+}
+
 // TestType1_Flex exercises the flex OtherSubrs idiom (opCallothersubr's
 // doc comment spells out the exact bytecode sequence this builds): two
 // curves, drawn via seven rmoveto calls instead of ordinary curveto

@@ -45,7 +45,7 @@ the capability matrix.
 
 ## Phase 19: Type 4 (PostScript calculator) functions
 
-**Status: In progress (19a done; 19b-19d not started).**
+**Status: In progress (19a-19b done; 19c-19d not started).**
 
 PDF Functions (ISO 32000-1 7.10) have four representations; this
 project's `internal/function` package (built for PLAN.md's Phase 5)
@@ -318,3 +318,49 @@ appended in order, not rewritten later except to fix mistakes.
     golden PNGs and re-validation against the trigger file,
     `2014ElectionManual-stripped.pdf` (19c); `docs/capability-matrix.md`
     and `FIXTURES.md` updates (19d).
+
+### Phase 19b: wire into `internal/function.Parse` — done (2026-09-13)
+
+- **`internal/function/function.go`.** `parseSingle`'s `case 4:` no
+    longer returns `pdferror.Unsupportedf`; it now mirrors Type 0's own
+    stream handling exactly (a Type 4 function's program text is its
+    stream data, just as Type 0's samples are): if `stream` is nil (the
+    caller was handed a bare dictionary, not a `syntax.Stream`) it
+    returns a `pdferror.Malformedf` naming the missing stream, otherwise
+    it calls the already-existing `parseType4(r, dict, *stream)` from
+    19a. No changes were needed at either real call site
+    (`internal/image/colorspace.go`'s `resolveSeparationOrDeviceN` or
+    `internal/content/shading.go`'s `doShading`/`resolvePatternPaint`) -
+    both already go through `function.Parse` uniformly and treat
+    whatever `Function` comes back identically regardless of concrete
+    type, confirming the `Function` interface abstraction from Phase 5
+    did its job.
+- **Doc comments updated** to stop describing Type 4 as unimplemented:
+    `internal/function/doc.go`'s package comment now lists Type 4
+    alongside Types 0/2/3 as implemented (with a short description of
+    its operator scope and typical real-world use) and explains that an
+    out-of-range `/FunctionType` is malformed rather than merely
+    unsupported; `internal/content/colorspace.go`'s `setColorSpace` doc
+    comment's example of an "unresolvable" color space feature was
+    swapped from "a Type 4 tint transform function" (no longer true) to
+    "an /Indexed color space whose base is itself /Indexed" (still an
+    actual `pdferror.Unsupportedf` case, in `internal/image/
+    colorspace.go`).
+- **Tests.** `internal/function/function_test.go`'s
+    `TestParseType4IsUnsupported` (asserted the old, now-wrong,
+    behavior) was replaced with two tests exercising `Parse`'s own
+    top-level dispatch rather than `parseType4` directly (which
+    `type4_test.go`'s existing `mustParseType4` helper already covers
+    heavily): `TestParseDispatchesType4ThroughStream` builds a Type 4
+    `syntax.Stream` (domain `[0 1]`, range `[0 1]`, program
+    `{ 1 exch sub }`) and confirms `Parse` reaches a working `Function`
+    end to end (`Eval([0.25])` returns `[0.75]`); `TestParseType4RequiresAStream`
+    mirrors the existing `TestParseType0RequiresAStream` pattern,
+    confirming a bare Type 4 dictionary (no stream) is rejected as
+    malformed rather than panicking on a nil-pointer dereference. Full
+    existing suite (`go test ./...`), `go vet ./...`, and `gofmt -l`
+    all pass clean; no fixtures changed in this sub-phase (that is
+    19c).
+- **Deferred to 19c-19d** (unchanged): fixtures/golden-PNGs and
+    trigger-file re-validation (19c); capability-matrix/FIXTURES.md
+    updates (19d).

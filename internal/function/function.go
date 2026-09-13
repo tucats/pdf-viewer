@@ -65,9 +65,10 @@ func Parse(r Resolver, obj syntax.Object) (Function, error) {
 }
 
 // parseSingle dispatches on dict's required /FunctionType entry. stream
-// is non-nil when obj was itself a syntax.Stream (as a Type 0 function's
-// sample data must be - see type0.go); it is nil for a plain-dictionary
-// function (Type 2 and Type 3 carry no sample data of their own, only
+// is non-nil when obj was itself a syntax.Stream, which both Type 0 (its
+// sample data - see type0.go) and Type 4 (its PostScript-calculator
+// program text - see type4.go) require; it is nil for a plain-dictionary
+// function (Type 2 and Type 3 carry no stream data of their own, only
 // numbers and nested function objects).
 func parseSingle(r Resolver, dict syntax.Dictionary, stream *syntax.Stream) (Function, error) {
 	ft, ok := dict["FunctionType"].(syntax.Integer)
@@ -85,7 +86,10 @@ func parseSingle(r Resolver, dict syntax.Dictionary, stream *syntax.Stream) (Fun
 	case 3:
 		return parseType3(r, dict)
 	case 4:
-		return nil, pdferror.Unsupportedf("Type 4 (PostScript calculator) function")
+		if stream == nil {
+			return nil, pdferror.Malformedf("Type 4 (PostScript calculator) function has no program data stream")
+		}
+		return parseType4(r, dict, *stream)
 	default:
 		return nil, pdferror.Malformedf("function /FunctionType %d is not one of 0, 2, 3, 4", ft)
 	}

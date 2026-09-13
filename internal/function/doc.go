@@ -22,8 +22,8 @@
 // separate so that a function used many times (every pixel of a
 // gradient fill, for example) only has to be parsed once.
 //
-// This package implements the three function types that occur
-// overwhelmingly in real-world PDF content:
+// This package implements all four function types the specification
+// defines:
 //
 //   - Type 0 (sampled): a lookup table of pre-computed output samples
 //     over a regular input grid, with multilinear interpolation between
@@ -36,16 +36,19 @@
 //     several subfunctions end to end over disjoint subdomains, letting a
 //     shading or tint transform describe a multi-stop gradient - see
 //     type3.go.
+//   - Type 4 (PostScript calculator): a small PostScript-like calculator
+//     language embedded directly in a function stream (arithmetic, stack,
+//     and conditional operators only - no loops, variables, or named
+//     procedures), most often seen as a spot-color "rich black" tint
+//     transform or a shading's custom (non-power-curve) color ramp - see
+//     type4.go.
 //
-// Type 4 (a small PostScript-like calculator language embedded directly
-// in a function stream, with its own arithmetic/stack/conditional
-// operators) is not implemented: it would need an actual expression
-// interpreter that shares essentially no code with the other three
-// types, and it is materially rarer in real-world content than the other
-// three combined. Parse returns an error wrapping pdferror.ErrUnsupported
-// that names it explicitly - this project's usual policy of
-// distinguishing "malformed" from "recognized but not implemented" -
-// rather than silently miscomputing an output or panicking.
+// A function dictionary naming a /FunctionType this package does not
+// recognize (anything other than 0, 2, 3, or 4) is rejected as malformed,
+// since ISO 32000-1 does not define one - this project's usual policy of
+// distinguishing "malformed" from "recognized but not implemented" (see
+// pdferror.ErrUnsupported for the latter, used elsewhere in this project
+// for features this package's callers themselves have not implemented).
 //
 // Every Eval implementation in this package is defensive about the
 // arithmetic a hostile or malformed function dictionary can trigger

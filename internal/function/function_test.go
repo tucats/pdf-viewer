@@ -43,11 +43,45 @@ func TestParseUnknownFunctionTypeIsMalformed(t *testing.T) {
 	}
 }
 
-func TestParseType4IsUnsupported(t *testing.T) {
-	dict := syntax.Dictionary{"FunctionType": syntax.Integer(4), "Domain": numArray(0, 1)}
+// TestParseDispatchesType4ThroughStream confirms Parse's own top-level
+// dispatch (not just parseType4 called directly, which type4_test.go's
+// mustParseType4 already exercises heavily) reaches a Type 4 function
+// when handed a syntax.Stream - the shape a real PDF /Function entry
+// always uses for Type 4, since its program text lives in the stream's
+// own data.
+func TestParseDispatchesType4ThroughStream(t *testing.T) {
+	dict := syntax.Dictionary{
+		"FunctionType": syntax.Integer(4),
+		"Domain":       numArray(0, 1),
+		"Range":        numArray(0, 1),
+	}
+	stream := syntax.Stream{Dict: dict, Raw: []byte("{ 1 exch sub }")}
+	fn, err := Parse(&fakeResolver{}, stream)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	out, err := fn.Eval([]float64{0.25})
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	if len(out) != 1 || out[0] != 0.75 {
+		t.Fatalf("Eval(0.25) = %v, want [0.75]", out)
+	}
+}
+
+// TestParseType4RequiresAStream mirrors TestParseType0RequiresAStream:
+// like Type 0, a Type 4 function's content (its PostScript-calculator
+// program text) lives in a stream, so Parse must reject a bare Type 4
+// dictionary with nowhere for that text to come from.
+func TestParseType4RequiresAStream(t *testing.T) {
+	dict := syntax.Dictionary{
+		"FunctionType": syntax.Integer(4),
+		"Domain":       numArray(0, 1),
+		"Range":        numArray(0, 1),
+	}
 	_, err := Parse(&fakeResolver{}, dict)
-	if !errors.Is(err, pdferror.ErrUnsupported) {
-		t.Fatalf("Parse of a Type 4 function: got %v, want an error wrapping ErrUnsupported", err)
+	if !errors.Is(err, pdferror.ErrMalformed) {
+		t.Fatalf("Parse of a Type 4 dictionary with no stream: got %v, want an error wrapping ErrMalformed", err)
 	}
 }
 

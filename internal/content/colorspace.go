@@ -34,15 +34,16 @@ import (
 // colorForOperandsWithSpace).
 //
 // An unresolvable name - no /Resources, no /ColorSpace entry, or a color
-// space using a feature this project does not implement (a Type 4 tint
-// transform function, for instance) - is tolerated exactly like every
-// other unresolvable resource name in this package (see, for example,
-// interpret.go's lookupXObject or text.go's lookupFont): st's color
-// space is simply left nil, and sc/scn's own component-count fallback
-// still produces a reasonable color for the overwhelmingly common
-// DeviceGray/RGB/CMYK case. "/Pattern" (whether named as a bare literal,
-// which the specification permits directly for "cs"/"CS" without a
-// /Resources lookup at all, or - much less commonly - as a
+// space using a feature this project does not implement (an /Indexed
+// color space whose base is itself /Indexed, for instance) - is tolerated
+// exactly like every other unresolvable resource name in this package
+// (see, for example, interpret.go's lookupXObject or text.go's
+// lookupFont): st's color space is simply left nil, and sc/scn's own
+// component-count fallback still produces a reasonable color for the
+// overwhelmingly common DeviceGray/RGB/CMYK case. "/Pattern" (whether
+// named as a bare literal, which the specification permits directly for
+// "cs"/"CS" without a /Resources lookup at all, or - much less
+// commonly - as a
 // /Resources-registered name resolving to a bare "/Pattern" array) is
 // recorded as patternColorSpaceSelected rather than as a resolved
 // ColorSpace, since it selects an entirely different mode for

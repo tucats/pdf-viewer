@@ -89,7 +89,7 @@ func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	// "what Unicode text does this code mean" for a Type0 font too (see
 	// Font.TextForCode) - but wiring that answer into a substitution
 	// attempt here is a separate, not-yet-implemented follow-on
-	// (docs/PLAN2.md's backlog: "Type 0/CID font substitution"), not
+	// (docs/PLAN-V2.md's backlog: "Type 0/CID font substitution"), not
 	// automatically unlocked by Phase 10 alone: a CID is otherwise only
 	// ever meaningful as an index into the *specific* font program that
 	// originally defined it (its own glyph ordering, or - per this

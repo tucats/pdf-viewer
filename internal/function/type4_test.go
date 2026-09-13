@@ -318,7 +318,7 @@ func TestType4NestedIfElseComputesSign(t *testing.T) {
 }
 
 // TestType4RichBlackTintTransform exercises the exact real-world pattern
-// that motivated this phase (see docs/PLAN3.md's Phase 19): a single
+// that motivated this phase (see docs/PLAN-V3.md's Phase 19): a single
 // spot-color tint value complemented into four identical CMYK components
 // via "1 exch sub" followed by three "dup"s, matching a DeviceN color
 // space's tint-transform function.

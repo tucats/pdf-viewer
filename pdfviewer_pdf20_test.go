@@ -5,13 +5,13 @@ import (
 	"testing"
 )
 
-// This file is Phase 16's PDF 2.0 verification (docs/PLAN2.md): three
+// This file is Phase 16's PDF 2.0 verification (docs/PLAN-V2.md): three
 // fixtures declaring a genuine "%PDF-2.0" header (see
 // tools/genfixtures/main.go's buildPDF20ClassicXref, buildPDF20XrefStream
 // and buildPDF20EncryptedAES256 doc comments), each otherwise byte-for-
 // byte identical to an existing 1.7-headered fixture this project's
 // tests already prove renders correctly. Passing here confirms what
-// docs/PLAN.md's "Supported PDF versions" section predicted but had not
+// docs/PLAN-V1.md's "Supported PDF versions" section predicted but had not
 // actually checked against a real 2.0-labeled file: this project's
 // parsing and rendering code never branches on the header's declared
 // version number at all (only its "%PDF-" prefix - see

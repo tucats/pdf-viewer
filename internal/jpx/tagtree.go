@@ -49,7 +49,7 @@ package jpx
 // (jpx.js's TagTree/InclusionTree classes, Apache License 2.0 - one of
 // very few independent, real-world-proven implementations of this exact
 // corner of the standard), the same "write from the spec, cross-check
-// against a proven implementation" approach docs/PLAN2.md's Phase 13
+// against a proven implementation" approach docs/PLAN-V2.md's Phase 13
 // entry used for mesh shading's bit-packing rules. It is restructured
 // here into explicit Go fields (a "settled" bool slice) rather than
 // pdf.js's JavaScript sentinel values (undefined, and the reserved

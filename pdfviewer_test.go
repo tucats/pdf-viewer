@@ -105,7 +105,7 @@ func TestOpenFileTruncatedIsMalformed(t *testing.T) {
 
 // TestOpenFileEncryptedIsRejected is the public-API-level regression
 // test for this package's "password handling" decision (see errors.go's
-// ErrEncrypted doc comment and docs/PLAN2.md's Phase 7): encrypted.pdf's
+// ErrEncrypted doc comment and docs/PLAN-V2.md's Phase 7): encrypted.pdf's
 // /Encrypt dictionary uses placeholder, non-byte-accurate /O and /U
 // values (see tools/genfixtures's buildEncrypted) that do not validate
 // under an empty password, so - like any document that genuinely
@@ -125,7 +125,7 @@ func TestOpenFileEncryptedIsRejected(t *testing.T) {
 }
 
 // TestOpenFileEncryptedEmptyPasswordSucceeds is the public-API-level
-// regression test for Phase 7a (see docs/PLAN2.md): a document
+// regression test for Phase 7a (see docs/PLAN-V2.md): a document
 // genuinely protected with the Standard security handler, but whose
 // user password is empty - the common "permissions-only" case, such as
 // many bank statements and print-to-PDF output - must open successfully
@@ -158,7 +158,7 @@ func TestOpenFileEncryptedEmptyPasswordSucceeds(t *testing.T) {
 const encryptedPasswordFixturePassword = "correct horse battery staple"
 
 // TestOpenFileWithPasswordSucceedsOrFails is the public-API-level
-// regression test for Phase 7b (see docs/PLAN2.md): WithPassword must
+// regression test for Phase 7b (see docs/PLAN-V2.md): WithPassword must
 // let Open/OpenFile open a document that genuinely requires a non-empty
 // password when given the correct one, and must still fail with an
 // error wrapping ErrEncrypted given the wrong password or none -

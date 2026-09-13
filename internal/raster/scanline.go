@@ -295,7 +295,7 @@ func intersectSpanLists(a, b []span) []span {
 // coverage values does not generally equal the coverage of their actual
 // geometric overlap - two anti-aliased circles whose edges cross
 // partway through the same pixel are the clearest case where it visibly
-// differs (see docs/PLAN2.md's Phase 15b).
+// differs (see docs/PLAN-V2.md's Phase 15b).
 //
 // This function instead computes, at each sampled sub-scanline (see
 // subOffsets), the "inside" x-spans of path and of every clip

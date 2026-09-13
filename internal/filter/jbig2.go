@@ -9,7 +9,7 @@ import (
 
 // This file implements decodeJBIG2, reversing PDF's JBIG2Decode filter,
 // and the segment walk every other jbig2*.go file hangs off - see
-// docs/PLAN2.md's Phase 8 for the scope decisions behind it.
+// docs/PLAN-V2.md's Phase 8 for the scope decisions behind it.
 //
 // # How the pieces fit together
 //

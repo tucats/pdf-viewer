@@ -278,7 +278,7 @@ func buildMalformedBadXrefOffset() []byte {
 // *trailer* to name an /Encrypt entry, since that is all Open inspects
 // before attempting (and, because /O and /U are fake, failing) to
 // validate an empty password against it. Since Phase 7a (see
-// docs/PLAN2.md) added real decryption, this fixture now exercises a
+// docs/PLAN-V2.md) added real decryption, this fixture now exercises a
 // *different* case than it originally did: not "encryption is entirely
 // unimplemented", but "this document's /Encrypt dictionary does not
 // validate under an empty password" - still, correctly, rejected with
@@ -321,7 +321,7 @@ func hexString(b []byte) string {
 
 // buildEncryptedFilledRect returns a real, spec-correct Standard
 // Security Handler-encrypted PDF - decryptable by internal/crypt
-// (Phase 7a; see docs/PLAN2.md) using an empty user password - built
+// (Phase 7a; see docs/PLAN-V2.md) using an empty user password - built
 // around the same 100x100 filled-rectangle content buildFilledRect
 // uses, so a test can decode this fixture and compare its rendered
 // output against that unencrypted fixture's to confirm decryption
@@ -651,9 +651,9 @@ func buildObjectStream() []byte {
 
 // --- Phase 16: PDF 2.0 verification -----------------------------------
 //
-// docs/PLAN2.md's Phase 16 is not "add 2.0 support" so much as "prove
+// docs/PLAN-V2.md's Phase 16 is not "add 2.0 support" so much as "prove
 // the 1.7-targeting code above already handles a 2.0 file correctly" -
-// this project's own docs/PLAN.md already predicted that would be true,
+// this project's own docs/PLAN-V1.md already predicted that would be true,
 // since PDF 2.0 (ISO 32000-2) is a clarified superset of 1.7 for the
 // structural/content features this project implements, and nothing in
 // this codebase's parsing or rendering path ever branches on the file
@@ -993,7 +993,7 @@ func buildImageJPEG() []byte {
 
 // buildImageJBIG2 returns a single 100x100-point page that paints a
 // referenced image XObject encoded with JBIG2Decode - the filter scanned
-// black-and-white pages commonly use (see docs/PLAN2.md's Phase 8). The
+// black-and-white pages commonly use (see docs/PLAN-V2.md's Phase 8). The
 // image is a 32x32 bilevel bitmap whose top-left quadrant is black and
 // whose remaining three quadrants are white, inside a one-pixel black
 // border.
@@ -1048,7 +1048,7 @@ func buildImageJBIG2() []byte {
 // buildImageJBIG2Text returns a single 100x100-point page that paints a
 // referenced image XObject encoded with JBIG2Decode in *symbol mode* -
 // the form scan-to-PDF and OCR pipelines actually emit, and the one
-// docs/PLAN2.md's Phase 8e added support for. Where buildImageJBIG2's
+// docs/PLAN-V2.md's Phase 8e added support for. Where buildImageJBIG2's
 // fixture codes its pixels directly (a generic region), this one codes a
 // symbol dictionary of two glyph shapes and a text region placing
 // instances of them, with the dictionary living in a separate
@@ -1122,7 +1122,7 @@ func buildImageJBIG2Text() []byte {
 }
 
 // buildImageJPX returns a single 100x100-point page that paints a
-// referenced image XObject encoded with JPXDecode (see docs/PLAN2.md's
+// referenced image XObject encoded with JPXDecode (see docs/PLAN-V2.md's
 // Phase 14): a 32x32 single-component (grayscale) bitmap, four distinct
 // gray levels in each quadrant plus a black one-pixel border, with an
 // explicit /ColorSpace /DeviceGray /BitsPerComponent 8 - the "ordinary,
@@ -1320,7 +1320,7 @@ func buildRotatedPage() []byte {
 // 10-point-wide ring of red between CropBox and BleedBox, and so on
 // inward, with solid yellow filling all of ArtBox.
 //
-// This is Phase 16's page-box-selection fixture (docs/PLAN2.md): a test
+// This is Phase 16's page-box-selection fixture (docs/PLAN-V2.md): a test
 // rendering this fixture with RenderOptions.Box set to each of
 // CropBoxPage (the default)/MediaBoxPage/BleedBoxPage/TrimBoxPage/
 // ArtBoxPage in turn can confirm both that the rendered image's pixel
@@ -1381,7 +1381,7 @@ func buildSeparationFill() []byte {
 
 // buildType4TintTransformFill returns a single 100x100-point page whose
 // /Resources /ColorSpace declares /CS0 as a [/DeviceN [/Black] /DeviceCMYK
-// <Type4 function>] color space - Phase 19's (see docs/PLAN3.md) fixture
+// <Type4 function>] color space - Phase 19's (see docs/PLAN-V3.md) fixture
 // proving the "cs"/"scn" content-stream call site (internal/content/
 // colorspace.go's setColorSpace/colorForOperandsWithSpace) actually
 // *evaluates* a Type 4 tint transform end to end, rather than falling back
@@ -1494,7 +1494,7 @@ func buildAxialShading() []byte {
 // exactly like buildAxialShading above (a named /ShadingType 2 shading over
 // DeviceRGB, painted unclipped-to-a-shape via "sh" across the whole page),
 // but with a Type 4 (PostScript calculator) /Function in place of
-// buildAxialShading's Type 2 one - Phase 19's (see docs/PLAN3.md) fixture
+// buildAxialShading's Type 2 one - Phase 19's (see docs/PLAN-V3.md) fixture
 // for the *other* real call site Type 4 needed to reach,
 // internal/content/shading.go's doShading/resolvePatternPaint, which
 // (unlike the content-stream color-space path above) had no fallback at

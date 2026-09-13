@@ -32,7 +32,7 @@ import (
 // specification text alone, since getting this wrong produces a mesh
 // that decodes without error but paints complete garbage - exactly the
 // kind of mistake round-trip self-testing cannot catch (see 8a's own
-// doc comment in docs/PLAN2.md for the general shape of that risk). Only
+// doc comment in docs/PLAN-V2.md for the general shape of that risk). Only
 // the bit-layout rules and patch/flag arithmetic were consulted; no
 // pdf.js source was copied, and this file's Go implementation, types, and
 // structure are this project's own.
@@ -535,7 +535,7 @@ type meshPatch struct {
 // This function's exact index arithmetic for flags 1-3 was cross-checked
 // against pdf.js (see this file's own doc comment) rather than derived
 // from the specification's prose alone, for the same reason 13b's own
-// entry in docs/PLAN2.md gives: a transposition here would silently
+// entry in docs/PLAN-V2.md gives: a transposition here would silently
 // produce a plausible-but-wrong mesh, not an error.
 func applyPatchBoundary(patch *meshPatch, prev *meshPatch, flag uint32, newPts []point2D, newCols []graphics.Color) error {
 	switch flag {

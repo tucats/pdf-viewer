@@ -8,7 +8,7 @@ import (
 	"github.com/tucats/pdf-viewer/internal/graphics"
 )
 
-// This file implements docs/PLAN2.md's Phase 11: enough of Adobe's
+// This file implements docs/PLAN-V2.md's Phase 11: enough of Adobe's
 // original "Type 1" font format - and, within it, the "Type 1
 // Charstring" instruction set that actually draws each glyph's outline -
 // to extract real glyph outlines from a Type 1 font program. This is the

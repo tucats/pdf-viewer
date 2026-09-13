@@ -173,7 +173,7 @@ func TestRenderFlateContentMatchesPlainContent(t *testing.T) {
 }
 
 // TestRenderEncryptedMatchesPlainContent is this package's end-to-end,
-// whole-page regression test for Phase 7a (see docs/PLAN2.md): opening
+// whole-page regression test for Phase 7a (see docs/PLAN-V2.md): opening
 // and rendering a page from a Standard Security Handler-encrypted
 // document (empty user password) must produce pixel-identical output to
 // rendering the same content unencrypted, since decryption happens
@@ -200,7 +200,7 @@ func TestRenderEncryptedMatchesPlainContent(t *testing.T) {
 
 // TestRenderEncryptedWithPasswordMatchesPlainContent is
 // TestRenderEncryptedMatchesPlainContent's Phase 7b counterpart (see
-// docs/PLAN2.md): a document whose user password is genuinely
+// docs/PLAN-V2.md): a document whose user password is genuinely
 // non-empty must, given the correct password via WithPassword, render
 // pixel-identically to the same unencrypted content too - decryption
 // happening correctly is not by itself enough evidence that the right
@@ -232,7 +232,7 @@ func TestRenderTilingPatternFill(t *testing.T) {
 }
 
 // TestRenderType4TintTransformFill exercises Phase 19's (see
-// docs/PLAN3.md) Type 4 (PostScript calculator) function support through
+// docs/PLAN-V3.md) Type 4 (PostScript calculator) function support through
 // the "cs"/"scn" content-stream call site: tools/genfixtures's
 // buildType4TintTransformFill doc comment works out, by hand, the exact
 // RGB each of its two rectangles' DeviceN tints must produce once passed

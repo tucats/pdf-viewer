@@ -67,5 +67,5 @@
 // it did before this package existed, which is always this project's
 // fallback whenever a real Acrobat-equivalent algorithm is out of scope
 // (see, for example, internal/shading's Type 1/4-7 gap in
-// docs/PLAN2.md's Phase 13).
+// docs/PLAN-V2.md's Phase 13).
 package acroform

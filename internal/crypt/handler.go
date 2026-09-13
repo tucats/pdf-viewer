@@ -101,7 +101,7 @@ type Handler struct {
 // attempt to also try password as an *owner* password (which would
 // require unwrapping /O, ISO 32000-1 Algorithm 7, to recover the user
 // password it was built from). This project's own scope decision (see
-// docs/PLAN2.md's Phase 7) is that a document's user password is what a
+// docs/PLAN-V2.md's Phase 7) is that a document's user password is what a
 // caller supplies to open a file - if a document's user password is
 // empty (Phase 7a's case), New already finds that via password == "".
 //

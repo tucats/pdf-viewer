@@ -1,6 +1,6 @@
 # PLAN2: Post-v1 capability expansion
 
-`docs/PLAN.md`'s Phase 0-6 plan is complete (see its Progress Log). Every
+`docs/PLAN-V1.md`'s Phase 0-6 plan is complete (see its Progress Log). Every
 row in `docs/CAPABILITY-MATRIX.md` that was "Not started" or "Not
 scheduled" at that point was a deliberate, documented deferral, not an
 oversight - see each phase's own "What's carried forward" note and the
@@ -613,14 +613,14 @@ frequency estimate.
     structure only, no rendering effect in this project's scope.
 - **Annotation/form interactivity, JavaScript actions, PDF creation or
     editing** - standing non-goals, not deferred work; see
-    `docs/PLAN.md`'s "Non-goals for the Initial Release" and
+    `docs/PLAN-V1.md`'s "Non-goals for the Initial Release" and
     `docs/CAPABILITY-MATRIX.md`'s "Explicit non-goals" section. Listed
     here only so this document is a complete answer to "what's not
     planned and why," not because they are candidates to schedule later.
 
 ## How to use this document
 
-Treat it like `docs/PLAN.md`: update a phase's status and add a Progress
+Treat it like `docs/PLAN-V1.md`: update a phase's status and add a Progress
 Log entry (mirroring PLAN.md's own format) as work actually lands, and
 update `docs/CAPABILITY-MATRIX.md`'s corresponding rows in the same
 change - a code change not reflected in the matrix is incomplete, per
@@ -631,7 +631,7 @@ estimate, not a commitment independent of evidence.
 
 ## Progress Log
 
-This section mirrors `docs/PLAN.md`'s own Progress Log: updated at the
+This section mirrors `docs/PLAN-V1.md`'s own Progress Log: updated at the
 end of each phase (or sub-phase) with what was actually built, appended
 in order, not rewritten later except to fix mistakes.
 
@@ -710,7 +710,7 @@ in order, not rewritten later except to fix mistakes.
 
 - **Password-input API.** Added `WithPassword(string)` to the root
     package's `OpenOption`s (options.go), matching the shape
-    `docs/PLAN.md`'s Draft Public API section had sketched. It threads
+    `docs/PLAN-V1.md`'s Draft Public API section had sketched. It threads
     down through a new, parallel `internal/parser.OpenOption`/
     `internal/parser.WithPassword` (parser.go) - `internal/parser.Open`
     gained a `opts ...OpenOption` parameter, backward compatible with
@@ -1184,7 +1184,7 @@ in order, not rewritten later except to fix mistakes.
 - **`internal/content/text_extract.go` (new): `ExtractText`.** A
     genuinely separate, much smaller interpreter from `interpret.go`'s
     text-*painting* one - not a mode flag threaded through it - per
-    `docs/PLAN.md`'s original Phase 4 plan to keep extraction separate
+    `docs/PLAN-V1.md`'s original Phase 4 plan to keep extraction separate
     from painting. It understands only `q`/`Q`/`cm` (for the CTM,
     reusing `graphics.Stack`/`graphics.State` directly for free push/pop
     of the seven text-state fields already living there) and the
@@ -2231,7 +2231,7 @@ in order, not rewritten later except to fix mistakes.
     literal substring `"%PDF-"` in a file's first 1024 bytes - it never
     parses or stores a version *number* anywhere, and no other code in
     this module branches on one either. This confirms, by construction
-    rather than by argument, exactly what `docs/PLAN.md`'s "Supported PDF
+    rather than by argument, exactly what `docs/PLAN-V1.md`'s "Supported PDF
     versions" section predicted but had not checked: a genuinely
     `%PDF-2.0`-headered file exercises the identical code path a
     `%PDF-1.7` file does, for every structural and content feature this
@@ -2274,7 +2274,7 @@ in order, not rewritten later except to fix mistakes.
     `docs/CAPABILITY-MATRIX.md`'s PDF versions row updated to Partial
     (from Not started), recording exactly this: structural compatibility
     verified, `/AF` still a documented gap, and this project's formal
-    supported-version-range statement in `docs/PLAN.md` intentionally
+    supported-version-range statement in `docs/PLAN-V1.md` intentionally
     left as 1.4-1.7 (2.0 compatibility is now an observed, tested fact,
     not a promoted target - revisit if a real PDF 2.0-only feature is
     ever requested).

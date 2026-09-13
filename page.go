@@ -70,7 +70,7 @@ type Page interface {
 	// comment), together with its baseline position and advance width in
 	// the same page-point coordinate system Bounds reports.
 	//
-	// Text is Phase 10's own capability (docs/PLAN2.md), deliberately
+	// Text is Phase 10's own capability (docs/PLAN-V2.md), deliberately
 	// kept separate from Render/Thumbnail per the README's original
 	// Phase 4 plan ("keep text extraction as a separate capability from
 	// text painting"): it does not rasterize anything, interprets only

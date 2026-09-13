@@ -73,7 +73,7 @@ import (
 // doesn't implement.
 //
 // This same grammar (and this same parser) is what Phase 10's
-// /ToUnicode parsing is expected to reuse, per docs/PLAN2.md's Phase 9
+// /ToUnicode parsing is expected to reuse, per docs/PLAN-V2.md's Phase 9
 // entry - a /ToUnicode CMap uses "beginbfrange"/"beginbfchar" instead of
 // "begincidrange"/"begincidchar" and maps to Unicode strings instead of
 // CIDs, but the codespacerange and usecmap machinery is identical.

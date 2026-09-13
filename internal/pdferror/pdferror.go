@@ -38,7 +38,7 @@ var (
 
 	// ErrEncrypted indicates that a document's trailer declares an
 	// /Encrypt dictionary that this project could not open. Since Phase
-	// 7 (see docs/PLAN2.md and internal/crypt's package doc comment), the
+	// 7 (see docs/PLAN-V2.md and internal/crypt's package doc comment), the
 	// Standard security handler is implemented for both an empty user
 	// password (a document protected only by an owner password -
 	// permissions restrictions with no password needed to open the file

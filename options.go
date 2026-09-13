@@ -19,7 +19,7 @@ import (
 // existing function is not.
 //
 // RenderOptions carries the fields Render's implementation (see page.go)
-// actually uses: Scale, Background, HideAnnotations, and (docs/PLAN2.md's
+// actually uses: Scale, Background, HideAnnotations, and (docs/PLAN-V2.md's
 // Phase 16) Box, selecting which of the page's boundary boxes (CropBox,
 // the default, or MediaBox/BleedBox/TrimBox/ArtBox) bounds the rendered
 // output - see PageBox. Per the README's Draft Public API notes, a
@@ -190,7 +190,7 @@ type FontSubstitution struct {
 
 // WithPredefinedCMaps opts a Document into resolving a Type0/CID font's
 // *predefined* CJK /Encoding name (e.g. "UniGB-UCS2-H", "90ms-RKSC-H" -
-// see docs/PLAN2.md's Phase 9 and docs/CAPABILITY-MATRIX.md's Fonts
+// see docs/PLAN-V2.md's Phase 9 and docs/CAPABILITY-MATRIX.md's Fonts
 // section) against real CMap resource data supplied by the embedding
 // application, instead of always falling back to a generic default
 // width and notdefGlyph for every code.

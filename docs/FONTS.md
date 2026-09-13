@@ -84,8 +84,8 @@ flags.
 
 ### The explicit "no system font service" policy
 
-`docs/PLAN.md`'s "Dependency and safety policy" section
-(`docs/PLAN.md:50`) states the core "must not use CGO, `os/exec`,
+`docs/PLAN-V1.md`'s "Dependency and safety policy" section
+(`docs/PLAN-V1.md:50`) states the core "must not use CGO, `os/exec`,
 subprocess workers, or runtime loading of a system PDF library." The
 `internal/fonts` package doc comment (`doc.go:37`) sharpens this
 specifically for fonts:
@@ -96,7 +96,7 @@ specifically for fonts:
 > depend on what happens to be installed on the machine running the
 > code.
 
-This is referenced again from `docs/PLAN.md:1059` as "a hard
+This is referenced again from `docs/PLAN-V1.md:1059` as "a hard
 requirement, not a convenience," and `docs/CAPABILITY-MATRIX.md`'s
 "Non-embedded font fallback" row states "No system font service is ever
 queried." **Any font-substitution design has to be reconciled with this
@@ -204,7 +204,7 @@ instance). The proposal is therefore:
   today, satisfying the "never silently" half of the existing policy.
 - This keeps the mechanism 100% reproducible given the same directories
   and files (matching the project's existing "bounded, deterministic"
-  ethos - see `docs/PLAN.md`'s cancellation/limits discussion), while
+  ethos - see `docs/PLAN-V1.md`'s cancellation/limits discussion), while
   still being non-portable *in outcome* (which fonts are actually found
   depends on what's on disk) - which is unavoidable for any real
   substitution feature and exactly why it must stay opt-in.
@@ -400,7 +400,7 @@ should be built once and reused for a `Document`'s lifetime (like
 `FontCache` today), and matching results per distinct
 `FontCharacteristics` are cheap enough to not need their own cache.
 Given the existing "a `*Document` is not safe for concurrent use"
-decision (`docs/PLAN.md`'s Phase 6a), a `FontSource`'s index can follow
+decision (`docs/PLAN-V1.md`'s Phase 6a), a `FontSource`'s index can follow
 `FontCache`'s existing precedent of no internal locking.
 
 ## Testing
@@ -435,7 +435,7 @@ phases depend on knowing *why*, not just *what*.
    system font service"?** **Resolved: no.** The user agreed this is an
    acceptable feature, confirming this document's reading (see "Scope
    decision" above) - no CGO, no subprocess, no platform font API, and
-   opt-in via `WithFontSubstitution`. `docs/PLAN.md`'s "Dependency and
+   opt-in via `WithFontSubstitution`. `docs/PLAN-V1.md`'s "Dependency and
    safety policy" wording should still be revisited when Phase 4 lands,
    to make the distinction explicit there rather than only in this doc.
 2. **Should system-default directories be scanned automatically once

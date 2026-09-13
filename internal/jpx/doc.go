@@ -1,6 +1,6 @@
 // Package jpx implements a JPEG 2000 ("JPX") image decoder, for PDF's
 // JPXDecode stream filter (ISO/IEC 15444-1, also published as ITU-T
-// T.800). See docs/PLAN2.md's Phase 14 entry for the project-level
+// T.800). See docs/PLAN-V2.md's Phase 14 entry for the project-level
 // design decisions summarized here.
 //
 // # Why this package exists, and why it is separate from internal/filter
@@ -27,7 +27,7 @@
 // (hence the name "jpx" rather than something PDF-specific) without
 // touching a single line of its own code - only the adapter would move.
 //
-// # Development plan (see docs/PLAN2.md Phase 14 for the authoritative,
+// # Development plan (see docs/PLAN-V2.md Phase 14 for the authoritative,
 // living version of this list)
 //
 //   - 14a (done): package skeleton, JP2 container ("box") parsing, and
@@ -159,7 +159,7 @@
 //     chose.
 //   - Multiple tiles, and multiple tile-parts per tile, are supported -
 //     large geospatial and medical-imaging exports (this filter's most
-//     common real-world source per docs/PLAN2.md's Phase 14 rationale)
+//     common real-world source per docs/PLAN-V2.md's Phase 14 rationale)
 //     routinely tile a large image rather than encoding it as one piece.
 //   - Both the raw codestream and the full JP2 container ("box") file
 //     format are accepted, matching ISO 32000-1 7.4.9's own allowance of

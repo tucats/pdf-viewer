@@ -2,7 +2,7 @@ package fonts
 
 // This file resolves a Type0 font's *predefined* CJK /Encoding name
 // (e.g. "UniGB-UCS2-H", "90ms-RKSC-H") to a real *CMap - the one part of
-// Phase 9 (docs/PLAN2.md) this package cannot do purely from the PDF
+// Phase 9 (docs/PLAN-V2.md) this package cannot do purely from the PDF
 // file itself, because a predefined encoding's mapping data is not
 // stored in the file at all: it is one of the several dozen CMap
 // resource files Adobe publishes separately (historically bundled with

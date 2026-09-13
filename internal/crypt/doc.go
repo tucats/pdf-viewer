@@ -32,7 +32,7 @@
 // ErrWrongPassword, letting internal/parser distinguish "this document
 // needs a password" from "the password given was wrong" in the error
 // message it produces (both still classify as the same ErrEncrypted
-// sentinel a caller checks with errors.Is - see docs/PLAN2.md's Phase 7
+// sentinel a caller checks with errors.Is - see docs/PLAN-V2.md's Phase 7
 // and the root package's error taxonomy).
 //
 // # The three things a security handler does

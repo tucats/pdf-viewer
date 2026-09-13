@@ -88,7 +88,7 @@ func annotationDrawOps(resolver *model.Document, pageDict syntax.Dictionary, pag
 	return all
 }
 
-// formFieldDrawOps implements Phase 12 (docs/PLAN2.md): for every widget
+// formFieldDrawOps implements Phase 12 (docs/PLAN-V2.md): for every widget
 // annotation on pageDict that internal/annotation could not already
 // resolve a usable existing appearance for (see annotation.ResolveOne -
 // most commonly, no /AP at all, because whatever filled this form

@@ -190,7 +190,7 @@ func TestRenderTextOnRotatedPage(t *testing.T) {
 // --- Phase 10: Page.Text --------------------------------------------
 //
 // The tests below exercise Page.Text (text.go, page.go), the public API
-// backed by internal/content's ExtractText - see docs/PLAN2.md's Phase
+// backed by internal/content's ExtractText - see docs/PLAN-V2.md's Phase
 // 10 entry and internal/content/text_extract_test.go for the lower-level
 // coverage of ExtractText's own operator handling. These tests care
 // about the two things Phase 10's exit criteria call for: correct

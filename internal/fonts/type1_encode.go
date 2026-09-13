@@ -15,7 +15,7 @@ import (
 // parseType1Font against (the sample this phase was given for local
 // testing turned out to embed CFF/Type1C programs under a /Subtype
 // /Type1 font *dictionary*, not an actual /FontFile Type 1 charstring
-// program at all - see docs/PLAN2.md's Phase 11 progress log). Encoding
+// program at all - see docs/PLAN-V2.md's Phase 11 progress log). Encoding
 // and decoding here are written from opposite ends of the specification
 // (Program 7.1 describes decryption; encryptType1 is this package's own
 // derivation of its inverse) wherever the format allows that

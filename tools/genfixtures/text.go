@@ -356,7 +356,7 @@ func buildTextToUnicodeSimple() []byte {
 
 // buildTextToUnicodeType0 is buildTextToUnicodeSimple's Type0/CID
 // counterpart - Phase 10's other required exit-criteria fixture
-// (docs/PLAN2.md's Phase 10: "a fixture with known text content (both a
+// (docs/PLAN-V2.md's Phase 10: "a fixture with known text content (both a
 // simple-font and a Type0/CID fixture)"). Structurally identical to
 // buildTextType0Identity (same embedded TrueType program, same
 // descendant font, same Identity-H encoding, same "0 0 Td" at font size

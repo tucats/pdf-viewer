@@ -224,7 +224,7 @@ func TestOpenEncryptedDocumentIsRejected(t *testing.T) {
 }
 
 // TestOpenEncryptedDocumentEmptyPasswordDecrypts is this package's
-// regression test for Phase 7a (see docs/PLAN2.md): a document whose
+// regression test for Phase 7a (see docs/PLAN-V2.md): a document whose
 // /Encrypt dictionary validates under an empty user password must open
 // successfully and transparently decrypt both stream and string content
 // - unlike TestOpenEncryptedDocumentIsRejected's fixture, whose
@@ -294,7 +294,7 @@ func TestOpenEncryptedDocumentEmptyPasswordDecrypts(t *testing.T) {
 const encryptedFixturePassword = "correct horse battery staple"
 
 // TestOpenEncryptedDocumentNonEmptyPasswordDecrypts is this package's
-// regression test for Phase 7b (see docs/PLAN2.md): a document whose
+// regression test for Phase 7b (see docs/PLAN-V2.md): a document whose
 // user password is genuinely non-empty must open and transparently
 // decrypt when Open is given WithPassword(the correct password), and
 // must fail with an error wrapping ErrEncrypted given the wrong

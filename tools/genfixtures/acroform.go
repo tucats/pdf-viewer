@@ -3,7 +3,7 @@ package main
 import "fmt"
 
 // This file builds Phase 12 (AcroForm field appearance regeneration -
-// docs/PLAN2.md) fixtures: form field widgets with a current value
+// docs/PLAN-V2.md) fixtures: form field widgets with a current value
 // (/V) but deliberately *no* /AP at all, exercising internal/acroform's
 // generated-appearance path rather than internal/annotation's ordinary
 // "paint whatever appearance already exists" path (already covered by

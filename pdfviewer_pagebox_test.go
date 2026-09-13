@@ -8,7 +8,7 @@ import (
 	pdfviewer "github.com/tucats/pdf-viewer"
 )
 
-// This file tests Phase 16's page-box selection (docs/PLAN2.md):
+// This file tests Phase 16's page-box selection (docs/PLAN-V2.md):
 // RenderOptions.Box and ThumbnailOptions.Box, exercised against
 // tools/genfixtures/main.go's buildPageBoxes fixture ("page-boxes.pdf")
 // - see that function's doc comment for the fixture's exact box

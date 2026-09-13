@@ -1,6 +1,6 @@
 # PLAN3: Post-v0.3.1 capability expansion
 
-`docs/PLAN2.md`'s Phase 7-18 plan is complete (see its own Progress
+`docs/PLAN-V2.md`'s Phase 7-18 plan is complete (see its own Progress
 Log); every deferral it scheduled has landed or been explicitly moved
 to its Backlog section. This document picks up from there, the same
 way PLAN2 picked up from PLAN.md: a living plan for gaps found *after*
@@ -204,7 +204,7 @@ coverage, `go vet`, `gofmt`, and fuzzing all pass clean.
 ## Backlog
 
 No new backlog items yet - this document currently has exactly one
-phase, seeded by one concrete report. See `docs/PLAN2.md`'s own
+phase, seeded by one concrete report. See `docs/PLAN-V2.md`'s own
 Backlog section for every other known, deliberately-unscheduled gap;
 it continues to apply unchanged (this document does not duplicate it).
 Add an item here, rather than there, only once it is specifically a
@@ -221,7 +221,7 @@ similarly complete.
 
 ## Progress Log
 
-This section mirrors `docs/PLAN2.md`'s own Progress Log: updated at
+This section mirrors `docs/PLAN-V2.md`'s own Progress Log: updated at
 the end of each phase (or sub-phase) with what was actually built,
 appended in order, not rewritten later except to fix mistakes.
 

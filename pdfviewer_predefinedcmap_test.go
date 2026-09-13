@@ -9,7 +9,7 @@ import (
 	pdfviewer "github.com/tucats/pdf-viewer"
 )
 
-// This file tests WithPredefinedCMaps (Phase 9c, docs/PLAN2.md) at the
+// This file tests WithPredefinedCMaps (Phase 9c, docs/PLAN-V2.md) at the
 // public-API level, mirroring pdfviewer_fontsubstitution_test.go's own
 // structure for WithFontSubstitution closely: a real (but entirely
 // project-owned, never any of Adobe's actual licensed data - see

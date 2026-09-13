@@ -5,7 +5,7 @@ package pdfviewer
 // internal/content's own TextGlyph (deliberately a separate type - see
 // that package's text_extract.go doc comment for why internal/content
 // cannot import this package, and so cannot return this exported type
-// directly). See docs/PLAN2.md's Phase 10 entry for the capability this
+// directly). See docs/PLAN-V2.md's Phase 10 entry for the capability this
 // implements, and page.go's Text method for the full documentation of
 // what it recovers and how.
 

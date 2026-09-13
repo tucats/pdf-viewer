@@ -147,7 +147,7 @@ func TestNewR234WrongPassword(t *testing.T) {
 	// with ErrWrongPassword when this package tries an empty password
 	// against it - the "no password supplied" half of Phase 7b's
 	// "distinguishable error given a wrong [password] or none" exit
-	// criterion (see docs/PLAN2.md); TestNewR234WithNonEmptyPassword,
+	// criterion (see docs/PLAN-V2.md); TestNewR234WithNonEmptyPassword,
 	// below, covers the "wrong password actually supplied" half, plus
 	// the case this password would actually open.
 	const r, keyLenBytes = 3, 16
@@ -177,7 +177,7 @@ func TestNewR234WrongPassword(t *testing.T) {
 }
 
 // TestNewR234WithNonEmptyPassword is this package's Phase 7b regression
-// test (see docs/PLAN2.md) for revisions 2-4: a document whose user
+// test (see docs/PLAN-V2.md) for revisions 2-4: a document whose user
 // password is genuinely non-empty must open (and decrypt exactly as the
 // Phase 7a round-trip tests above already check) when New is given the
 // *correct* password, and must fail with ErrWrongPassword when given
@@ -388,7 +388,7 @@ func TestNewR56WrongPassword(t *testing.T) {
 
 // TestNewR56WithNonEmptyPassword is TestNewR234WithNonEmptyPassword's
 // revision 5/6 (AES-256) equivalent, this package's Phase 7b regression
-// test (see docs/PLAN2.md) for the newer key-wrapping construction:
+// test (see docs/PLAN-V2.md) for the newer key-wrapping construction:
 // correct password opens and decrypts, empty or wrong password fails
 // with ErrWrongPassword.
 func TestNewR56WithNonEmptyPassword(t *testing.T) {

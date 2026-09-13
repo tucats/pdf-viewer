@@ -336,7 +336,7 @@ func (d *mqDecoder) renormalize() {
 //
 // This project has no independently-produced real-world JBIG2 sample (no
 // encoder tool was available while writing this package - see
-// docs/PLAN2.md's Phase 8 progress log for the full explanation) to
+// docs/PLAN-V2.md's Phase 8 progress log for the full explanation) to
 // validate the decoder against, which is the reason this type exists at
 // all: encoding a known bitmap and then decoding it back with this
 // package's own decoder is the strongest verification available without

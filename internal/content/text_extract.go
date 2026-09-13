@@ -20,7 +20,7 @@ import (
 //
 // # Why this is a separate walker, not a mode flag on interpreter
 //
-// docs/PLAN.md's original Phase 4 plan says to "keep text extraction as
+// docs/PLAN-V1.md's original Phase 4 plan says to "keep text extraction as
 // a separate capability from text painting, so it can be added without
 // changing page rendering ownership." Threading an "extraction mode"
 // through interpret.go's exec method would satisfy that in letter (
@@ -60,7 +60,7 @@ import (
 // a form's own content stream is not extracted. This is a real,
 // documented gap (some producers wrap a whole page's content in one
 // outer form, or place repeated/watermark text via one), not an
-// oversight: Phase 10's own exit criteria (docs/PLAN2.md) only calls for
+// oversight: Phase 10's own exit criteria (docs/PLAN-V2.md) only calls for
 // correct extraction from a page's own content stream, and form
 // recursion needs its own resource-scoping, matrix-composition, and
 // recursion-depth-guard machinery (see form.go's maxFormDepth) that adds

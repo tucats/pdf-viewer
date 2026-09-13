@@ -90,7 +90,7 @@ var (
 
 	// ErrEncrypted indicates that Open or OpenFile was asked to open a
 	// document whose trailer declares an /Encrypt dictionary that this
-	// package could not open. As of Phase 7 (see docs/PLAN2.md), a
+	// package could not open. As of Phase 7 (see docs/PLAN-V2.md), a
 	// document protected with the Standard security handler now opens
 	// and decrypts transparently whether its user password is empty -
 	// the common "permissions-only, opens freely" case, such as many

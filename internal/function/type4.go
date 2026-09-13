@@ -22,7 +22,7 @@ import (
 // then duplicates that result three more times, leaving four copies on
 // the stack - a "rich black" style Cyan/Magenta/Yellow/Black complement
 // of a single ink amount, one of the two motivating real-world uses this
-// project found for Type 4 (see docs/PLAN3.md's Phase 19).
+// project found for Type 4 (see docs/PLAN-V3.md's Phase 19).
 //
 // # If you are new to Go: what kind of program this file is
 //

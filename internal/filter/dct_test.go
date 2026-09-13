@@ -175,6 +175,40 @@ func TestDecodeDCTAdobeCMYKIsNotInverted(t *testing.T) {
 	}
 }
 
+// TestDecodeDCTMissingAdobeAPP14IsSynthesized is the regression fixture
+// for the bug reported against a real appliance owner's-manual PDF: one
+// page's product photography was a 4-component (CMYK) JPEG whose encoder
+// never wrote an Adobe APP14 marker at all - not merely a different
+// transform value, as handmadeDirectCMYKJPEG above already covers - which
+// aborted that page's entire render with image/jpeg's
+// UnsupportedError("unknown color model...") rather than merely
+// mis-rendering. See ensureAdobeAPP14's doc comment for why synthesizing
+// the marker is correct rather than a workaround.
+//
+// noAdobeAPP14CMYKJPEG below is handmadeDirectCMYKJPEG with its own real
+// 16-byte APP14 segment (data[2:18] - marker, length, and the 12-byte
+// "Adobe"+version+flags+transform payload; see that variable's own doc
+// comment for the layout) sliced back out, leaving SOI followed directly
+// by DQT - otherwise byte-for-byte the same encoder output, so a correct
+// fix must decode it to the exact same (20, 5, 40, 60) pixel value.
+func TestDecodeDCTMissingAdobeAPP14IsSynthesized(t *testing.T) {
+	noAdobeAPP14CMYKJPEG := make([]byte, 0, len(handmadeDirectCMYKJPEG)-16)
+	noAdobeAPP14CMYKJPEG = append(noAdobeAPP14CMYKJPEG, handmadeDirectCMYKJPEG[:2]...)
+	noAdobeAPP14CMYKJPEG = append(noAdobeAPP14CMYKJPEG, handmadeDirectCMYKJPEG[18:]...)
+
+	got, err := decodeDCT(noAdobeAPP14CMYKJPEG)
+	if err != nil {
+		t.Fatalf("decodeDCT: %v", err)
+	}
+	if len(got) != 8*8*4 {
+		t.Fatalf("decodeDCT CMYK output length = %d, want %d", len(got), 8*8*4)
+	}
+	c, m, y, k := int(got[0]), int(got[1]), int(got[2]), int(got[3])
+	if c != 20 || m != 5 || y != 40 || k != 60 {
+		t.Fatalf("first pixel = (%d,%d,%d,%d), want (20,5,40,60)", c, m, y, k)
+	}
+}
+
 func TestDecodeDCTInvalidData(t *testing.T) {
 	if _, err := decodeDCT([]byte("not a jpeg")); err == nil {
 		t.Fatal("decodeDCT on garbage input: expected an error, got nil")

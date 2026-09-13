@@ -96,6 +96,14 @@ func decodeDCT(data []byte) ([]byte, error) {
 		return nil, pdferror.Malformedf("DCT-encoded image is %dx%d pixels, exceeding this package's bound", cfg.Width, cfg.Height)
 	}
 
+	if cfg.ColorModel == color.CMYKModel {
+		// A 4-component JPEG with no Adobe APP14 marker at all is one
+		// Go's own decoder refuses outright below - see ensureAdobeAPP14's
+		// doc comment for why injecting one is the correct fix rather
+		// than a workaround.
+		data = ensureAdobeAPP14(data)
+	}
+
 	img, err := jpeg.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, pdferror.Malformedf("DCT decode: %v", err)
@@ -114,6 +122,123 @@ func decodeDCT(data []byte) ([]byte, error) {
 		// library change adding a new one.
 		return nil, pdferror.Unsupportedf("DCT-encoded image decoded to unexpected Go image type %T", img)
 	}
+}
+
+// adobeAPP14TransformUnknown is the Adobe APP14 segment's "transform"
+// byte value meaning "Unknown (RGB or CMYK)" - i.e. no YCbCr/YCCK color
+// transform was applied, so a 4-component image's four channels are
+// already plain CMYK samples in file order (see image/jpeg's own
+// unexported adobeTransformUnknown constant and applyBlack, which treats
+// this value as "decode the four channels directly").
+const adobeAPP14TransformUnknown = 0
+
+// ensureAdobeAPP14 scans data's marker sequence up to its first scan
+// (SOS) marker, and - only once that scan confirms doing so is safe -
+// returns data with a synthetic, minimal Adobe APP14 marker segment
+// (insertAdobeAPP14) spliced in immediately after its leading SOI
+// marker. data comes back unchanged in every other case: it already
+// carries an Adobe APP14 segment (identified below exactly as
+// image/jpeg's own processApp14Marker does - an APP14 segment whose
+// payload starts with the literal ASCII "Adobe"), or the scan hits
+// something it does not recognize as well-formed first - in which case
+// the subsequent jpeg.Decode call reports whatever is actually wrong
+// with it (or decodes it fine regardless, if the only thing "wrong" was
+// this function's own overly cautious refusal to touch it).
+//
+// This exists because Go's image/jpeg refuses to decode *any*
+// 4-component JPEG lacking this marker - UnsupportedError("unknown color
+// model: 4-component JPEG doesn't have Adobe APP14 metadata"), from
+// applyBlack - even though the marker's *absence* has an unambiguous,
+// well-established meaning of its own, the same one libjpeg's
+// jdapimin.c documents: only Adobe's own applications ever write
+// genuinely color-transformed 4-component JPEG data (YCCK), and they
+// always accompany it with this marker; an encoder that emits
+// 4-component JPEG data without ever writing this marker is,
+// necessarily, writing plain, non-color-transformed CMYK samples.
+// Injecting the marker with transform=adobeAPP14TransformUnknown makes
+// image/jpeg decode exactly that - interleaving the four channels with
+// no YCbCr-style transform, still applying its own unconditional
+// "v = 255 - v" Adobe-standalone-file inversion (see this file's
+// decodeDCT doc comment) - which decodeDCT's existing
+// unApplyAdobeCMYKInversion step already undoes, leaving the direct,
+// uninverted samples DCTDecode's PDF-side /Decode default expects,
+// exactly as if the file had carried this marker to begin with. Found
+// against a real-world appliance manual PDF whose second page's product
+// photography used exactly this encoder shape and simply would not
+// render at all (aborting the whole page) rather than merely looking
+// wrong, unlike the inversion-only case unApplyAdobeCMYKInversion
+// already handles.
+func ensureAdobeAPP14(data []byte) []byte {
+	if len(data) < 4 || data[0] != 0xff || data[1] != 0xd8 {
+		return data
+	}
+
+	pos := 2
+	for pos+1 < len(data) {
+		if data[pos] != 0xff {
+			return data
+		}
+		// Section B.1.1.2: a marker may be preceded by any number of 0xff
+		// fill bytes.
+		for pos+1 < len(data) && data[pos+1] == 0xff {
+			pos++
+		}
+		if pos+1 >= len(data) {
+			return data
+		}
+		marker := data[pos+1]
+		pos += 2
+
+		switch {
+		case marker == 0x00, marker == 0xd9: // stuffed byte, or EOI before SOS
+			return data
+		case marker >= 0xd0 && marker <= 0xd7: // RSTn: no length field
+			continue
+		case marker == 0xda: // SOS: every marker that could precede it has been seen
+			return insertAdobeAPP14(data)
+		}
+
+		if pos+2 > len(data) {
+			return data
+		}
+		length := int(data[pos])<<8 | int(data[pos+1])
+		if length < 2 || pos+length > len(data) {
+			return data
+		}
+		if marker == 0xee && length >= 7 && string(data[pos+2:pos+7]) == "Adobe" {
+			return data // already has one
+		}
+		pos += length
+	}
+	return data
+}
+
+// insertAdobeAPP14 splices syntheticAdobeAPP14 into data immediately
+// after its leading 2-byte SOI marker - the actual mutation
+// ensureAdobeAPP14 performs once its scan confirms doing so is safe.
+func insertAdobeAPP14(data []byte) []byte {
+	out := make([]byte, 0, len(data)+len(syntheticAdobeAPP14))
+	out = append(out, data[:2]...)
+	out = append(out, syntheticAdobeAPP14...)
+	out = append(out, data[2:]...)
+	return out
+}
+
+// syntheticAdobeAPP14 is the 16-byte APP14 marker segment
+// ensureAdobeAPP14 inserts: marker (0xff 0xee), length (0x00 0x0e = 14,
+// counting itself), the 5-byte "Adobe" signature, a 2-byte version, two
+// 2-byte flags fields (always zero in practice, and never consulted by
+// image/jpeg), and the 1-byte transform - the same 16-byte shape as
+// handmadeDirectCMYKJPEG's own real, encoder-written APP14 segment in
+// dct_test.go, with the same transform value.
+var syntheticAdobeAPP14 = []byte{
+	0xff, 0xee,
+	0x00, 0x0e,
+	'A', 'd', 'o', 'b', 'e',
+	0x00, 0x64,
+	0x00, 0x00,
+	0x00, 0x00,
+	adobeAPP14TransformUnknown,
 }
 
 func grayToBytes(img *image.Gray) []byte {

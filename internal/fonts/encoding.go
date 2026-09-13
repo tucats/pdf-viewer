@@ -175,16 +175,46 @@ func baseEncodingByName(name syntax.Name) (runeTable, bool) {
 // an otherwise-usable document (see, for example, internal/model's
 // handling of a malformed /Rotate).
 func BuildSimpleEncoding(dict syntax.Dictionary) runeTable {
+	t, _ := buildSimpleEncoding(dict)
+	return t
+}
+
+// BuildSimpleEncodingNames resolves a simple font's /Encoding /Differences
+// array into a 256-entry code->glyph-name table, holding the literal
+// PostScript glyph name /Differences assigned to a code (empty string for
+// any code /Differences did not touch). This exists alongside
+// BuildSimpleEncoding's rune table specifically for a name
+// glyphNameToRune does not recognize (e.g. a small-caps stylistic variant
+// like "a.sc", or a tabular-figure variant like "one.taboldstyle") -
+// simpleNamedGlyphLookup (simple.go) uses this to look such a glyph up by
+// its exact name directly in an embedded CFF/Type 1 program's own
+// charset/CharStrings dictionary, since that program has the real glyph
+// under that name even though it is not a name this package can convert
+// to a Unicode rune. A base encoding's own names are deliberately not
+// captured here: StandardEncoding/WinAnsiEncoding/MacRomanEncoding never
+// use a name glyphNameToRune fails to resolve, so BuildSimpleEncoding's
+// rune table already covers every code /Differences left untouched.
+func BuildSimpleEncodingNames(dict syntax.Dictionary) [256]string {
+	_, names := buildSimpleEncoding(dict)
+	return names
+}
+
+// buildSimpleEncoding is the shared implementation behind
+// BuildSimpleEncoding and BuildSimpleEncodingNames - see their doc
+// comments for what each half of its return value means.
+func buildSimpleEncoding(dict syntax.Dictionary) (runeTable, [256]string) {
+	var names [256]string
+
 	encObj, ok := dict["Encoding"]
 	if !ok {
-		return standardEncoding()
+		return standardEncoding(), names
 	}
 
 	if name, ok := encObj.(syntax.Name); ok {
 		if t, ok := baseEncodingByName(name); ok {
-			return t
+			return t, names
 		}
-		return standardEncoding()
+		return standardEncoding(), names
 	}
 
 	encDict, ok := encObj.(syntax.Dictionary)
@@ -192,7 +222,7 @@ func BuildSimpleEncoding(dict syntax.Dictionary) runeTable {
 		// /Encoding is present but neither a Name nor a Dictionary - not
 		// valid PDF, but not worth failing the whole font over; fall back
 		// to the specification's own default.
-		return standardEncoding()
+		return standardEncoding(), names
 	}
 
 	base := standardEncoding()
@@ -212,6 +242,7 @@ func BuildSimpleEncoding(dict syntax.Dictionary) runeTable {
 			code = int(v)
 		case syntax.Name:
 			if code >= 0 && code <= 255 {
+				names[code] = string(v)
 				if r, ok := glyphNameToRune(string(v)); ok {
 					base[code] = r
 				}
@@ -219,7 +250,7 @@ func BuildSimpleEncoding(dict syntax.Dictionary) runeTable {
 			code++
 		}
 	}
-	return base
+	return base, names
 }
 
 // glyphNameToRune converts an Adobe-style PostScript glyph name (as used
@@ -281,7 +312,7 @@ func glyphNameToRune(name string) (rune, bool) {
 var glyphNames = map[string]rune{
 	"space": ' ', "exclam": '!', "quotedbl": '"', "numbersign": '#',
 	"dollar": '$', "percent": '%', "ampersand": '&', "quotesingle": '\'',
-	"quoteright": '\'', "quoteleft": '`', "parenleft": '(', "parenright": ')',
+	"quoteright": '’', "quoteleft": '‘', "parenleft": '(', "parenright": ')',
 	"asterisk": '*', "plus": '+', "comma": ',', "hyphen": '-', "minus": '-',
 	"period": '.', "slash": '/',
 	"zero": '0', "one": '1', "two": '2', "three": '3', "four": '4',

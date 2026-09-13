@@ -84,6 +84,32 @@ type runeGlyphSource interface {
 	GIDForRune(r rune) (uint16, bool)
 }
 
+// namedGlyphSource extends glyphOutlineSource with a glyph-*name*-keyed
+// lookup, GIDForName - implemented by *cffFont (cff.go) and *type1Font
+// (type1.go), whose charstrings are natively indexed by PostScript glyph
+// name, but never by a substitute font found on disk (matchFace's
+// candidates only ever expose runeGlyphSource - a substitute was never
+// the font a PDF's own /Differences array's glyph names were actually
+// authored against, so only its Unicode meaning, not its exact name,
+// carries over).
+//
+// simpleNamedGlyphLookup (simple.go) is the only place this interface is
+// used: PDF specification 9.6.6.2's real mapping for a simple font
+// backed by a Type 1/CFF program is code -> glyph *name* (via /Encoding)
+// -> GID, found directly in the font program's own
+// charset/CharStrings dictionary. Going by way of Unicode rune first, as
+// runeGlyphSource alone allows, loses any glyph name glyphNameToRune
+// does not recognize - such as a small-caps stylistic variant
+// (/Differences assigning code 97 to "a.sc") a real-world font commonly
+// carries alongside its ordinary "a".
+type namedGlyphSource interface {
+	glyphOutlineSource
+
+	// GIDForName looks up a GID by exact PostScript glyph name, ok=false
+	// if name has no glyph in this font program at all.
+	GIDForName(name string) (uint16, bool)
+}
+
 // advanceWidthSource is implemented by a glyphOutlineSource that can
 // also report one of its own glyphs' advance width - currently only
 // *sfntFont (truetype.go, via its parsed "hmtx" table). *cffFont

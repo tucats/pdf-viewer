@@ -391,6 +391,16 @@ type cffFont struct {
 	// strategy for a simple font's /Encoding-resolved text.
 	runeToGID map[rune]uint16
 
+	// nameToGID resolves a glyph's exact PostScript name (as this font's
+	// own charset spells it) to a GID - populated only when isCID is
+	// false, alongside runeToGID and from the same charset walk (see
+	// parseCFFFont), but keyed by the name itself rather than by
+	// whatever Unicode rune (if any) glyphNameToRune manages to derive
+	// from it. This is what lets GIDForName recover a glyph like
+	// "a.sc" (a small-caps stylistic variant, common in real-world
+	// /Differences arrays) that runeToGID has no rune to hold at all.
+	nameToGID map[string]uint16
+
 	// cidToGID inverts charsetIDs for a CID-keyed font (GID -> CID
 	// becomes CID -> GID) - populated only when isCID is true. cid.go
 	// uses this instead of a CIDFontType2 descendant's /CIDToGIDMap
@@ -792,10 +802,14 @@ func parseCFFFont(data []byte) (cffFont, bool) {
 		}
 
 		font.runeToGID = make(map[rune]uint16, numGlyphs)
+		font.nameToGID = make(map[string]uint16, numGlyphs)
 		for gid := 1; gid < len(charsetIDs); gid++ {
 			name := font.sidToName(charsetIDs[gid])
 			if name == "" {
 				continue
+			}
+			if _, exists := font.nameToGID[name]; !exists {
+				font.nameToGID[name] = uint16(gid)
 			}
 			if r, ok := glyphNameToRune(name); ok {
 				if _, exists := font.runeToGID[r]; !exists {
@@ -843,6 +857,15 @@ func (f *cffFont) UnitsPerEm() uint16 {
 // see GIDForCID instead).
 func (f *cffFont) GIDForRune(r rune) (uint16, bool) {
 	gid, ok := f.runeToGID[r]
+	return gid, ok
+}
+
+// GIDForName looks up a GID by exact PostScript glyph name via this
+// font's own charset names - see the nameToGID field's doc comment.
+// Always reports ok=false for a CID-keyed font (whose charset holds
+// CIDs, not names - see GIDForCID instead).
+func (f *cffFont) GIDForName(name string) (uint16, bool) {
+	gid, ok := f.nameToGID[name]
 	return gid, ok
 }
 

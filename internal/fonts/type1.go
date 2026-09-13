@@ -676,6 +676,13 @@ type type1Font struct {
 	subrs       [][]byte // decrypted, lenIV-stripped local subroutines, indexed by their own /Subrs slot number
 	unitsPerEm  uint16
 	runeToGID   map[rune]uint16
+
+	// nameToGID resolves a glyph's exact PostScript name (as it appears
+	// in glyphNames) to its GID, built from the same loop as runeToGID
+	// but keyed by the name itself rather than by whatever Unicode rune
+	// (if any) glyphNameToRune derives from it - see cffFont's
+	// identically-purposed field and GIDForName below.
+	nameToGID map[string]uint16
 }
 
 // parseType1Font parses data - an already filter-decoded /FontFile
@@ -703,8 +710,12 @@ func parseType1Font(data []byte, length1, length2 int) (type1Font, bool) {
 		subrs:       subrs,
 		unitsPerEm:  findType1UnitsPerEm(cleartext),
 		runeToGID:   make(map[rune]uint16, len(names)),
+		nameToGID:   make(map[string]uint16, len(names)),
 	}
 	for gid, name := range names {
+		if _, exists := font.nameToGID[name]; !exists {
+			font.nameToGID[name] = uint16(gid)
+		}
 		if r, ok := glyphNameToRune(name); ok {
 			if _, exists := font.runeToGID[r]; !exists {
 				font.runeToGID[r] = uint16(gid)
@@ -726,6 +737,13 @@ func (f *type1Font) UnitsPerEm() uint16 {
 // GIDForRune).
 func (f *type1Font) GIDForRune(r rune) (uint16, bool) {
 	gid, ok := f.runeToGID[r]
+	return gid, ok
+}
+
+// GIDForName looks up a GID by exact PostScript glyph name via this
+// font's own glyphNames - see the nameToGID field's doc comment.
+func (f *type1Font) GIDForName(name string) (uint16, bool) {
+	gid, ok := f.nameToGID[name]
 	return gid, ok
 }
 

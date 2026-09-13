@@ -30,10 +30,48 @@ import (
 // paints notdefGlyph's placeholder box instead of a real outline.
 const defaultMissingWidth = 500
 
+// resolvedEncodingDict returns dict with its own /Encoding entry
+// resolved through resolver if it is an indirect reference - matching
+// Load's documented contract that dict's top-level entries are read
+// individually through resolveIfRef as needed (see font.go's doc
+// comment on Load). BuildSimpleEncoding and BuildSimpleEncodingNames
+// (encoding.go) only ever recognize /Encoding as a bare syntax.Name or
+// an inline syntax.Dictionary, exactly per the specification's own
+// description of the field (9.6.6) - but real-world producers commonly
+// write a shared Encoding dictionary once and reference it from several
+// font dictionaries by indirect reference (as this project's own
+// generated fixtures do not, but plenty of real PDFs do), which would
+// otherwise silently look like "/Encoding absent" and lose every
+// /Differences override. dict itself is returned unchanged (not
+// copied) in the overwhelmingly common case where /Encoding, if
+// present, is already inline, or resolving it fails.
+func resolvedEncodingDict(dict syntax.Dictionary, resolver Resolver) syntax.Dictionary {
+	enc, ok := dict["Encoding"]
+	if !ok {
+		return dict
+	}
+	ref, ok := enc.(syntax.Reference)
+	if !ok {
+		return dict
+	}
+	resolved, err := resolver.Resolve(ref.Number)
+	if err != nil {
+		return dict
+	}
+	out := make(syntax.Dictionary, len(dict))
+	for k, v := range dict {
+		out[k] = v
+	}
+	out["Encoding"] = resolved
+	return out
+}
+
 // loadSimpleFont builds a Font from a simple font dictionary.
 func loadSimpleFont(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	widths, defaultWidth := simpleWidths(dict, resolver)
-	encoding := BuildSimpleEncoding(dict)
+	encodingSource := resolvedEncodingDict(dict, resolver)
+	encoding := BuildSimpleEncoding(encodingSource)
+	names := BuildSimpleEncodingNames(encodingSource)
 
 	descriptor, _ := dictValue(resolver, dict, "FontDescriptor")
 	symbolic := isSymbolic(descriptor)
@@ -73,10 +111,10 @@ func loadSimpleFont(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 		f.lookupGID = simpleGlyphLookup(&sfnt, encoding, symbolic)
 	} else if cff, ok := loadEmbeddedCFF(descriptor, resolver); ok {
 		f.glyphSource = &cff
-		f.lookupGID = simpleRuneGlyphLookup(&cff, encoding)
+		f.lookupGID = simpleNamedGlyphLookup(&cff, encoding, names)
 	} else if t1, ok := loadEmbeddedType1(descriptor, resolver); ok {
 		f.glyphSource = &t1
-		f.lookupGID = simpleRuneGlyphLookup(&t1, encoding)
+		f.lookupGID = simpleNamedGlyphLookup(&t1, encoding, names)
 	} else if !trySubstitute(f, dict, resolver, encoding) {
 		diag.Note(resolver, "font %v (%v) has no usable embedded TrueType, CFF, or Type 1 outline data (no /FontFile2, /FontFile3, or /FontFile, or it failed to parse); its glyphs will render as placeholder boxes", dict["BaseFont"], dict["Subtype"])
 	}
@@ -458,5 +496,35 @@ func simpleRuneGlyphLookup(src runeGlyphSource, encoding runeTable) func(code in
 			return 0, false
 		}
 		return src.GIDForRune(r)
+	}
+}
+
+// simpleNamedGlyphLookup wraps simpleRuneGlyphLookup with one extra,
+// higher-priority path for a code /Differences assigned an explicit
+// glyph name (names, from BuildSimpleEncodingNames): if src implements
+// namedGlyphSource (true for an embedded CFF or Type 1 program, never
+// for a substitute - see that interface's doc comment for why), look
+// that exact name up directly in src's own charset/CharStrings
+// dictionary first. This is what recovers a glyph like a small-caps
+// "a.sc" variant that glyphNameToRune has no Unicode rune to represent
+// at all, so encoding's rune-keyed path alone would never find it.
+//
+// Falls through to simpleRuneGlyphLookup's existing behavior whenever
+// this extra path does not apply: no name assigned for that code, src
+// has no charset to look names up in, or the name it was given is not
+// actually one of this particular font's glyphs.
+func simpleNamedGlyphLookup(src runeGlyphSource, encoding runeTable, names [256]string) func(code int) (uint16, bool) {
+	byRune := simpleRuneGlyphLookup(src, encoding)
+	named, ok := src.(namedGlyphSource)
+	if !ok {
+		return byRune
+	}
+	return func(code int) (uint16, bool) {
+		if code >= 0 && code <= 255 && names[code] != "" {
+			if gid, ok := named.GIDForName(names[code]); ok {
+				return gid, true
+			}
+		}
+		return byRune(code)
 	}
 }

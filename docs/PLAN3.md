@@ -45,7 +45,7 @@ the capability matrix.
 
 ## Phase 19: Type 4 (PostScript calculator) functions
 
-**Status: In progress (19a-19b done; 19c-19d not started).**
+**Status: In progress (19a-19c done; 19d not started).**
 
 PDF Functions (ISO 32000-1 7.10) have four representations; this
 project's `internal/function` package (built for PLAN.md's Phase 5)
@@ -364,3 +364,70 @@ appended in order, not rewritten later except to fix mistakes.
 - **Deferred to 19c-19d** (unchanged): fixtures/golden-PNGs and
     trigger-file re-validation (19c); capability-matrix/FIXTURES.md
     updates (19d).
+
+### Phase 19c: fixtures and real-world validation — done (2026-09-13)
+
+- **`tools/genfixtures/main.go`.** Two new hand-authored fixtures, added
+    next to the existing fixture each one most directly parallels so the
+    two are easy to compare side by side:
+    - **`buildType4TintTransformFill`** (`type4-tint-transform-fill.pdf`,
+        next to `buildSeparationFill`): a `/DeviceN [/Black] /DeviceCMYK`
+        color space whose tint transform is a Type 4 function stream
+        object using the exact same program text as 19a's own
+        `TestType4RichBlackTintTransform` and the real trigger file's own
+        pattern, `{ 1 exch sub dup dup dup }`. Two rectangles are filled at
+        different tints (0.75 and 0.2) chosen specifically so a naive
+        "guess DeviceGray from the operand count" fallback (the behavior
+        this call site had *before* Phase 19) would produce a visibly
+        different, wrong color at both - proving the fixture can only pass
+        if the real Type 4 program actually ran, not merely if some
+        plausible-looking gray came out.
+    - **`buildType4AxialShading`** (`type4-axial-shading.pdf`, next to
+        `buildAxialShading`): the same named-shading-via-`sh"` structure as
+        `buildAxialShading`, but with a Type 4 `/Function`
+        (`{ 180 mul sin dup dup }`) computing a black-white-black sine
+        "hump" - a curve shape no Type 2 (always monotonic between its two
+        endpoint colors) or Type 3 (stitched Type 2 pieces, not used by
+        either existing shading fixture) function could produce, so this
+        fixture specifically proves the shading call site
+        (`internal/content/shading.go`'s `doShading`), which had *no*
+        fallback at all before Phase 19 and would have aborted the whole
+        `sh` operator.
+    - Both fixtures' doc comments work out expected pixel colors by hand
+      (including that `Page.Render` samples each device pixel's *center*,
+      i.e. device column x corresponds to input t=(x+0.5)/100, not
+      t=x/100 - a detail that mattered for getting the shading fixture's
+      sampled points right) so a reader can check the Go source against
+      the checked-in golden PNG without re-deriving anything themselves.
+    - `tools/genfixtures/main_test.go`'s `TestGeneratedFixturesMatchCheckedInFiles`
+      and `TestFixtureSetIsComplete` both updated with the two new
+      filenames, keeping this package's existing "checked-in fixtures
+      always match what the generator currently produces" guarantee
+      intact.
+- **`pdfviewer_render_test.go`.** `TestRenderType4TintTransformFill` and
+    `TestRenderType4AxialShading` - direct-pixel-sampling tests following
+    this file's own established pattern (see `TestRenderFilledRect` and
+    friends): each independently re-derives, in its own comment, the exact
+    expected RGB at a handful of sampled points, rather than just trusting
+    the fixture's doc comment. Both fixtures were also added to
+    `TestRenderMatchesReferenceImages`'s fixture list, with their golden
+    PNGs generated via `go test . -run TestRenderMatchesReferenceImages
+    -update` and checked in under `testdata/renderrefs`, giving this pair
+    both kinds of regression coverage every other vector/shading fixture
+    in this project gets.
+- **Real-world re-validation.** The trigger file
+    (`2014ElectionManual-stripped.pdf`, kept local, not committed - see
+    this project's existing non-fixture-PDF policy) was opened with
+    `WithDiagnostics` and every one of its 80 pages rendered: zero
+    diagnostic messages were recorded at all, confirming the `CS1`
+    "color space could not be resolved" note the original report saw is
+    gone now that Type 4 is implemented, and that no other page in the
+    same document regressed in the process.
+- **Verification.** Full existing suite (`go test ./...`), `go vet ./...`,
+    and `gofmt -l` all pass clean; no changes needed to
+    `internal/function/type4_test.go` or `fuzz_test.go` (19a's coverage of
+    every operator, `if`/`ifelse`, and the safety bounds already satisfies
+    this sub-phase's own unit-test scope from the plan above).
+- **Deferred to 19d** (unchanged): `docs/capability-matrix.md`'s
+    Separation/DeviceN and Shading rows, and `testdata/fixtures/FIXTURES.md`'s
+    entries for the two new fixtures.

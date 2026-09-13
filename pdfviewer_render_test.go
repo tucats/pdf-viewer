@@ -231,6 +231,56 @@ func TestRenderTilingPatternFill(t *testing.T) {
 	assertPixel(t, img, 5, 5, 255, 255, 255)   // outside the filled shape entirely
 }
 
+// TestRenderType4TintTransformFill exercises Phase 19's (see
+// docs/PLAN3.md) Type 4 (PostScript calculator) function support through
+// the "cs"/"scn" content-stream call site: tools/genfixtures's
+// buildType4TintTransformFill doc comment works out, by hand, the exact
+// RGB each of its two rectangles' DeviceN tints must produce once passed
+// through the fixture's "{ 1 exch sub dup dup dup }" tint transform and
+// then this project's baseline CMYK->RGB formula. Repeating that math here
+// (rather than just trusting the fixture comment) is deliberate: it is the
+// same "derive the expected pixel by hand, independently of the code under
+// test" discipline every other direct-pixel test in this file already
+// follows (see, for example, TestRenderFilledRect's comment above).
+//
+//   - Left rectangle, tint 0.75: transform gives C=M=Y=K=1-0.75=0.25, so
+//     CMYK->RGB's r=1-min(1,C+K) is 1-min(1,0.5)=0.5 -> RGB (128,128,128).
+//     A tint-guessing fallback (treating 0.75 as if it were already a
+//     DeviceGray value) would instead produce a much lighter
+//     (191,191,191), so this point alone is enough to prove the real
+//     Type 4 program ran.
+//   - Right rectangle, tint 0.2: C=M=Y=K=1-0.2=0.8, so C+K=1.6 clamps to
+//     1, giving r=1-1=0 -> flat black (0,0,0) - again distinguishable from
+//     a naive gray-equals-tint guess, which would produce a dim
+//     (51,51,51) instead of true black.
+func TestRenderType4TintTransformFill(t *testing.T) {
+	img := renderFixture(t, "type4-tint-transform-fill.pdf")
+	assertPixel(t, img, 30, 50, 128, 128, 128) // left rectangle (tint 0.75): mid-gray
+	assertPixel(t, img, 75, 50, 0, 0, 0)       // right rectangle (tint 0.2): flat black
+	assertPixel(t, img, 5, 5, 255, 255, 255)   // outside both rectangles: untouched white background
+}
+
+// TestRenderType4AxialShading exercises Phase 19's other Type 4 call site,
+// a shading's own /Function (internal/content/shading.go's doShading),
+// using tools/genfixtures's buildType4AxialShading fixture: a black-white-
+// black "hump" gradient (via the Type 4 program "{ 180 mul sin dup dup
+// }") that only a genuine per-point function evaluation - not a Type 2/3
+// function's fixed monotonic curve shapes - can produce, since the color
+// must turn around partway through the gradient. See that fixture's own
+// doc comment for the by-hand sin() derivation of each sampled device
+// column; briefly, the shading's /Coords [0 0 100 0] maps this 100-wide
+// page's device x coordinate onto the function's own /Domain [0 1] input
+// t as t = (x+0.5)/100 (Page.Render samples each pixel's center, not its
+// left edge), and the y coordinate does not affect the color at all (an
+// axial shading varies only along its axis), so any row works for
+// sampling.
+func TestRenderType4AxialShading(t *testing.T) {
+	img := renderFixture(t, "type4-axial-shading.pdf")
+	assertPixel(t, img, 0, 50, 4, 4, 4)        // t~0.005: sin(0.9 deg)~0.0157 -> near black
+	assertPixel(t, img, 50, 50, 255, 255, 255) // t~0.505: sin(90.9 deg)~0.9999 -> white, the "hump" peak
+	assertPixel(t, img, 90, 50, 75, 75, 75)    // t~0.905: sin(162.9 deg)~0.2940 -> a distinct dark gray
+}
+
 // TestRenderMatchesReferenceImages is Phase 2's "compare rendered output
 // against checked-in reference images with a documented tolerance" exit
 // criterion (see the repository README's Phase 2 entry): it re-renders
@@ -270,8 +320,10 @@ func TestRenderMatchesReferenceImages(t *testing.T) {
 		"text-tounicode-simple.pdf",
 		"text-tounicode-type0.pdf",
 		"separation-fill.pdf",
+		"type4-tint-transform-fill.pdf",
 		"lab-fill.pdf",
 		"axial-shading.pdf",
+		"type4-axial-shading.pdf",
 		"radial-shading.pdf",
 		"function-based-shading.pdf",
 		"mesh-shading-type4.pdf",

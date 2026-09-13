@@ -115,8 +115,10 @@ func main() {
 		{"text-tounicode-simple.pdf", buildTextToUnicodeSimple()},
 		{"text-tounicode-type0.pdf", buildTextToUnicodeType0()},
 		{"separation-fill.pdf", buildSeparationFill()},
+		{"type4-tint-transform-fill.pdf", buildType4TintTransformFill()},
 		{"lab-fill.pdf", buildLabFill()},
 		{"axial-shading.pdf", buildAxialShading()},
+		{"type4-axial-shading.pdf", buildType4AxialShading()},
 		{"radial-shading.pdf", buildRadialShading()},
 		{"shading-pattern-fill.pdf", buildShadingPatternFill()},
 		{"function-based-shading.pdf", buildFunctionBasedShading()},
@@ -1377,6 +1379,71 @@ func buildSeparationFill() []byte {
 	return b.finish(1)
 }
 
+// buildType4TintTransformFill returns a single 100x100-point page whose
+// /Resources /ColorSpace declares /CS0 as a [/DeviceN [/Black] /DeviceCMYK
+// <Type4 function>] color space - Phase 19's (see docs/PLAN3.md) fixture
+// proving the "cs"/"scn" content-stream call site (internal/content/
+// colorspace.go's setColorSpace/colorForOperandsWithSpace) actually
+// *evaluates* a Type 4 tint transform end to end, rather than falling back
+// to colorFromComponents' component-count guess the way it had to before
+// Phase 19 implemented Type 4 at all.
+//
+// The tint transform program itself, "{ 1 exch sub dup dup dup }", is
+// deliberately the exact same real-world pattern this project's trigger
+// file for Phase 19 uses (a New York State Board of Elections PDF whose
+// /CS1 resource is a single-colorant "Black" spot color) and that
+// internal/function/type4_test.go's TestType4RichBlackTintTransform already
+// checks numerically in isolation: it takes one "tint" input t, computes
+// 1-t, and duplicates that result three more times, so all four CMYK
+// outputs (C, M, Y, K) always end up equal to each other. Two consequences
+// of that formula matter for picking this fixture's own fill tints, worked
+// out by hand so a reader can check the fixture's Go source against the
+// golden PNG without re-deriving anything:
+//
+//   - This project's baseline (non-color-managed) CMYK->RGB conversion
+//     (see internal/image/colorspace.go's cmykToRGB, reused for content-
+//     stream fills too) is r = g = b = 1 - min(1, c+k). Since c and k are
+//     always equal here (both equal 1-t), that is 1 - min(1, 2*(1-t)).
+//   - For any t <= 0.5, 2*(1-t) >= 1, so the min clamps to 1 and the fill
+//     is flat black (0,0,0) regardless of the exact tint - a case a naive
+//     "guess DeviceGray from the one operand" fallback (t itself, e.g.
+//     0.2 -> a dim but clearly non-black gray) would get visibly wrong,
+//     which is exactly why this fixture picks a tint in that range for one
+//     of its two rectangles: it can only pass if the real Type 4 program
+//     ran, not merely if *some* plausible-looking gray was produced.
+//   - For t > 0.5, the fill is a genuine mid-tone: at t=0.75 the formula
+//     above gives 1 - min(1, 0.5) = 0.5, i.e. RGB (128,128,128) - again
+//     distinguishable from a naive gray-equals-tint guess (0.75 -> a much
+//     lighter (191,191,191)).
+//
+// The left half of the page (tint 0.75, expected mid-gray) and right half
+// (tint 0.2, expected flat black) are rendered by
+// TestRenderType4TintTransformFill in pdfviewer_render_test.go, which spells
+// out this same arithmetic again at the point where it is actually checked.
+func buildType4TintTransformFill() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /ColorSpace << /CS0 [/DeviceN [/Black] /DeviceCMYK 5 0 R] >> >> "+
+		"/Contents 4 0 R >>", nil)
+
+	content := []byte("/CS0 cs\n0.75 scn\n10 10 40 80 re\nf\n0.2 scn\n55 10 40 80 re\nf\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	// The tint transform is a Type 4 function, which (unlike Type 2's bare
+	// dictionary, as buildSeparationFill uses) carries its program text as
+	// stream data, so - like buildFunctionBasedShading's Type 0 function
+	// below - it must be its own indirect object rather than something
+	// embedded directly inside the /ColorSpace array.
+	program := []byte("{ 1 exch sub dup dup dup }")
+	fnDict := fmt.Sprintf("<< /FunctionType 4 /Domain [0 1] "+
+		"/Range [0 1 0 1 0 1 0 1] /Length %d >>", len(program))
+	b.addObject(5, 0, fnDict, program)
+
+	return b.finish(1)
+}
+
 // buildLabFill returns a single 100x100-point page whose /Resources
 // /ColorSpace declares /CS0 as a [/Lab dict] color space with an empty
 // parameter dictionary (so resolveLab's documented defaults apply: a D65
@@ -1420,6 +1487,72 @@ func buildAxialShading() []byte {
 
 	content := []byte("q\n0 0 100 100 re\nW\nn\n/Sh0 sh\nQ\n")
 	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+	return b.finish(1)
+}
+
+// buildType4AxialShading returns a single 100x100-point page, structured
+// exactly like buildAxialShading above (a named /ShadingType 2 shading over
+// DeviceRGB, painted unclipped-to-a-shape via "sh" across the whole page),
+// but with a Type 4 (PostScript calculator) /Function in place of
+// buildAxialShading's Type 2 one - Phase 19's (see docs/PLAN3.md) fixture
+// for the *other* real call site Type 4 needed to reach,
+// internal/content/shading.go's doShading/resolvePatternPaint, which
+// (unlike the content-stream color-space path above) had no fallback at
+// all before Phase 19 and would abort the whole "sh" operator instead.
+//
+// Deliberately, the color curve this fixture's function computes is not
+// just a different-looking gradient but a shape a Type 2 (exponential
+// interpolation) or Type 3 (stitching of Type 2 pieces) function cannot
+// produce at all: Type 2 is always monotonic between its two endpoint
+// colors (it can only speed up or slow down how quickly it gets from C0 to
+// C1, never turn around), and even Type 3 stitching, while it *could*
+// approximate a hump with enough sub-functions, is not what either
+// existing shading fixture in this file does. This function instead
+// computes a true sine-shaped "hump": black at both ends of the gradient
+// and white in the middle, requiring the "sin" operator this project's
+// Type 4 interpreter added in Phase 19a.
+//
+// The program is "{ 180 mul sin dup dup }": it takes the shading's own
+// input t (already clipped to the /Domain [0 1] every shading function
+// gets, one value per point along the gradient axis - see internal/
+// content/shading.go), multiplies it by 180 to get an angle in degrees
+// (Type 4's "sin"/"cos" operate in degrees, per Annex B - see
+// internal/function/type4.go's own "sin"/"cos" case comments), takes its
+// sine, and duplicates that one gray value three times for R, G, and B (so
+// the ramp is a pure black/white hump, not a color one - easy to reason
+// about by hand). Three points on the curve, worked out here so
+// TestRenderType4AxialShading in pdfviewer_render_test.go can check them
+// against rendered pixels without re-deriving the trig - note that
+// Page.Render samples each device pixel's *center*, not its left edge, so
+// device column x corresponds to t = (x+0.5)/100, not x/100:
+//
+//   - device x=0 (t=0.005, the gradient's near-start): sin(0.9 deg) ~
+//     0.0157 -> nearly black (~4,4,4).
+//   - device x=50 (t=0.505, essentially the gradient's midpoint):
+//     sin(90.9 deg) ~ 0.9999 -> white (255,255,255) - the "hump" a Type
+//     2/3 function could never reach and then leave again within one
+//     gradient.
+//   - device x=90 (t=0.905, most of the way back down towards the far
+//     end): sin(162.9 deg) ~ 0.2940 -> a distinct dark gray (~75,75,75),
+//     chosen (rather than a point near the far edge, which by symmetry
+//     would numerically match x=0's near-black value) specifically to be
+//     unambiguously different from both other sampled points.
+func buildType4AxialShading() []byte {
+	b := newBuilder()
+	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)
+	b.addObject(2, 0, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", nil)
+	b.addObject(3, 0, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] "+
+		"/Resources << /Shading << /Sh0 << /ShadingType 2 /ColorSpace /DeviceRGB "+
+		"/Coords [0 0 100 0] /Function 5 0 R >> >> >> /Contents 4 0 R >>", nil)
+
+	content := []byte("q\n0 0 100 100 re\nW\nn\n/Sh0 sh\nQ\n")
+	b.addObject(4, 0, fmt.Sprintf("<< /Length %d >>", len(content)), content)
+
+	program := []byte("{ 180 mul sin dup dup }")
+	fnDict := fmt.Sprintf("<< /FunctionType 4 /Domain [0 1] "+
+		"/Range [0 1 0 1 0 1] /Length %d >>", len(program))
+	b.addObject(5, 0, fnDict, program)
+
 	return b.finish(1)
 }
 

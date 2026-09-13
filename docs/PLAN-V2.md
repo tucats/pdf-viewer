@@ -1,7 +1,7 @@
 # PLAN2: Post-v1 capability expansion
 
 `docs/PLAN.md`'s Phase 0-6 plan is complete (see its Progress Log). Every
-row in `docs/capability-matrix.md` that was "Not started" or "Not
+row in `docs/CAPABILITY-MATRIX.md` that was "Not started" or "Not
 scheduled" at that point was a deliberate, documented deferral, not an
 oversight - see each phase's own "What's carried forward" note and the
 Phase 6 closeout's summary list. This document is the living plan for
@@ -29,7 +29,7 @@ color-managed workflows, mesh-gradient vector art, geospatial imagery).
 This is an estimate, not measured telemetry from real usage - revise the
 ordering if a concrete corpus or user report contradicts it.
 
-Each phase below should update `docs/capability-matrix.md`'s
+Each phase below should update `docs/CAPABILITY-MATRIX.md`'s
 corresponding row(s) in the same change that changes them, exactly as
 PLAN.md's phases did, and land as independently-committable sub-phases
 per the project's established workflow (implement, test/fuzz, commit,
@@ -84,7 +84,7 @@ generic regions, symbol dictionaries, text regions and refinement - plus
 `/JBIG2Globals`. Huffman-coded symbol dictionaries and text regions,
 halftone regions and pattern dictionaries, and MMR-coded generic regions
 remain unimplemented and report `ErrUnsupported` naming the feature; see
-`docs/capability-matrix.md`'s JBIG2Decode row for the exact list.
+`docs/CAPABILITY-MATRIX.md`'s JBIG2Decode row for the exact list.
 
 JBIG2 is a common compression choice for black-and-white scanned pages
 specifically because it beats CCITT Group 4 (already supported) on
@@ -122,7 +122,7 @@ practice (ahead of JPEG 2000 - see Phase 14).
 - **8c: fixtures, end-to-end render test and documentation** - a
     `tools/genfixtures` JBIG2 builder, a render test proving a
     JBIG2-encoded page image decodes and draws, and the
-    `docs/capability-matrix.md` row update.
+    `docs/CAPABILITY-MATRIX.md` row update.
 - No standard-library or already-permitted dependency exists for this
     (same situation CCITT was in - see `internal/filter/ccitt.go`'s
     provenance-documented from-scratch port); plan for a similarly
@@ -179,7 +179,7 @@ but the single most commonly expected capability of "a PDF viewer" that
 this project does not yet expose at all: recovering searchable/copyable
 Unicode text from a page. It also directly unblocks a capability the
 matrix explicitly flagged as scope-limited for exactly this reason -
-font substitution for Type 0/CID fonts (`docs/capability-matrix.md`'s
+font substitution for Type 0/CID fonts (`docs/CAPABILITY-MATRIX.md`'s
 Fonts section: "a Type0 font's CIDs have no known Unicode meaning
 without a `/ToUnicode` CMap, which this package does not parse").
 
@@ -375,7 +375,7 @@ they ever need to diverge):
     a per-pixel alpha channel. See this phase's closeout note below.
 - **14g (done): fixtures** (built with this package's own from-scratch
     encoder), **end-to-end render tests, and documentation** -
-    `tools/genfixtures`, `docs/capability-matrix.md`, and
+    `tools/genfixtures`, `docs/CAPABILITY-MATRIX.md`, and
     `FIXTURES.md` all updated together, mirroring Phase 8c's own
     closeout. See this phase's closeout note below.
 
@@ -496,7 +496,7 @@ numeric color with no named color space to resolve it against.
 **Exit criteria:** a fixture with a luminosity soft mask (a simple
 gradient or half-and-half group) fading a filled shape renders the
 expected partial transparency; `/SMask /None` and `q`/`Q` correctly
-clear/restore an active mask; `docs/capability-matrix.md`'s Soft masks
+clear/restore an active mask; `docs/CAPABILITY-MATRIX.md`'s Soft masks
 row is Done.
 
 ## Phase 18: Isolated transparency group compositing for Form XObjects
@@ -556,14 +556,14 @@ phase if a real file needs it.
 **Exit criteria:** the motivating DJI PDF's affected pages render without
 the erroneous opaque box (verified against a `PDFKit`-rendered ground
 truth of the real file, not just the fixture regression test);
-`docs/capability-matrix.md`'s Form XObjects/Alpha constants/Transparency
+`docs/CAPABILITY-MATRIX.md`'s Form XObjects/Alpha constants/Transparency
 groups rows reflect this; all existing `internal/content` tests
 (including the pre-existing `TestDoForm*` suite) still pass unchanged.
 
 ## Backlog: revisit only on concrete demand
 
 These are real, known gaps - already documented in
-`docs/capability-matrix.md` - that this plan deliberately does not
+`docs/CAPABILITY-MATRIX.md` - that this plan deliberately does not
 schedule into the numbered phases above, either because real-world
 frequency appears very low, because a design decision blocks starting
 at all, or because the matrix already treats them as a considered
@@ -614,7 +614,7 @@ frequency estimate.
 - **Annotation/form interactivity, JavaScript actions, PDF creation or
     editing** - standing non-goals, not deferred work; see
     `docs/PLAN.md`'s "Non-goals for the Initial Release" and
-    `docs/capability-matrix.md`'s "Explicit non-goals" section. Listed
+    `docs/CAPABILITY-MATRIX.md`'s "Explicit non-goals" section. Listed
     here only so this document is a complete answer to "what's not
     planned and why," not because they are candidates to schedule later.
 
@@ -622,7 +622,7 @@ frequency estimate.
 
 Treat it like `docs/PLAN.md`: update a phase's status and add a Progress
 Log entry (mirroring PLAN.md's own format) as work actually lands, and
-update `docs/capability-matrix.md`'s corresponding rows in the same
+update `docs/CAPABILITY-MATRIX.md`'s corresponding rows in the same
 change - a code change not reflected in the matrix is incomplete, per
 that document's own stated rule. Re-order phases here if a concrete
 real-world finding (a user-reported file that fails, a corpus survey)
@@ -702,7 +702,7 @@ in order, not rewritten later except to fix mistakes.
     paths.
 - **What's carried forward.** Phase 7b (a non-empty, caller-supplied
     password) is unimplemented, as scoped - see this document's Phase 7b
-    bullet and `docs/capability-matrix.md`'s Encryption section. The
+    bullet and `docs/CAPABILITY-MATRIX.md`'s Encryption section. The
     `/Crypt` stream filter and public-key security handlers remain
     explicitly out of this phase's scope, as originally planned.
 
@@ -777,7 +777,7 @@ in order, not rewritten later except to fix mistakes.
     password (Algorithm 7) remains out of scope, as does the `/Crypt`
     stream filter and public-key security handlers - see this phase's
     "Deliberately out of scope" bullet above and
-    `docs/capability-matrix.md`'s Encryption section. With 7a and 7b
+    `docs/CAPABILITY-MATRIX.md`'s Encryption section. With 7a and 7b
     both done, Phase 7 as a whole is complete.
 
 ### Phase 8a: JBIG2 MQ arithmetic coder — done (2026-09-09)
@@ -918,7 +918,7 @@ in order, not rewritten later except to fix mistakes.
     is consequently not consulted either: a stream that needs it
     necessarily uses symbol/text regions, which stop this decoder
     first. Phase 8c still owes the `tools/genfixtures` builder, an
-    end-to-end render test, and the `docs/capability-matrix.md` update.
+    end-to-end render test, and the `docs/CAPABILITY-MATRIX.md` update.
 
 ### Phase 8c: JBIG2 fixture, render test and documentation — done (2026-09-09)
 
@@ -949,7 +949,7 @@ in order, not rewritten later except to fix mistakes.
     `FuzzOpenAndRender` picks the new fixture up as a seed
     automatically (10M executions clean). Full test suite, `go vet` and
     the race detector all pass.
-- **Documentation.** `docs/capability-matrix.md`'s JBIG2Decode filter
+- **Documentation.** `docs/CAPABILITY-MATRIX.md`'s JBIG2Decode filter
     row moved from "Not scheduled / Not started" to "Phase 8 / Partial",
     listing what is implemented and naming every deliberately
     unimplemented JBIG2 feature; its images row was split so JBIG2 and
@@ -1127,7 +1127,7 @@ in order, not rewritten later except to fix mistakes.
     stopped collapsing on slow inputs - 12M executions on
     `internal/filter`'s target and 95M on the root package's, both clean.
     `TestJBIG2SymbolModeBoundsHostileInput` pins each bound.
-- **Documentation.** `docs/capability-matrix.md`'s JBIG2 rows list
+- **Documentation.** `docs/CAPABILITY-MATRIX.md`'s JBIG2 rows list
     everything 8d-8h added and name every remaining unimplemented
     feature; `FIXTURES.md` documents both new fixtures and the
     `real-world/` section's rules; `.gitattributes` marks the new
@@ -1516,7 +1516,7 @@ in order, not rewritten later except to fix mistakes.
     byte-for-byte except the one new fixture added.
 - **What's carried forward.** A Type 1 font's own built-in `/Encoding`
     array and `seac` composition remain unimplemented, matching CFF's
-    identical, already-documented gaps - see `docs/capability-matrix.md`'s
+    identical, already-documented gaps - see `docs/CAPABILITY-MATRIX.md`'s
     updated Type 1 row. A `/FontFile` stream binding its "read N binary
     bytes" private procedure to a name other than the canonical `RD`/`-|`
     (essentially unseen in real-world output, per `isType1RDToken`'s doc
@@ -1616,7 +1616,7 @@ in order, not rewritten later except to fix mistakes.
     the new fixture as a seed automatically) found no panic or hang.
 - **What's carried forward.** Every deliberate scope limit is documented
     on `internal/acroform`'s own package doc comment and cross-referenced
-    from `docs/capability-matrix.md`'s AcroForm field rendering row:
+    from `docs/CAPABILITY-MATRIX.md`'s AcroForm field rendering row:
     comb fields render as ordinary non-comb text, a choice field's
     `/Opt` export-value table is never consulted, a multi-select list
     box always shows only its first selection, and font auto-sizing/
@@ -1692,7 +1692,7 @@ in order, not rewritten later except to fix mistakes.
     shading type's optional `/Background` and `/BBox` entries remain
     unimplemented - a pre-existing simplification predating this phase
     (axial/radial never read them either), now called out explicitly in
-    `docs/capability-matrix.md` since mesh shadings will make `/BBox`
+    `docs/CAPABILITY-MATRIX.md` since mesh shadings will make `/BBox`
     more commonly relevant once Phase 13b lands.
 
 ### Phase 13b: Mesh shading infrastructure and Type 4 (free-form triangle mesh) — done (2026-09-10)
@@ -1982,7 +1982,7 @@ in order, not rewritten later except to fix mistakes.
     nothing about the pattern-specific resolution path (found through
     `/Resources /Pattern` rather than `/Resources /Shading`, and always a
     stream rather than sometimes a dictionary) trips up specifically on a
-    mesh shading. `docs/capability-matrix.md`'s Shading and Shading
+    mesh shading. `docs/CAPABILITY-MATRIX.md`'s Shading and Shading
     patterns rows both moved to "Done".
 - **Tests.** `internal/content/meshshading_test.go` gained a full
     single-patch round trip (16 points including the 4 internal ones, 4
@@ -2220,7 +2220,7 @@ in order, not rewritten later except to fix mistakes.
     right box also *anchored* it, which a dimensions-only check could not
     tell apart from a fixed-size crop). Added to
     `TestRenderMatchesReferenceImages`'s golden-image list; no other
-    fixture's reference image changed. `docs/capability-matrix.md`'s Page
+    fixture's reference image changed. `docs/CAPABILITY-MATRIX.md`'s Page
     boxes row updated to Done.
 - **What's carried forward.** Nothing scoped to page boxes; Phase 16's
     remaining half is PDF 2.0 verification (16c).
@@ -2271,7 +2271,7 @@ in order, not rewritten later except to fix mistakes.
     search. Left unimplemented: no known demand, and it is unrelated to
     whether existing 1.7-targeting code handles a 2.0 file's *shared*
     structure, which is what this sub-phase set out to verify.
-    `docs/capability-matrix.md`'s PDF versions row updated to Partial
+    `docs/CAPABILITY-MATRIX.md`'s PDF versions row updated to Partial
     (from Not started), recording exactly this: structural compatibility
     verified, `/AF` still a documented gap, and this project's formal
     supported-version-range statement in `docs/PLAN.md` intentionally
@@ -2351,7 +2351,7 @@ in order, not rewritten later except to fix mistakes.
     `/SMask` dictionary, exactly as before this sub-phase. This sub-phase
     changes no rendered output for any existing fixture (confirmed: the
     full test suite, including `TestRenderMatchesReferenceImages`,
-    passes unmodified). `docs/capability-matrix.md`'s Soft masks row is
+    passes unmodified). `docs/CAPABILITY-MATRIX.md`'s Soft masks row is
     intentionally left "Not started" until 17b makes the feature
     actually reachable from a content stream. Building and interpreting
     a real `/SMask` dictionary (`/S`, `/G`, `/BC`) into a `SoftMask` is
@@ -2438,7 +2438,7 @@ in order, not rewritten later except to fix mistakes.
     component-count cases. A 15-second `FuzzParseAndInterpret` run found
     no panic or hang. Full test suite, `go vet`, and `gofmt` all pass
     clean.
-- **What's carried forward.** `docs/capability-matrix.md`'s Soft masks
+- **What's carried forward.** `docs/CAPABILITY-MATRIX.md`'s Soft masks
     row is still not updated - this sub-phase makes the feature
     reachable and unit-tested at the `internal/content` level, but there
     is no end-to-end fixture or `Page.Render` regression test yet, and
@@ -2482,7 +2482,7 @@ in order, not rewritten later except to fix mistakes.
     automatically) found no panic or hang. Full test suite, `go vet`,
     and `gofmt` all pass clean.
 - **Capability matrix updated.**
-    [docs/capability-matrix.md](../docs/capability-matrix.md)'s Soft
+    [docs/CAPABILITY-MATRIX.md](../docs/CAPABILITY-MATRIX.md)'s Soft
     masks row is now "Done" (target phases "Phase 5, 17a-17c"),
     describing the `/S`/`/G`/`/BC` handling and the two documented scope
     cuts (`/TR`, and the mask group's own isolated/knockout compositing -
@@ -2565,7 +2565,7 @@ in order, not rewritten later except to fix mistakes.
     coding/quantization parameters, and tile-part byte ranges. Per-tile
     COD/COC/QCD/QCC overrides are parsed but not yet applied (see
     `parseTilePartHeader`'s doc comment above). Nothing in
-    `internal/filter` or `docs/capability-matrix.md` changes yet - a
+    `internal/filter` or `docs/CAPABILITY-MATRIX.md` changes yet - a
     JPXDecode stream still fails with `ErrUnsupported`, unchanged from
     before this sub-phase, since no decoding capability exists to wire in
     until 14f. See this section's sub-phase list above for 14b onward.
@@ -2672,7 +2672,7 @@ in order, not rewritten later except to fix mistakes.
     what `decodeTilePackets` locates into quantized wavelet coefficients)
     does not exist yet - `mq.go`'s decoder is unused by anything except
     its own tests until 14c calls it. `internal/filter` and
-    `docs/capability-matrix.md` are unchanged; a JPXDecode stream still
+    `docs/CAPABILITY-MATRIX.md` are unchanged; a JPXDecode stream still
     fails with `ErrUnsupported`.
 
 ### Phase 14c: EBCOT tier-1 bit-plane entropy decoding — done (2026-09-10)
@@ -2738,7 +2738,7 @@ in order, not rewritten later except to fix mistakes.
     transform (14d) do not exist yet - `decodeTileTier1`'s output
     (magnitude/sign/bitsDecoded per code-block) is unused by anything
     except this sub-phase's own tests. `internal/filter` and
-    `docs/capability-matrix.md` are unchanged; a JPXDecode stream still
+    `docs/CAPABILITY-MATRIX.md` are unchanged; a JPXDecode stream still
     fails with `ErrUnsupported`.
 
 ### Phase 14d: dequantization and the inverse wavelet transform — done (2026-09-10)
@@ -2828,7 +2828,7 @@ in order, not rewritten later except to fix mistakes.
     this sub-phase's own tests. There is still no forward wavelet
     transform or quantizer anywhere in this package (only tier-1's own
     from-scratch encoder exists) - 14g is where fixtures need one built.
-    `internal/filter` and `docs/capability-matrix.md` are unchanged; a
+    `internal/filter` and `docs/CAPABILITY-MATRIX.md` are unchanged; a
     JPXDecode stream still fails with `ErrUnsupported`.
 
 ### Phase 14e: multiple component transform, DC level shifting, and tile compositing — done (2026-09-11)
@@ -2921,7 +2921,7 @@ in order, not rewritten later except to fix mistakes.
     isolation. Full test suite, `go vet`, and `gofmt` all pass clean.
 - **What's carried forward.** `Decode` is still unreachable from
     `internal/filter` - `internal/filter` and
-    `docs/capability-matrix.md` are unchanged, and a JPXDecode stream
+    `docs/CAPABILITY-MATRIX.md` are unchanged, and a JPXDecode stream
     still fails with `ErrUnsupported`; 14f is what wires this package's
     now-complete decode pipeline up to a real PDF image, including the
     PDF-specific `/ColorSpace`-absent-falls-back-to-embedded and
@@ -3067,7 +3067,7 @@ in order, not rewritten later except to fix mistakes.
     is reached; a genuine "encode with this package's own from-scratch
     encoder, decode through the full stack, check pixels" round trip - the
     kind `dct_test.go` already has for DCTDecode - is 14g's job, along
-    with `docs/capability-matrix.md` and `FIXTURES.md` (both still say
+    with `docs/CAPABILITY-MATRIX.md` and `FIXTURES.md` (both still say
     JPXDecode is "Not started", unchanged by this phase on purpose - see
     Phase 14's own sub-phase list). The `/SMaskInData` "trailing
     component" convention and the component-count `/ColorSpace` fallback
@@ -3168,7 +3168,7 @@ in order, not rewritten later except to fix mistakes.
         pass clean; `FuzzDecode` ran 4.5M+ executions and
         `FuzzOpenAndRender` 4M+ after the `validateGeometry` fix, both
         clean.
-    - **Documentation.** `docs/capability-matrix.md`'s JPXDecode filter
+    - **Documentation.** `docs/CAPABILITY-MATRIX.md`'s JPXDecode filter
         and images rows moved from "Not started" to "Partial", each
         naming what is and is not implemented and pointing at
         `internal/jpx/doc.go`'s own "Scope" section as the living,
@@ -3267,7 +3267,7 @@ in order, not rewritten later except to fix mistakes.
     `PDFKit`-rendered ground truth built for this session (macOS
     `PDFKit`/`Quartz`, via a small `swift` script - not committed, ground
     truth only) - all four pages now match.
-- **Documentation.** `docs/capability-matrix.md`'s Form XObjects, Alpha
+- **Documentation.** `docs/CAPABILITY-MATRIX.md`'s Form XObjects, Alpha
     constants, and Transparency groups rows updated; this plan's Backlog
     "Transparency groups" item narrowed to the still-unaddressed `/I`/`/K`
     isolated/knockout-flag gap.

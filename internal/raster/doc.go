@@ -35,5 +35,5 @@
 // coverage rasterization and clipping as an ordinary Fill (see
 // Canvas.paint) and adding only per-pixel image sampling on top.
 // Text/glyph rendering is Phase 4, and transparency/pattern/shading
-// support is Phase 5 - see docs/capability-matrix.md.
+// support is Phase 5 - see docs/CAPABILITY-MATRIX.md.
 package raster

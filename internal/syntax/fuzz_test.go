@@ -24,7 +24,7 @@ import (
 // fuzzing (letting these run for extended periods looking for new
 // crashers) is a good candidate for a dedicated, separate CI job later
 // in this project's development, once there is more surface area worth
-// fuzzing continuously - see docs/capability-matrix.md and the README's
+// fuzzing continuously - see docs/CAPABILITY-MATRIX.md and the README's
 // phased plan for what is still to come.
 
 // FuzzParseValue feeds arbitrary bytes to ParseValue, the entry point

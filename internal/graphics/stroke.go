@@ -17,7 +17,7 @@ import "math"
 // nonzero winding, which is not guaranteed under the even-odd rule.
 //
 // Dash patterns ("d") are not applied here: this project does not yet
-// implement PDF's dash-pattern operator (see docs/capability-matrix.md),
+// implement PDF's dash-pattern operator (see docs/CAPABILITY-MATRIX.md),
 // so every stroke is currently painted solid regardless of the graphics
 // state's dash array.
 //

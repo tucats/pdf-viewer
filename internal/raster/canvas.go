@@ -14,7 +14,7 @@ import (
 // writes ends up fully opaque (alpha 255): this project's rendered
 // output is always a flattened raster over a solid background color
 // (see NewCanvas), not a document with its own transparency to
-// preserve - see docs/capability-matrix.md's transparency row for where
+// preserve - see docs/CAPABILITY-MATRIX.md's transparency row for where
 // true alpha/transparency-group support is scheduled (Phase 5).
 type Canvas struct {
 	img           *image.RGBA

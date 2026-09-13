@@ -49,7 +49,7 @@ import (
 // where in device space that offscreen buffer should sit (see
 // buildSoftMask's own comments on devMinX/devMinY/maskW/maskH).
 //
-// # Scope cuts (each documented in docs/capability-matrix.md too)
+// # Scope cuts (each documented in docs/CAPABILITY-MATRIX.md too)
 //
 //   - /TR, the mask's own transfer function (an arbitrary PDF function
 //     remapping every computed mask value before use) is not applied -

@@ -82,13 +82,13 @@ pointing at each one, plus the fifth item from that same phase bullet
     one very long content stream): every stage's worst-case work is
     already bounded independently (`maxRenderPixels`, `maxFormDepth`,
     `maxPatternTileDimension`, and similar limits described throughout
-    `docs/capability-matrix.md`), so a canceled context is honored
+    `docs/CAPABILITY-MATRIX.md`), so a canceled context is honored
     promptly in practice without needing finer-grained checks threaded
     through every internal loop - revisit only if a real workload shows
     otherwise.
 - **Password handling.** This project implements no PDF security
     handler (Standard or public-key) and has no plan to add one without
-    concrete demand - see `docs/capability-matrix.md`'s Encryption
+    concrete demand - see `docs/CAPABILITY-MATRIX.md`'s Encryption
     section. `Open`/`OpenFile` reject any document whose trailer
     declares an `/Encrypt` dictionary immediately, with an error wrapping
     the new `ErrEncrypted` sentinel, rather than allowing the open to
@@ -108,7 +108,7 @@ pointing at each one, plus the fifth item from that same phase bullet
 This project's initial release targets **PDF 1.4 through 1.7**: classic
 and cross-reference-stream file structure, the content-stream and
 graphics-state model, and the object/filter/color-space/font machinery
-those versions define, per `docs/capability-matrix.md`'s row-by-row
+those versions define, per `docs/CAPABILITY-MATRIX.md`'s row-by-row
 breakdown of what is actually implemented within that range (a
 supported *version* does not imply every *feature* introduced in it is
 implemented - encryption is the clearest example, see above). PDF 2.0
@@ -214,7 +214,7 @@ Phase 2 work. See the Progress Log at the end of this document.
 transforms, clipping, and page boxes on every supported platform.
 
 **Status: done.** See the Progress Log at the end of this document for
-what was actually built, and `docs/capability-matrix.md`'s new "Content
+what was actually built, and `docs/CAPABILITY-MATRIX.md`'s new "Content
 streams and graphics" section for the detailed, row-by-row breakdown
 (stroke joins and multi-clip intersection are documented approximations,
 not full implementations - see that table's notes).
@@ -234,7 +234,7 @@ not full implementations - see that table's notes).
     visibly consistent with full-page rendering.
 
 **Status: done.** See the Progress Log at the end of this document for
-what was actually built, and `docs/capability-matrix.md`'s "Content
+what was actually built, and `docs/CAPABILITY-MATRIX.md`'s "Content
 streams and graphics", "Color spaces", and "Images" sections for the
 detailed, row-by-row breakdown (Lab color space and true ICC color
 management are documented, deliberately deferred approximations - not
@@ -254,7 +254,7 @@ full implementations - see that table's notes).
     predictable fallback; text positioning tests cover rotation and scaling.
 
 **Status: done.** See the Progress Log at the end of this document for
-what was actually built, and `docs/capability-matrix.md`'s "Fonts" and
+what was actually built, and `docs/CAPABILITY-MATRIX.md`'s "Fonts" and
 "Content streams and graphics" sections for the detailed, row-by-row
 breakdown (embedded TrueType outlines and Identity-H/V CID fonts are
 fully implemented; Type 1/CFF outline extraction, non-Identity CID
@@ -279,7 +279,7 @@ gaps - not full implementations - see those tables' notes).
     (isolated/knockout compositing for a `/Group` Form XObject),
     ExtGState-level soft masks, the four non-separable blend modes, and
     uncolored (`/PaintType 2`) tiling patterns are documented, deliberate
-    gaps - not full implementations - see `docs/capability-matrix.md`'s
+    gaps - not full implementations - see `docs/CAPABILITY-MATRIX.md`'s
     notes on each. Caching decoded resources across multiple `Page.
     Render` calls is deferred to Phase 6, since a cross-render cache's
     correctness depends on Phase 6's own "decide concurrency guarantees"
@@ -413,7 +413,7 @@ phase's entry with a note about what changed.
     fixtures exist and start with a PDF header) that will be superseded by
     real structural parsing tests once Phase 1 lands.
 - **Capability matrix.** Added
-    [docs/capability-matrix.md](docs/capability-matrix.md), tracking
+    [docs/CAPABILITY-MATRIX.md](docs/CAPABILITY-MATRIX.md), tracking
     support status per PDF version, encryption scheme, filter, color
     space, font type, transparency/graphics feature, image feature,
     annotation feature, and page box, each tagged with its target phase.
@@ -520,7 +520,7 @@ phase's entry with a note about what changed.
     end-to-end against the fixture corpus (rather than any internal
     package directly), including the closed-document/page-index error
     paths and a canceled-context check on `Render`.
-- **Capability matrix updated.** `docs/capability-matrix.md`'s "PDF
+- **Capability matrix updated.** `docs/CAPABILITY-MATRIX.md`'s "PDF
     1.4–1.7 core structure" row is now "Partial" (classic xref/trailer/
     incremental-update support exists; broader real-world corpus coverage
     is still growing) and its "PDF 1.5+ cross-reference streams" row now
@@ -576,7 +576,7 @@ phase's entry with a note about what changed.
     (out-of-range compressed index, missing `/W`), and by the existing
     `FuzzOpenAndResolveAll` fuzz target, reseeded with the new fixtures.
     Hybrid-reference files (`/XRefStm` alongside a classic table) are not
-    specially handled; see `docs/capability-matrix.md`.
+    specially handled; see `docs/CAPABILITY-MATRIX.md`.
 - **Fixed a Phase 1 bug in `internal/syntax`, surfaced by Phase 2.**
     `readStreamBody`'s direct-`/Length` path (`readExactly`) stopped
     exactly at the end of a stream's raw data without consuming the
@@ -625,7 +625,7 @@ phase's entry with a note about what changed.
     `Operator`s against a `graphics.Stack`, implementing graphics state,
     path construction/painting, clipping, and solid
     DeviceGray/RGB/CMYK color per the phase's scope (see the package doc
-    comment and `docs/capability-matrix.md`'s new "Content streams and
+    comment and `docs/CAPABILITY-MATRIX.md`'s new "Content streams and
     graphics" section for the full operator-by-operator breakdown). An
     operator this package does not recognize (text, `Do`, `sh`, marked
     content, ...) is silently skipped rather than aborting the whole
@@ -646,7 +646,7 @@ phase's entry with a note about what changed.
     filled path onto an always-fully-opaque `*image.RGBA`, intersecting
     every active clip by multiplying each one's independently
     rasterized coverage (an approximation, exact for opaque-interior
-    clips, documented in `docs/capability-matrix.md`).
+    clips, documented in `docs/CAPABILITY-MATRIX.md`).
     [render.go](internal/raster/render.go)'s `Render` is the package's
     entry point, painting a `graphics.DisplayList` in order onto a fresh
     background-filled `Canvas`. Every source of variation in the
@@ -721,7 +721,7 @@ phase's entry with a note about what changed.
     of executions during development, seeded from the full fixture
     corpus.
 - **Capability matrix updated.**
-    [docs/capability-matrix.md](docs/capability-matrix.md) gained a new
+    [docs/CAPABILITY-MATRIX.md](docs/CAPABILITY-MATRIX.md) gained a new
     "Content streams and graphics" section (Phase 2's core deliverable
     previously had no dedicated section at all) documenting every
     content-stream operator category and its known simplifications
@@ -972,7 +972,7 @@ phase's entry with a note about what changed.
     `TestRenderMatchesReferenceImages` for the same whole-image
     regression coverage the Phase 2 vector fixtures already had.
 - **Capability matrix updated.**
-    [docs/capability-matrix.md](docs/capability-matrix.md)'s "Content
+    [docs/CAPABILITY-MATRIX.md](docs/CAPABILITY-MATRIX.md)'s "Content
     streams and graphics" (image XObjects, inline images), "Color spaces"
     (DeviceGray/RGB/CMYK as an image color space, Indexed, ICCBased,
     CalGray/CalRGB), and "Images" (referenced/inline images, image masks,
@@ -1138,7 +1138,7 @@ phase's entry with a note about what changed.
     `TestRenderMatchesReferenceImages` for the same whole-image regression
     coverage every earlier phase's fixtures already had.
 - **Capability matrix updated.**
-    [docs/capability-matrix.md](docs/capability-matrix.md) gained
+    [docs/CAPABILITY-MATRIX.md](docs/CAPABILITY-MATRIX.md) gained
     detailed "Fonts" rows (simple TrueType and Identity-H/V CID fonts:
     "Done"; simple Type 1, OpenType/CFF, and non-Identity CID encodings:
     documented fallback behavior rather than "Not started", since a
@@ -1257,7 +1257,7 @@ phase's entry with a note about what changed.
     [pdfviewer_render_test.go](pdfviewer_render_test.go)'s
     `TestRenderMatchesReferenceImages` for the same whole-image regression
     coverage every earlier phase's fixtures already have.
-- **Capability matrix updated.** `docs/capability-matrix.md`'s "Color
+- **Capability matrix updated.** `docs/CAPABILITY-MATRIX.md`'s "Color
     spaces" table now marks Lab, Separation, and DeviceN "Done"; the
     "Content streams and graphics" table's `sc`/`SC`/`scn`/`SCN` row
     describes the new resolved-color-space path and its fallback.
@@ -1360,7 +1360,7 @@ phase's entry with a note about what changed.
     pixel-sampling assertions for all three, and all three were added to
     [pdfviewer_render_test.go](pdfviewer_render_test.go)'s
     `TestRenderMatchesReferenceImages`.
-- **Capability matrix updated.** `docs/capability-matrix.md` gained a
+- **Capability matrix updated.** `docs/CAPABILITY-MATRIX.md` gained a
     "Shading (`sh` operator)" row in "Content streams and graphics"
     ("Partial": axial/radial done, function-based and mesh shadings
     not); the "Transparency and advanced graphics" table's "Shading
@@ -1434,7 +1434,7 @@ phase's entry with a note about what changed.
     pixel-sampling assertions, and the fixture was added to
     [pdfviewer_render_test.go](pdfviewer_render_test.go)'s
     `TestRenderMatchesReferenceImages`.
-- **Capability matrix updated.** `docs/capability-matrix.md`'s "Form
+- **Capability matrix updated.** `docs/CAPABILITY-MATRIX.md`'s "Form
     XObjects" row (previously grouped as "Phase 3/5, not yet scheduled
     precisely") is now "Phase 5, Done".
 - **What's carried forward.** Tiling patterns (which, unlike Form
@@ -1516,7 +1516,7 @@ phase's entry with a note about what changed.
     were added to
     [pdfviewer_render_test.go](pdfviewer_render_test.go)'s
     `TestRenderMatchesReferenceImages`.
-- **Capability matrix updated.** `docs/capability-matrix.md`'s
+- **Capability matrix updated.** `docs/CAPABILITY-MATRIX.md`'s
     "Annotation appearance streams" row is now "Done"; "AcroForm field
     rendering" is now "Partial" (a field widget's *existing* appearance
     renders; this project never regenerates one from a field's value).
@@ -1605,7 +1605,7 @@ phase's entry with a note about what changed.
     `TestRenderMatchesReferenceImages`, and
     [pdfviewer_transparency_test.go](pdfviewer_transparency_test.go)
     adds direct pixel-sampling assertions.
-- **Capability matrix updated.** `docs/capability-matrix.md`'s "Alpha
+- **Capability matrix updated.** `docs/CAPABILITY-MATRIX.md`'s "Alpha
     constants and basic transparency" row is now "Done"; "Transparency
     groups and blend modes" is now "Partial" (blend modes done; groups
     themselves are not implemented - a Form XObject's `/Group` entry is
@@ -1706,7 +1706,7 @@ phase's entry with a note about what changed.
     [pdfviewer_render_test.go](pdfviewer_render_test.go) (both a cell's
     red square and its transparent surroundings) and added to that
     file's `TestRenderMatchesReferenceImages`.
-- **Capability matrix updated.** `docs/capability-matrix.md`'s "Tiling
+- **Capability matrix updated.** `docs/CAPABILITY-MATRIX.md`'s "Tiling
     patterns" row is now "Partial" (colored patterns done; uncolored are
     not); "Pattern color space" in "Color spaces" is now "Done".
 - **What's carried forward.** Transparency groups (isolated/knockout
@@ -1820,7 +1820,7 @@ phase's entry with a note about what changed.
     later at the first still-encrypted stream or string it tried to
     read. This project implements no PDF security handler and has no
     plan to add one without concrete demand (see
-    `docs/capability-matrix.md`'s Encryption section, now updated).
+    `docs/CAPABILITY-MATRIX.md`'s Encryption section, now updated).
     Covered by
     [pdferror_test.go](internal/pdferror/pdferror_test.go)'s
     `TestEncryptedfWrapsErrEncryptedAndErrUnsupported`,
@@ -1842,7 +1842,7 @@ phase's entry with a note about what changed.
     and the caller-misuse `ErrClosed`/`ErrPageIndex`) in one place, with
     the reasoning for why each exists and what would justify a fifth.
 - **Supported PDF versions decision.** Documented (new README section
-    above, and an updated note on `docs/capability-matrix.md`'s "PDF 2.0"
+    above, and an updated note on `docs/CAPABILITY-MATRIX.md`'s "PDF 2.0"
     row) rather than implemented: this project's initial release targets
     PDF 1.4-1.7; PDF 2.0 is not yet a supported version, though much of
     the existing 1.7-targeting code is expected to already handle a 2.0
@@ -1924,7 +1924,7 @@ phase's entry with a note about what changed.
     fonts only, matching the README's original Phase 5 bullet's own
     example ("fonts, in particular"); decoded images and content-stream
     parse results are not cached across renders - see
-    docs/capability-matrix.md if this changes.
+    docs/CAPABILITY-MATRIX.md if this changes.
 
 ### Phase 6c: Viewer-integration examples (2026-09-08)
 
@@ -2064,14 +2064,14 @@ phase's entry with a note about what changed.
     since those phases landed. Rewritten to describe what is actually
     true as of Phase 6 (open/inspect/render/thumbnail/close all work,
     exercised end to end by the cmd/ example programs) without restating
-    docs/capability-matrix.md's row-by-row detail, specifically so this
+    docs/CAPABILITY-MATRIX.md's row-by-row detail, specifically so this
     section is less likely to silently go stale again the same way -
-    docs/capability-matrix.md, updated in the same change as any future
+    docs/CAPABILITY-MATRIX.md, updated in the same change as any future
     capability change per its own stated rule, is the durable source of
     truth for feature-level status; this doc comment now only points at
     it instead of duplicating it.
 - **Capability matrix and README cross-checked against actual code.**
-    Reviewed `docs/capability-matrix.md` end to end against this phase's
+    Reviewed `docs/CAPABILITY-MATRIX.md` end to end against this phase's
     changes; no further rows needed updating beyond 6a's Encryption and
     PDF-versions changes (resource caching, examples, and CI hardening
     are implementation/process details, not PDF *capabilities*, so they
@@ -2111,7 +2111,7 @@ phase's entry with a note about what changed.
 - **What's carried forward.** An explicit version tag remains the
     maintainer's own decision, as described above. Beyond that, this
     project's only remaining deliberately-deferred gaps are the ones
-    already recorded throughout `docs/capability-matrix.md` (Type 1/CFF
+    already recorded throughout `docs/CAPABILITY-MATRIX.md` (Type 1/CFF
     font outlines, non-Identity CID encodings, transparency groups,
     ExtGState soft masks, uncolored tiling patterns, PDF password
     support, and so on) - each revisit-on-demand, per the standard this

@@ -84,7 +84,7 @@ cancellation and concurrency guarantees. If you want the design
 reasoning behind those decisions and a phase-by-phase account of how the
 renderer got built, see [docs/PLAN.md](docs/PLAN.md); for a row-by-row
 answer to "does this support PDF feature X," see
-[docs/capability-matrix.md](docs/capability-matrix.md).
+[docs/CAPABILITY-MATRIX.md](docs/CAPABILITY-MATRIX.md).
 
 Working example programs live under [cmd/](cmd/) — `pdfpreview`,
 `pdfthumbnails`, and `pdfexport` — if you'd rather read runnable code

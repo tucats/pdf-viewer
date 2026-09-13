@@ -442,7 +442,7 @@ func (s *type1Scanner) readBinary(length int) ([]byte, bool) {
 // genuinely custom name is a narrow, documented gap this package
 // accepts - matching this project's precedent elsewhere (see, for
 // example, cff.go's charset-1/2 gap or the LZWDecode /EarlyChange 0
-// gap in docs/capability-matrix.md) of choosing a simplification that
+// gap in docs/CAPABILITY-MATRIX.md) of choosing a simplification that
 // covers real-world files rather than the full generality the format
 // technically allows. Such a font's charstrings simply fail to parse
 // (parseType1CharStrings/parseType1Subrs return ok=false), falling back

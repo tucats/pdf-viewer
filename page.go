@@ -39,7 +39,7 @@ type Page interface {
 	//
 	// Vector graphics, (Phase 3) images, and (Phase 4) text are painted -
 	// see internal/content's package doc comment and
-	// docs/capability-matrix.md for the current, phase-by-phase
+	// docs/CAPABILITY-MATRIX.md for the current, phase-by-phase
 	// breakdown (transparency and patterns are Phase 5).
 	// A page using only unsupported features still renders (as a blank
 	// page in its background color) rather than failing outright; Render

@@ -8,7 +8,7 @@ that point, so "what's next" keeps having one authoritative answer
 rather than scattering across ad-hoc notes.
 
 Unlike PLAN2 (which started from a systematic sweep of
-`docs/capability-matrix.md`'s "Not started"/"Not scheduled" rows), this
+`docs/CAPABILITY-MATRIX.md`'s "Not started"/"Not scheduled" rows), this
 document currently exists because of a single concrete trigger: a
 real-world PDF a user is actually working with
 (`2014ElectionManual-stripped.pdf`, a New York State Board of Elections
@@ -35,7 +35,7 @@ own file, as with Phase 19) contradicts it - which is exactly how
 Phase 19 came to be the first entry here despite PLAN2's Backlog
 section never mentioning it at all.
 
-Each phase should update `docs/capability-matrix.md`'s corresponding
+Each phase should update `docs/CAPABILITY-MATRIX.md`'s corresponding
 row(s) in the same change that changes them, and land as
 independently-committable sub-phases per the project's established
 workflow (implement, test/fuzz, commit, push).
@@ -188,7 +188,7 @@ it, because only one of them has a fallback at all.
     non-fixture PDFs) before and after, confirming the `CS1` diagnostic
     no longer appears and the previously-guessed spot-color text/fills
     now render with the correct transformed color.
-- **19d: documentation.** `docs/capability-matrix.md`'s Separation/
+- **19d: documentation.** `docs/CAPABILITY-MATRIX.md`'s Separation/
     DeviceN row (currently notes "Type 4 PostScript-calculator functions
     are unsupported") and Shading row updated to reflect full Function
     Type 0/2/3/4 support; `FIXTURES.md` documents the two new fixtures.
@@ -214,7 +214,7 @@ Add an item here, rather than there, only once it is specifically a
 
 Same as PLAN2: update a phase's status and add a Progress Log entry
 (mirroring PLAN.md/PLAN2.md's own format) as work actually lands, and
-update `docs/capability-matrix.md`'s corresponding rows in the same
+update `docs/CAPABILITY-MATRIX.md`'s corresponding rows in the same
 change. Add new phases here, in severity order, as further post-v0.3.1
 gaps are found - do not restart a fourth document until this one is
 similarly complete.
@@ -316,7 +316,7 @@ appended in order, not rewritten later except to fix mistakes.
     updating the two doc comments that currently describe Type 4 as
     unimplemented (19b); `tools/genfixtures` fixtures with checked-in
     golden PNGs and re-validation against the trigger file,
-    `2014ElectionManual-stripped.pdf` (19c); `docs/capability-matrix.md`
+    `2014ElectionManual-stripped.pdf` (19c); `docs/CAPABILITY-MATRIX.md`
     and `FIXTURES.md` updates (19d).
 
 ### Phase 19b: wire into `internal/function.Parse` — done (2026-09-13)
@@ -428,13 +428,13 @@ appended in order, not rewritten later except to fix mistakes.
     `internal/function/type4_test.go` or `fuzz_test.go` (19a's coverage of
     every operator, `if`/`ifelse`, and the safety bounds already satisfies
     this sub-phase's own unit-test scope from the plan above).
-- **Deferred to 19d** (unchanged): `docs/capability-matrix.md`'s
+- **Deferred to 19d** (unchanged): `docs/CAPABILITY-MATRIX.md`'s
     Separation/DeviceN and Shading rows, and `testdata/fixtures/FIXTURES.md`'s
     entries for the two new fixtures.
 
 ### Phase 19d: documentation — done (2026-09-13)
 
-- **`docs/capability-matrix.md`.** Added a new row, "PDF Functions
+- **`docs/CAPABILITY-MATRIX.md`.** Added a new row, "PDF Functions
     (`/FunctionType` 0, 2, 3, 4)", to the "Color spaces" table - the
     matrix previously had no single place recording that all four
     function types are implemented at all; that fact was only ever

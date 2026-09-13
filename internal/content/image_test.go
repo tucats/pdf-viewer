@@ -186,7 +186,7 @@ func TestInterpretDoWithUnsupportedImageFeaturePropagatesError(t *testing.T) {
 	// /Pattern is not a legal image /ColorSpace at all (patterns are only
 	// meaningful for "scn"/"SCN" fill/stroke colors) - still an
 	// unsupported-color-space case now that /Lab itself (this test's
-	// former example - see docs/capability-matrix.md) is implemented.
+	// former example - see docs/CAPABILITY-MATRIX.md) is implemented.
 	imgDict := syntax.Dictionary{
 		"Subtype": syntax.Name("Image"),
 		"Width":   syntax.Integer(1), "Height": syntax.Integer(1),

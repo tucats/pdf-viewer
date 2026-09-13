@@ -450,7 +450,7 @@ func buildEncryptedAES256() []byte {
 // encryption, same empty user password) except for its header, which
 // declares "%PDF-2.0" instead of "%PDF-1.7" - confirming end to end that
 // this project's newest, PDF 2.0-era Standard Security Handler revision
-// (see docs/capability-matrix.md's Encryption section and PLAN2.md's
+// (see docs/CAPABILITY-MATRIX.md's Encryption section and PLAN2.md's
 // Phase 16, which flagged "new encryption revisions" as a genuinely
 // 2.0-specific concern worth checking) already works correctly under a
 // file that is honestly labeled as what it is, not only under a 1.7
@@ -1364,7 +1364,7 @@ func buildPageBoxes() []byte {
 // Phase 5 counterpart to buildFilledRect for a resolved, non-Device
 // color space used directly as a fill color (as opposed to only as an
 // image's /ColorSpace, which internal/image already supported before
-// Phase 5 - see docs/capability-matrix.md).
+// Phase 5 - see docs/CAPABILITY-MATRIX.md).
 func buildSeparationFill() []byte {
 	b := newBuilder()
 	b.addObject(1, 0, "<< /Type /Catalog /Pages 2 0 R >>", nil)

@@ -205,7 +205,7 @@ func (in *interpreter) exec(op Operator) error {
 	case "d", "ri", "i":
 		// Accepted and ignored: dash patterns, rendering intent, and
 		// flatness tolerance are not implemented - see
-		// docs/capability-matrix.md. Every stroke is painted solid
+		// docs/CAPABILITY-MATRIX.md. Every stroke is painted solid
 		// regardless of these.
 	case "gs":
 		if err := in.applyExtGState(st, op.Operands); err != nil {

@@ -21,7 +21,7 @@
 // for exactly what is and is not implemented) are implemented. Any other
 // filter name - only Crypt remains - returns an error wrapping
 // pdferror.ErrUnsupported naming the filter, rather than being silently
-// skipped or misread; see docs/capability-matrix.md for the up-to-date
+// skipped or misread; see docs/CAPABILITY-MATRIX.md for the up-to-date
 // status of each.
 //
 // # Filter chains

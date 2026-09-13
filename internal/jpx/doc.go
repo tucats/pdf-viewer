@@ -104,7 +104,7 @@
 //     5/3 reversible only, single layer, LRCP - see that file's own
 //     Scope section for why), tools/genfixtures fixtures built with it
 //     (image-jpx.pdf, image-jpx-rgb.pdf), end-to-end render tests, and
-//     documentation (docs/capability-matrix.md, FIXTURES.md). Also fixed
+//     documentation (docs/CAPABILITY-MATRIX.md, FIXTURES.md). Also fixed
 //     a real bug this sub-phase's own FuzzDecode seeds immediately
 //     found: siz.go's validateGeometry was missing the standard's own
 //     "XTOsiz+XTsiz > XOsiz" (and Y) requirement, letting a malformed

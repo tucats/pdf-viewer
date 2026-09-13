@@ -202,7 +202,7 @@ func (l *Lexer) next() (Token, error) {
 		// PostScript-calculator-function braces. This module does not
 		// yet interpret PostScript functions (planned for whenever
 		// Separation/DeviceN or type 4 shading functions are
-		// implemented, per docs/capability-matrix.md); treating each
+		// implemented, per docs/CAPABILITY-MATRIX.md); treating each
 		// brace as its own single-character keyword Token lets the
 		// lexer keep working on files that contain them elsewhere
 		// without needing to understand their contents.

@@ -28,7 +28,7 @@
 // abbreviations /G, /RGB, /CMYK) are supported directly. /ICCBased is
 // supported by component count only (1, 3, or 4 - treated as an alias
 // for the matching Device space, per this project's documented,
-// deliberately non-color-managed policy - see docs/capability-matrix.md)
+// deliberately non-color-managed policy - see docs/CAPABILITY-MATRIX.md)
 // rather than by actually applying the embedded ICC profile. /Indexed is
 // supported over any of those base spaces. /CalGray and /CalRGB are
 // treated as DeviceGray/DeviceRGB (ignoring their white point and gamma

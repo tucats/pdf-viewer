@@ -20,7 +20,7 @@
 // internal/filter. A document may freely mix classic and stream-based
 // cross-reference sections across its chain of incremental updates
 // (Adobe's own tools sometimes do exactly this); loadXref does not care
-// which kind of section it is walking. See docs/capability-matrix.md for
+// which kind of section it is walking. See docs/CAPABILITY-MATRIX.md for
 // the up-to-date status of this and every other capability.
 //
 // # Recovering from a corrupted cross-reference table
@@ -138,7 +138,7 @@ type Document struct {
 	// non-nil, Resolve decrypts every string and stream it reads before
 	// caching or returning it - see Resolve's own comments. A document
 	// with no /Encrypt entry at all (the common case - see
-	// docs/capability-matrix.md's Encryption section) leaves this nil,
+	// docs/CAPABILITY-MATRIX.md's Encryption section) leaves this nil,
 	// and Resolve skips the decryption step entirely.
 	crypt *crypt.Handler
 }
@@ -214,7 +214,7 @@ func Open(src *source.Reader, opts ...OpenOption) (*Document, error) {
 		// document whose user password does not validate against
 		// cfg.password (wrong, or simply not supplied), or that names a
 		// security handler other than Standard (public-key handlers - no
-		// known demand, see docs/capability-matrix.md), still fails
+		// known demand, see docs/CAPABILITY-MATRIX.md), still fails
 		// clearly here at Open, with an error wrapping ErrEncrypted,
 		// rather than proceeding only to fail confusingly later at the
 		// first still-encrypted stream or string actually read.

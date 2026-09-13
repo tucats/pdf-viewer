@@ -20,5 +20,5 @@
 // This is Phase 2 ("Content streams and a minimal raster backend") work
 // per the project's phased plan; transparency groups, blend modes, and
 // patterns are Phase 5 work and are not implemented here yet - see
-// docs/capability-matrix.md.
+// docs/CAPABILITY-MATRIX.md.
 package graphics

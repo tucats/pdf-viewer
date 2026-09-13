@@ -46,7 +46,7 @@ import (
 //   - ErrUnsupported: the input is well-formed but uses a PDF feature
 //     this package does not implement (a filter, color space, font
 //     program format, or shading type it does not decode; see
-//     docs/capability-matrix.md for the full, current list). More
+//     docs/CAPABILITY-MATRIX.md for the full, current list). More
 //     features are expected to move out of this category over time as
 //     later phases land; ErrMalformed inputs never will, since being
 //     malformed is not an implementation gap.

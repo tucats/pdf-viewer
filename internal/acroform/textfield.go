@@ -282,7 +282,7 @@ func wrapParagraph(font *fonts.Font, fontDict syntax.Dictionary, para string, si
 // generation can still proceed - rendering through font substitution if
 // the caller enabled it, or this project's existing notdefGlyph
 // placeholder-box fallback otherwise, exactly like any other
-// non-embedded font (see docs/capability-matrix.md's "Non-embedded font
+// non-embedded font (see docs/CAPABILITY-MATRIX.md's "Non-embedded font
 // fallback" row). This fallback path always succeeds; resolveDAFont has
 // no failure return.
 func resolveDAFont(r Resolver, f Field, name syntax.Name) (syntax.Dictionary, syntax.Object) {

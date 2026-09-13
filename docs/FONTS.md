@@ -97,7 +97,7 @@ specifically for fonts:
 > code.
 
 This is referenced again from `docs/PLAN.md:1059` as "a hard
-requirement, not a convenience," and `docs/capability-matrix.md`'s
+requirement, not a convenience," and `docs/CAPABILITY-MATRIX.md`'s
 "Non-embedded font fallback" row states "No system font service is ever
 queried." **Any font-substitution design has to be reconciled with this
 policy rather than silently overridden** - see "Open questions" below
@@ -298,12 +298,12 @@ questions"): both are in scope, not skipped -
 - CFF-outline (`OTTO`) support is a much bigger undertaking (a full CFF
   Type2 charstring interpreter) - the same scope this project has
   already deferred for *embedded* Type1C/CIDFontType0C fonts (see
-  `docs/capability-matrix.md`'s "OpenType/CFF" row). Explicitly in
+  `docs/CAPABILITY-MATRIX.md`'s "OpenType/CFF" row). Explicitly in
   scope here because it is important for macOS, whose system font
   directories lean heavily on CFF-outline `.ttc`/`.otf` files - but
   large enough to warrant its own phase (Phase 3) rather than being
   folded into directory scanning itself. Once built, it also closes the
-  long-standing embedded-CFF gap in `docs/capability-matrix.md` for
+  long-standing embedded-CFF gap in `docs/CAPABILITY-MATRIX.md` for
   free, since the same charstring interpreter serves both a
   `/FontFile3` embedded program and a candidate file found on disk.
 
@@ -624,7 +624,7 @@ outlines from a bare CFF program and from an `OTTO`-flavored sfnt's
 `CFF` table (the table tag itself is four bytes, `"CFF "`, but is
 referred to here without the padding space for readability) -
 unlocking both embedded `/FontFile3` fonts
-(`docs/capability-matrix.md`'s long-standing "OpenType/CFF: Not
+(`docs/CAPABILITY-MATRIX.md`'s long-standing "OpenType/CFF: Not
 started" row) and CFF-outline candidate files found on disk (the
 common case for several macOS system fonts).
 
@@ -647,7 +647,7 @@ common case for several macOS system fonts).
   fail closed, never panic or hang - `maxCompositeDepth`'s existing
   precedent for bounding recursive/self-referential structures applies
   equally to CFF's own subroutine call mechanism).
-- `docs/capability-matrix.md` update: flip "OpenType/CFF (Type1C,
+- `docs/CAPABILITY-MATRIX.md` update: flip "OpenType/CFF (Type1C,
   CIDFontType0C)" from "Not started" to "Done" (or "Partial", if some
   sub-feature - e.g. CFF2 variable fonts - is explicitly deferred
   further within this same phase).
@@ -733,7 +733,7 @@ hinting/grid-fitting is out of scope, matching this project's existing
   `TestProbeFontFile_OTTOWithCFFTableHasOutlines` for the new path;
   `FuzzProbeFontFile`'s seed corpus gained an OTTO+`"CFF "` seed too
   (20s local fuzz run after the change surfaced no crashes).
-- **3e - `docs/capability-matrix.md` update: Done.** "OpenType/CFF
+- **3e - `docs/CAPABILITY-MATRIX.md` update: Done.** "OpenType/CFF
   (Type1C, CIDFontType0C)" flipped from "Not started" to "Done"; the
   "Composite fonts: Type 0 / CID" and "Simple fonts: Type 1" rows'
   notes updated to reflect CFF support landing (both remain otherwise
@@ -794,7 +794,7 @@ into the existing font-loading fallback path.
   '2017 Pond Inspecttion.pdf'`) with substitution enabled to confirm
   the five Arial/Times fonts it names actually resolve to real outlines
   on a real macOS machine.
-- `docs/capability-matrix.md` update: a new "Font substitution" row (or
+- `docs/CAPABILITY-MATRIX.md` update: a new "Font substitution" row (or
   small set of rows) under Fonts.
 
 **Depends on.** Phases 1-3 (uses `FontCharacteristics` from Phase 1,
@@ -959,7 +959,7 @@ landed as independently committable sub-phases (4a-4f, mirroring Phase
   to carry a real `hhea`/`hmtx` table pair). A 15s local fuzz run of both
   `FuzzParseSfnt` and `FuzzProbeFontFile` after this change surfaced no
   crashes.
-- **4f - `docs/capability-matrix.md` update, plus a CLI flag for the
+- **4f - `docs/CAPABILITY-MATRIX.md` update, plus a CLI flag for the
   manual sanity check: Done.** "Non-embedded font fallback" updated to
   mention substitution as a source of a real outline/advance width when
   enabled; a new "Font substitution" row added, status "Done for simple

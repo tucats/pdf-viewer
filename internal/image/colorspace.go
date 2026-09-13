@@ -150,7 +150,7 @@ func resolveColorSpaceArray(r Resolver, arr syntax.Array, resources syntax.Dicti
 // component count alone (1, 3, or 4 - its stream dictionary's required
 // /N entry), aliasing it to DeviceGray/DeviceRGB/DeviceCMYK respectively,
 // rather than by parsing and applying the embedded ICC color profile
-// itself - see the package doc comment and docs/capability-matrix.md.
+// itself - see the package doc comment and docs/CAPABILITY-MATRIX.md.
 func resolveICCBased(r Resolver, arr syntax.Array) (colorSpace, error) {
 	if len(arr) < 2 {
 		return colorSpace{}, pdferror.Malformedf("/ICCBased array is missing its stream reference")
@@ -373,7 +373,7 @@ func resolveLab(r Resolver, arr syntax.Array) (colorSpace, error) {
 // render with a color cast this function does not correct for. A full,
 // chromatic-adaptation-aware conversion would need to adapt white to
 // D65 before applying the matrix; this project does not implement ICC-
-// grade color management anywhere (see docs/capability-matrix.md), so
+// grade color management anywhere (see docs/CAPABILITY-MATRIX.md), so
 // adding that machinery for /Lab alone was judged not worth the
 // complexity relative to this simpler, still broadly recognizable
 // conversion.

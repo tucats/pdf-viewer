@@ -14,7 +14,7 @@
 // - it never generates one from a field's value, computes a checkbox's
 // on/off state, or does anything else an interactive form-filling engine
 // would; see the repository README's non-goals and
-// docs/capability-matrix.md's "Annotations and forms" section.
+// docs/CAPABILITY-MATRIX.md's "Annotations and forms" section.
 //
 // # The appearance-to-rectangle mapping (12.5.5)
 //

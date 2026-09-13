@@ -31,7 +31,7 @@ import (
 // requirement to "define font fallback and missing-glyph behavior" as
 // an explicit policy, and it means internal/content's text-showing code
 // never needs its own separate "what if the glyph can't be found" branch
-// - see docs/capability-matrix.md's Fonts section for exactly which font
+// - see docs/CAPABILITY-MATRIX.md's Fonts section for exactly which font
 // programs this package can and cannot extract real outlines from.
 // glyphOutlineSource is the small interface both an embedded TrueType
 // program (*sfntFont, truetype.go) and an embedded CFF program
@@ -171,7 +171,7 @@ type Font struct {
 	// top-level doc comment) - so spaceCodes is always empty for one,
 	// and a CID font falling back to notdefGlyph may draw a box for a
 	// space character; this is a narrow, documented, purely cosmetic gap
-	// (see docs/capability-matrix.md), not a positioning error, since
+	// (see docs/CAPABILITY-MATRIX.md), not a positioning error, since
 	// Width is unaffected either way.
 	spaceCodes map[int]bool
 
@@ -466,7 +466,7 @@ func notdefGlyph(width float64) *graphics.Path {
 //
 // Load does not fail merely because a font is a kind this package
 // cannot extract real glyph outlines from (Type 1, CFF, non-embedded, or
-// Type 3 - see docs/capability-matrix.md): it returns a usable Font in
+// Type 3 - see docs/CAPABILITY-MATRIX.md): it returns a usable Font in
 // every case, falling back to notdefGlyph for painting and this
 // package's best-effort width information for positioning, per this
 // type's doc comment. It returns a non-nil error only when dict itself

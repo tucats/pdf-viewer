@@ -190,7 +190,7 @@ type FontSubstitution struct {
 
 // WithPredefinedCMaps opts a Document into resolving a Type0/CID font's
 // *predefined* CJK /Encoding name (e.g. "UniGB-UCS2-H", "90ms-RKSC-H" -
-// see docs/PLAN2.md's Phase 9 and docs/capability-matrix.md's Fonts
+// see docs/PLAN2.md's Phase 9 and docs/CAPABILITY-MATRIX.md's Fonts
 // section) against real CMap resource data supplied by the embedding
 // application, instead of always falling back to a generic default
 // width and notdefGlyph for every code.
@@ -233,7 +233,7 @@ type PredefinedCMaps struct {
 // ThumbnailOptions.Box use to determine the rendered viewport - the
 // region of the page's content that ends up visible in the output image,
 // exactly the way Page.Bounds' doc comment already explains CropBox
-// working today. See docs/capability-matrix.md's "Page boxes" section
+// working today. See docs/CAPABILITY-MATRIX.md's "Page boxes" section
 // for what each box conventionally means in a real PDF (MediaBox is the
 // whole physical sheet; CropBox is what an ordinary viewer shows;
 // BleedBox/TrimBox/ArtBox are print-production-specific refinements of
@@ -293,7 +293,7 @@ type RenderOptions struct {
 	// Background's own alpha channel (if any) is otherwise ignored - the
 	// rendered image is always fully opaque, since this project does not
 	// yet track a page's transparency beyond what is opaquely painted
-	// (see docs/capability-matrix.md's transparency row).
+	// (see docs/CAPABILITY-MATRIX.md's transparency row).
 	Background color.Color
 
 	// HideAnnotations, when true, suppresses painting annotation

@@ -167,7 +167,7 @@ func textRenderingMatrix(st *graphics.State, tm graphics.Matrix) graphics.Matrix
 // treated as an ordinary fill using the current fill color - stroking
 // glyph outlines and accumulating a text clip path are both real PDF
 // features this package does not implement (see
-// docs/capability-matrix.md), so "paint it filled" is this package's
+// docs/CAPABILITY-MATRIX.md), so "paint it filled" is this package's
 // documented approximation for every mode that paints anything at all.
 func paintsGlyphs(st *graphics.State) bool {
 	switch st.RenderMode {

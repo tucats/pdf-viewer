@@ -42,7 +42,7 @@ import (
 // default), a predefined name still produces a usable Font, exactly as
 // every case this package cannot fully resolve does: 2-byte codes
 // assumed, this package's generic default width and notdefGlyph for
-// every code - see docs/capability-matrix.md.
+// every code - see docs/CAPABILITY-MATRIX.md.
 func loadType0Font(dict syntax.Dictionary, resolver Resolver) (*Font, error) {
 	f := &Font{TwoByteCodes: true, defaultWidth: 1000}
 

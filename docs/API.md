@@ -6,7 +6,7 @@ inspecting them, and rendering pages to images. It does not cover why
 the package is built the way it is or what is planned for later; for
 that, see [PLAN.md](PLAN.md) (the project's design rationale, phased
 implementation plan, and progress log) and
-[capability-matrix.md](capability-matrix.md) (a row-by-row answer to
+[CAPABILITY-MATRIX.md](CAPABILITY-MATRIX.md) (a row-by-row answer to
 "does this support PDF feature X").
 
 Everything described here is also documented as Go doc comments on the
@@ -273,7 +273,7 @@ a `/ToUnicode` CMap. This package does now parse `/ToUnicode` (see
 substitution attempt for Type 0 fonts remains a separate, not yet
 implemented follow-on. A non-embedded Type 0 font falls back to the
 placeholder box regardless of this option. See
-[capability-matrix.md](capability-matrix.md)'s "Font substitution" row
+[CAPABILITY-MATRIX.md](CAPABILITY-MATRIX.md)'s "Font substitution" row
 for the exact current status, and `cmd/pdfpreview -substitute-fonts` for
 this option wired up in a runnable example.
 
@@ -449,7 +449,7 @@ text extraction has no inherent target resolution.
 
 `Text` does not currently recurse into a Form XObject's own content
 stream, so text painted only inside a form is not extracted - see
-[capability-matrix.md](capability-matrix.md)'s "Text extraction" row for
+[CAPABILITY-MATRIX.md](CAPABILITY-MATRIX.md)'s "Text extraction" row for
 this and every other current limitation.
 
 ## Error handling
@@ -626,7 +626,7 @@ JBIG2/JPEG2000 images, true ICC color management, and others).
 For the complete, current, row-by-row breakdown of exactly what is and
 is not supported - which this guide deliberately does not duplicate, so
 it cannot silently go stale the way a restated copy would - see
-[capability-matrix.md](capability-matrix.md).
+[CAPABILITY-MATRIX.md](CAPABILITY-MATRIX.md).
 
 ## Example programs
 

@@ -431,7 +431,7 @@ func identityCharset(numGlyphs int) []uint16 {
 // identityCharset) - predefined charsets 1 ("Expert") and 2 ("Expert
 // Subset") are a rare, essentially obsolete companion-font convention
 // for old-style figures and fraction glyphs that this package has never
-// had any use for elsewhere (compare docs/capability-matrix.md's several
+// had any use for elsewhere (compare docs/CAPABILITY-MATRIX.md's several
 // other "recognized subset, not the whole specification" gaps). Rather
 // than fabricate wrong names by treating them as identity too, this
 // function reports every non-.notdef glyph's SID as 0 for those two
@@ -1658,7 +1658,7 @@ func (c *charstringInterp) doEndchar() bool {
 		// implementing it would need this package to also carry a full
 		// StandardEncoding-code-to-glyph-name table it has no other use
 		// for - so, like Type 1 charstring support itself, this is a
-		// documented non-goal (see docs/capability-matrix.md). This one
+		// documented non-goal (see docs/CAPABILITY-MATRIX.md). This one
 		// glyph is reported as unavailable (falls back to notdefGlyph
 		// via GlyphOutline's ok=false), rather than the whole font
 		// failing to load, or - worse - this operand data being

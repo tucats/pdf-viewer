@@ -29,7 +29,7 @@ import (
 // package's layers build up as a document is read - internal/parser's
 // resolved-object cache, internal/parser's decoded-object-stream cache,
 // and this package's own per-Document font cache (see
-// docs/capability-matrix.md and the Progress Log's Phase 6 entry) - is
+// docs/CAPABILITY-MATRIX.md and the Progress Log's Phase 6 entry) - is
 // an ordinary Go map with no locking, and internal/parser's
 // cross-reference recovery scan (see that package's doc comment)
 // mutates the document's cross-reference table itself in place. Calling

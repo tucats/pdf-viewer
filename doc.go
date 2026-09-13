@@ -6,7 +6,7 @@
 // rationale, the phased implementation plan, and the internal package
 // layout are documented in the repository's README.md file — read that
 // first if you are trying to understand *why* the code is organized the
-// way it is. docs/capability-matrix.md is the authoritative, row-by-row
+// way it is. docs/CAPABILITY-MATRIX.md is the authoritative, row-by-row
 // answer to "does this support PDF feature X" - this doc comment
 // deliberately does not restate that level of detail, since it would
 // only go stale again the way the paragraph it replaced did.
@@ -19,7 +19,7 @@
 // cmd/ (see cmd/pdfpreview, cmd/pdfthumbnails, and cmd/pdfexport).
 // Rendering covers vector graphics, images, text with embedded fonts,
 // and transparency/patterns/shadings/annotations to the extent recorded
-// in docs/capability-matrix.md; a document using an unsupported feature
+// in docs/CAPABILITY-MATRIX.md; a document using an unsupported feature
 // this package can positively detect fails with an error wrapping
 // ErrUnsupported (see errors.go's "Error taxonomy" section) rather than
 // silently misrendering.

@@ -43,7 +43,7 @@
 // sharing internal/raster's one rasterization path with every vector
 // fill this package already produces (see text.go's showGlyph). See
 // text.go's own doc comment for the full glyph-space -> text-space ->
-// user-space -> device-space derivation, and docs/capability-matrix.md
+// user-space -> device-space derivation, and docs/CAPABILITY-MATRIX.md
 // for this phase's documented simplifications (text render modes other
 // than fill/invisible are all treated as fill; vertical writing mode
 // advances horizontally).
@@ -60,7 +60,7 @@
 // marked content, dash patterns, and ExtGState parameters (transparency,
 // blend modes) remain further Phase 5 work and are silently skipped
 // (Interpret still renders whatever it does understand) - see
-// Interpret's doc comment and docs/capability-matrix.md for the
+// Interpret's doc comment and docs/CAPABILITY-MATRIX.md for the
 // authoritative, up-to-date breakdown of what is implemented versus
 // merely tolerated.
 package content

@@ -32,7 +32,7 @@
 // query, see below) still produce a fully usable Font, just one whose
 // Glyph method paints a small placeholder box (notdefGlyph, in font.go)
 // instead of a real outline - see Font's own doc comment for the
-// complete missing-glyph policy, and docs/capability-matrix.md for the
+// complete missing-glyph policy, and docs/CAPABILITY-MATRIX.md for the
 // authoritative, up-to-date support matrix.
 //
 // # A hard constraint: no system font service
